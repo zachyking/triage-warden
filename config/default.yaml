@@ -1,0 +1,105 @@
+# Triage Warden Default Configuration
+# ==================================
+# Copy this file and customize for your environment.
+# Sensitive values should use environment variables: ${ENV_VAR_NAME}
+
+# Operation Mode
+# - assisted: AI observes and suggests only, no automated actions
+# - supervised: Low-risk actions automated, high-risk requires approval
+# - autonomous: Full automation for configured incident types
+operation_mode: supervised
+
+# Maximum concurrent incidents to process
+max_concurrent_incidents: 50
+
+# Connector Configuration
+# =======================
+connectors:
+  # Jira Ticketing
+  jira:
+    connector_type: jira
+    enabled: true
+    base_url: https://your-company.atlassian.net
+    api_key: ${JIRA_API_KEY}
+    api_secret: ""
+    timeout_secs: 30
+    settings:
+      project_key: SEC
+      default_issue_type: Incident
+
+  # VirusTotal Threat Intelligence
+  virustotal:
+    connector_type: virustotal
+    enabled: true
+    base_url: https://www.virustotal.com
+    api_key: ${VIRUSTOTAL_API_KEY}
+    api_secret: ""
+    timeout_secs: 30
+    settings:
+      cache_ttl_secs: 3600
+
+  # Splunk SIEM (placeholder - implement in Stage 6)
+  # splunk:
+  #   connector_type: splunk
+  #   enabled: false
+  #   base_url: https://splunk.company.com:8089
+  #   api_key: ${SPLUNK_TOKEN}
+  #   settings:
+  #     index: main
+  #     earliest_time: -24h
+
+  # CrowdStrike EDR (placeholder - implement in Stage 6)
+  # crowdstrike:
+  #   connector_type: crowdstrike
+  #   enabled: false
+  #   base_url: https://api.crowdstrike.com
+  #   api_key: ${CS_CLIENT_ID}
+  #   api_secret: ${CS_CLIENT_SECRET}
+
+# LLM Configuration
+# =================
+llm:
+  # Provider: openai, anthropic, or local
+  provider: anthropic
+
+  # Model to use
+  model: claude-3-5-sonnet-20241022
+
+  # API key (use environment variable)
+  api_key: ${ANTHROPIC_API_KEY}
+
+  # For local/self-hosted models
+  base_url: ""
+
+  # Maximum tokens for responses
+  max_tokens: 4096
+
+  # Temperature (lower = more deterministic)
+  temperature: 0.1
+
+# Policy Configuration
+# ====================
+policy:
+  # Path to guardrails configuration
+  guardrails_path: config/guardrails.yaml
+
+  # Default approval level for unknown actions
+  default_approval_level: analyst
+
+  # Whether to auto-approve low-risk actions
+  auto_approve_low_risk: true
+
+  # Confidence threshold for auto-approval (0.0 - 1.0)
+  confidence_threshold: 0.9
+
+# Logging Configuration
+# =====================
+logging:
+  # Log level: trace, debug, info, warn, error
+  level: info
+
+  # Whether to use JSON format (recommended for production)
+  json_format: false
+
+  # Log file path (optional, logs to stdout if not set)
+  # file_path: /var/log/triage-warden/triage-warden.log

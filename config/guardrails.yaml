@@ -1,0 +1,184 @@
+# Triage Warden Guardrails Configuration
+# ======================================
+# This file defines the security guardrails and policies that control
+# what actions the AI can take automatically.
+
+# Deny List
+# =========
+# Actions and targets that are NEVER allowed automatically.
+deny_list:
+  # Actions that require human execution (not automation)
+  actions:
+    - delete_user          # Too destructive
+    - wipe_host            # Too destructive
+    - delete_all_emails    # Too destructive
+    - modify_firewall      # High risk
+
+  # Target patterns that are protected from automated actions
+  # Uses regex patterns
+  target_patterns:
+    - ".*-prod-.*"         # Production systems
+    - "dc\\d+\\..*"        # Domain controllers
+    - ".*-critical-.*"     # Explicitly marked critical
+    - ".*\\.corp\\..*"     # Corporate infrastructure
+
+  # Specific protected IPs (infrastructure, DNS, etc.)
+  protected_ips:
+    - "10.0.0.1"           # Core router
+    - "10.0.0.2"           # DNS server
+    - "10.0.0.3"           # DHCP server
+
+  # Protected user accounts
+  protected_users:
+    - "admin"
+    - "root"
+    - "administrator"
+    - "service-account-*"
+    - "svc-*"
+
+# Rate Limits
+# ===========
+# Prevent runaway automation.
+rate_limits:
+  isolate_host:
+    max_per_hour: 5
+    max_per_day: 20
+    max_concurrent: 2
+
+  disable_user:
+    max_per_hour: 10
+    max_per_day: 50
+    max_concurrent: 5
+
+  block_ip:
+    max_per_hour: 20
+    max_per_day: 100
+    max_concurrent: 10
+
+  quarantine_email:
+    max_per_hour: 50
+    max_per_day: 500
+    max_concurrent: 20
+
+# Approval Policies
+# =================
+# Define when human approval is required.
+approval_policies:
+  # Critical asset protection
+  - name: critical_asset_protection
+    description: "Require senior approval for actions on critical assets"
+    condition:
+      target_criticality:
+        - critical
+        - high
+    requires: senior
+    can_override: false
+
+  # Host isolation approval
+  - name: host_isolation_approval
+    description: "Require analyst approval for host isolation"
+    condition:
+      action_type:
+        - isolate_host
+        - unisolate_host
+    requires: analyst
+    can_override: true
+
+  # User account actions
+  - name: user_account_approval
+    description: "Require approval for user account modifications"
+    condition:
+      action_type:
+        - disable_user
+        - reset_password
+        - revoke_sessions
+    requires: analyst
+    can_override: true
+
+  # Low confidence actions
+  - name: low_confidence_approval
+    description: "Require approval when AI confidence is low"
+    condition:
+      confidence_below: 0.8
+    requires: analyst
+    can_override: true
+
+# Auto-Approve Rules
+# ==================
+# Actions that can be executed automatically under specific conditions.
+auto_approve_rules:
+  # Ticket operations are always safe
+  - name: ticket_operations
+    description: "Auto-approve ticket creation and updates"
+    action_types:
+      - create_ticket
+      - update_ticket
+      - add_ticket_comment
+    conditions:
+      - confidence_above: 0.5
+
+  # Notifications are always safe
+  - name: notifications
+    description: "Auto-approve sending notifications"
+    action_types:
+      - send_notification
+    conditions: []
+
+  # Email quarantine with high confidence
+  - name: email_quarantine_high_confidence
+    description: "Auto-approve email quarantine for high-confidence phishing"
+    action_types:
+      - quarantine_email
+    conditions:
+      - confidence_above: 0.95
+      - verdict: true_positive
+
+# Data Policies
+# =============
+# Control how sensitive data is handled.
+data_policies:
+  # Filter PII from logs and LLM prompts
+  pii_filter: true
+  pii_patterns:
+    - "\\b\\d{3}-\\d{2}-\\d{4}\\b"      # SSN
+    - "\\b\\d{16}\\b"                    # Credit card
+    - "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b"  # Email (optional)
+
+  # Redact secrets from logs
+  secrets_redaction: true
+  secret_patterns:
+    - "(?i)api[_-]?key"
+    - "(?i)password"
+    - "(?i)secret"
+    - "(?i)token"
+    - "(?i)credential"
+
+  # Audit all data access
+  audit_data_access: true
+
+# Escalation Rules
+# ================
+# Define when to escalate to human analysts.
+escalation_rules:
+  # Escalate on repeated false positives
+  - name: repeated_false_positives
+    description: "Escalate if same alert type has high FP rate"
+    condition:
+      false_positive_rate_above: 0.5
+      sample_size_min: 10
+    action: escalate_to_analyst
+
+  # Escalate on multiple related incidents
+  - name: incident_correlation
+    description: "Escalate if multiple related incidents detected"
+    condition:
+      related_incidents_above: 3
+      time_window_hours: 1
+    action: escalate_to_senior
+
+  # Escalate critical severity
+  - name: critical_severity
+    description: "Always escalate critical severity incidents"
+    condition:
+      severity: critical
+    action: escalate_to_manager

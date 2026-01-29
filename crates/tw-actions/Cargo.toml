@@ -1,0 +1,24 @@
+[package]
+name = "tw-actions"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Action plugins for Triage Warden"
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+async-trait.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+
+tw-connectors = { path = "../tw-connectors" }
+
+[dev-dependencies]
+mockall.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

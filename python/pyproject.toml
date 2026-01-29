@@ -1,0 +1,78 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tw-ai"
+version = "0.1.0"
+description = "AI components for Triage Warden - LLM integration, agents, and RAG"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "Triage Warden Team" }
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+]
+dependencies = [
+    "openai>=1.0.0",
+    "anthropic>=0.18.0",
+    "pydantic>=2.0.0",
+    "httpx>=0.25.0",
+    "tenacity>=8.2.0",
+    "tiktoken>=0.5.0",
+    "structlog>=23.0.0",
+    "chromadb>=0.4.0",
+    "sentence-transformers>=2.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
+    "black>=23.0.0",
+]
+local = [
+    "vllm>=0.3.0",
+    "transformers>=4.36.0",
+    "torch>=2.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/triage-warden/triage-warden"
+Documentation = "https://triage-warden.github.io/docs"
+Repository = "https://github.com/triage-warden/triage-warden"
+
+[tool.hatch.build.targets.wheel]
+packages = ["tw_ai"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]

@@ -1,0 +1,33 @@
+[package]
+name = "tw-connectors"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Integration connectors for SIEM, EDR, ticketing, and threat intel"
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+url = "2.5"
+
+# Rate limiting and caching
+governor = "0.6"
+moka = { version = "0.12", features = ["future"] }
+
+# Encoding
+base64 = "0.22"
+regex = "1.10"
+
+[dev-dependencies]
+mockall.workspace = true
+wiremock.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

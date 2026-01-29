@@ -1,0 +1,87 @@
+# Suspicious login test cases for Triage Warden evaluation
+# Contains true positive and true negative cases
+
+# TRUE POSITIVE: Credential stuffing attack
+- id: login_001
+  name: "Credential stuffing attack detected"
+  alert:
+    type: authentication
+    event_type: "failed_login_burst"
+    target_account: "admin@company.com"
+    source_ips:
+      - ip: "45.33.32.156"
+        country: "RO"
+        failed_attempts: 50
+      - ip: "89.44.9.243"
+        country: "MD"
+        failed_attempts: 45
+      - ip: "178.62.100.55"
+        country: "NL"
+        failed_attempts: 38
+    total_failed_attempts: 133
+    time_window: "5 minutes"
+    user_agent_patterns:
+      - "python-requests/2.28.0"
+      - "curl/7.68.0"
+    account_exists: true
+    mfa_enabled: true
+    timestamp: "2024-01-15T03:45:00Z"
+  expected:
+    verdict: malicious
+    severity: high
+    techniques: [T1110.004, T1078.004]
+
+# TRUE NEGATIVE: Normal user login from new device
+- id: login_002
+  name: "Legitimate login from new device after travel"
+  alert:
+    type: authentication
+    event_type: "new_device_login"
+    target_account: "sales.rep@company.com"
+    source_ip: "86.49.178.12"
+    source_country: "DE"
+    source_city: "Munich"
+    device_info:
+      os: "Windows 11"
+      browser: "Chrome 120"
+      device_type: "Laptop"
+    previous_locations:
+      - country: "US"
+        city: "New York"
+        last_seen: "2024-01-10T18:00:00Z"
+    time_since_last_location: "5 days"
+    mfa_result: "success"
+    calendar_context: "User has meeting scheduled in Munich this week"
+    hr_context: "Travel request approved for Munich trip Jan 14-18"
+    timestamp: "2024-01-15T09:30:00Z"
+  expected:
+    verdict: benign
+    severity: informational
+    techniques: []
+
+# TRUE NEGATIVE: Routine service account authentication
+- id: login_003
+  name: "Scheduled service account batch job login"
+  alert:
+    type: authentication
+    event_type: "service_account_login"
+    target_account: "svc_backup@company.local"
+    source_ip: "10.0.0.50"
+    source_hostname: "BACKUP-SERVER-01"
+    authentication_type: "kerberos"
+    login_time: "02:00:00"
+    day_of_week: "Sunday"
+    scheduled_task: "WeeklyFullBackup"
+    historical_pattern:
+      - day: "Sunday"
+        time: "02:00:00"
+        frequency: "weekly"
+        last_30_days: 4
+    service_account_permissions:
+      - "Backup Operators"
+      - "Read access to file shares"
+    timestamp: "2024-01-14T02:00:00Z"
+  expected:
+    verdict: benign
+    severity: informational
+    techniques: []

@@ -1,0 +1,76 @@
+# Phishing test cases for Triage Warden evaluation
+# Contains true positive, false positive, and true negative cases
+
+# TRUE POSITIVE: Obvious credential harvesting
+- id: phishing_001
+  name: "Obvious phishing email - credential harvesting"
+  alert:
+    type: email_security
+    subject: "Your account has been compromised"
+    sender: "support@paypa1.com"
+    sender_display: "PayPal Security Team"
+    recipient: "john.smith@company.com"
+    body: "Your account has been locked. Click here to verify: http://paypa1-secure.xyz/verify"
+    attachments: []
+    headers:
+      return_path: "bounce@suspicious-mail-server.ru"
+      received_from: "185.234.72.21"
+    links:
+      - url: "http://paypa1-secure.xyz/verify"
+        display_text: "Verify Now"
+    timestamp: "2024-01-15T10:30:00Z"
+  expected:
+    verdict: malicious
+    severity: high
+    techniques: [T1566.001, T1598.003]
+
+# TRUE POSITIVE: Spear phishing with malicious attachment
+- id: phishing_002
+  name: "Spear phishing with malicious macro document"
+  alert:
+    type: email_security
+    subject: "Q4 Financial Report - Urgent Review Required"
+    sender: "cfo.johnson@company-finance.net"
+    sender_display: "CFO Robert Johnson"
+    recipient: "finance.team@company.com"
+    body: "Please review the attached Q4 report before tomorrow's board meeting. Enable macros to view all charts."
+    attachments:
+      - filename: "Q4_Financial_Report.docm"
+        size: 256000
+        mime_type: "application/vnd.ms-word.document.macroEnabled.12"
+        sha256: "a1b2c3d4e5f6789012345678901234567890abcd"
+    headers:
+      return_path: "noreply@company-finance.net"
+      received_from: "45.67.89.123"
+    timestamp: "2024-01-15T08:45:00Z"
+  expected:
+    verdict: malicious
+    severity: high
+    techniques: [T1566.001, T1204.002]
+
+# FALSE POSITIVE: Legitimate IT notification that looks suspicious
+- id: phishing_003
+  name: "Legitimate IT password reset notification"
+  alert:
+    type: email_security
+    subject: "Password Expiration Notice - Action Required"
+    sender: "it-notifications@company.com"
+    sender_display: "IT Department"
+    recipient: "all-staff@company.com"
+    body: "Your password will expire in 7 days. Please update it at https://idp.company.com/password-reset"
+    attachments: []
+    headers:
+      return_path: "it-notifications@company.com"
+      received_from: "10.0.0.50"
+      dkim: "pass"
+      spf: "pass"
+      dmarc: "pass"
+    links:
+      - url: "https://idp.company.com/password-reset"
+        display_text: "Reset Password"
+    timestamp: "2024-01-15T09:00:00Z"
+  expected:
+    verdict: benign
+    severity: informational
+    techniques: []
+
