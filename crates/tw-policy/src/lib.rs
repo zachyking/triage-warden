@@ -9,6 +9,7 @@ pub mod approval;
 pub mod approval_manager;
 pub mod config;
 pub mod engine;
+pub mod escalation;
 pub mod kill_switch;
 pub mod mode;
 pub mod notifications;
@@ -22,6 +23,10 @@ pub use approval_manager::{
 };
 pub use config::{load_guardrails, ConfigError, GuardrailsConfig};
 pub use engine::{PolicyDecision, PolicyEngine};
+pub use escalation::{
+    EscalationAction, EscalationCondition, EscalationManager, EscalationRule,
+    FalsePositiveStats, IncidentContext,
+};
 pub use kill_switch::{KillSwitch, KillSwitchActive, KillSwitchError, KillSwitchEvent, KillSwitchStatus};
 pub use mode::{ActionRisk, ModeChange, ModeManager, OperationMode};
 pub use rules::{PolicyRule, RuleCondition, RuleEffect};
