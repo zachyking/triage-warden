@@ -9,6 +9,7 @@ pub mod approval;
 pub mod approval_manager;
 pub mod config;
 pub mod engine;
+pub mod mode;
 pub mod rules;
 pub mod sanitization;
 
@@ -19,5 +20,6 @@ pub use approval_manager::{
 };
 pub use config::{load_guardrails, ConfigError, GuardrailsConfig};
 pub use engine::{PolicyDecision, PolicyEngine};
+pub use mode::{ActionRisk, ModeChange, ModeManager, OperationMode};
 pub use rules::{PolicyRule, RuleCondition, RuleEffect};
 pub use sanitization::{SanitizationError, SanitizationResult, Sanitizer};
