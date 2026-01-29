@@ -69,3 +69,4 @@ run-stage*.sh
 .worktrees/
 docs/stage*-plan.md
 research.md
+triage-warden.db
