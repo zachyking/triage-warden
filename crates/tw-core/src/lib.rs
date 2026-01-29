@@ -10,6 +10,9 @@ pub mod incident;
 pub mod orchestrator;
 pub mod workflow;
 
+#[cfg(feature = "database")]
+pub mod db;
+
 pub use events::{EventBus, TriageEvent};
 pub use incident::{
     Alert, AlertSource, AuditEntry, Enrichment, Incident, IncidentStatus, ProposedAction,

@@ -1,0 +1,58 @@
+[package]
+name = "tw-api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "REST API server for Triage Warden"
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+async-trait.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+
+# Web framework
+axum.workspace = true
+axum-extra.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+hyper.workspace = true
+
+# OpenAPI
+utoipa.workspace = true
+utoipa-swagger-ui.workspace = true
+
+# Validation
+validator.workspace = true
+
+# Rate limiting
+governor.workspace = true
+
+# HMAC for webhook signatures
+hmac.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+# Metrics
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
+
+# Internal dependencies
+tw-core = { path = "../tw-core", features = ["database"] }
+tw-policy = { path = "../tw-policy" }
+tw-connectors = { path = "../tw-connectors" }
+tw-actions = { path = "../tw-actions" }
+tw-observability = { path = "../tw-observability" }
+
+# Database
+sqlx.workspace = true
+
+[dev-dependencies]
+mockall.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

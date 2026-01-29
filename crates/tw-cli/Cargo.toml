@@ -24,11 +24,15 @@ config.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 
-tw-core = { path = "../tw-core" }
+tw-core = { path = "../tw-core", features = ["database"] }
 tw-policy = { path = "../tw-policy" }
 tw-connectors = { path = "../tw-connectors" }
 tw-actions = { path = "../tw-actions" }
 tw-observability = { path = "../tw-observability" }
+tw-api = { path = "../tw-api" }
+
+# HTTP client for API calls
+reqwest.workspace = true
 
 directories = "5.0"
 colored = "2.1"

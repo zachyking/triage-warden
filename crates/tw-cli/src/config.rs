@@ -31,6 +31,14 @@ pub struct AppConfig {
     /// Logging configuration.
     #[serde(default)]
     pub logging: LoggingConfig,
+
+    /// Database configuration.
+    #[serde(default)]
+    pub database: DatabaseConfig,
+
+    /// API server configuration.
+    #[serde(default)]
+    pub api: ApiConfig,
 }
 
 fn default_operation_mode() -> String {
@@ -50,6 +58,8 @@ impl Default for AppConfig {
             llm: LLMConfig::default(),
             policy: PolicyConfig::default(),
             logging: LoggingConfig::default(),
+            database: DatabaseConfig::default(),
+            api: ApiConfig::default(),
         }
     }
 }
@@ -261,6 +271,79 @@ impl Default for LoggingConfig {
             level: default_log_level(),
             json_format: false,
             file_path: None,
+        }
+    }
+}
+
+/// Database configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DatabaseConfig {
+    /// Database URL (sqlite:// or postgres://).
+    #[serde(default = "default_database_url")]
+    pub url: String,
+
+    /// Maximum connections in pool.
+    #[serde(default = "default_max_connections")]
+    pub max_connections: u32,
+
+    /// Run migrations on startup.
+    #[serde(default = "default_true")]
+    pub run_migrations: bool,
+}
+
+fn default_database_url() -> String {
+    "sqlite://triage-warden.db?mode=rwc".to_string()
+}
+
+fn default_max_connections() -> u32 {
+    10
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            url: default_database_url(),
+            max_connections: default_max_connections(),
+            run_migrations: true,
+        }
+    }
+}
+
+/// API server configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiConfig {
+    /// Port to listen on.
+    #[serde(default = "default_port")]
+    pub port: u16,
+
+    /// Host to bind to.
+    #[serde(default = "default_host")]
+    pub host: String,
+
+    /// Enable Swagger UI.
+    #[serde(default = "default_true")]
+    pub enable_swagger: bool,
+
+    /// Request timeout in seconds.
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_port() -> u16 {
+    8080
+}
+
+fn default_host() -> String {
+    "0.0.0.0".to_string()
+}
+
+impl Default for ApiConfig {
+    fn default() -> Self {
+        Self {
+            port: default_port(),
+            host: default_host(),
+            enable_swagger: true,
+            timeout_secs: default_timeout(),
         }
     }
 }

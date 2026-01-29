@@ -103,3 +103,32 @@ logging:
 
   # Log file path (optional, logs to stdout if not set)
   # file_path: /var/log/triage-warden/triage-warden.log
+
+# Database Configuration
+# ======================
+database:
+  # Database URL
+  # SQLite for development: sqlite://triage-warden.db?mode=rwc
+  # PostgreSQL for production: postgres://user:pass@host:5432/triage_warden
+  url: sqlite://triage-warden.db?mode=rwc
+
+  # Maximum connections in the pool
+  max_connections: 10
+
+  # Run migrations on startup
+  run_migrations: true
+
+# API Server Configuration
+# ========================
+api:
+  # Port to listen on
+  port: 8080
+
+  # Host to bind to (0.0.0.0 for all interfaces)
+  host: "0.0.0.0"
+
+  # Enable Swagger UI at /swagger-ui
+  enable_swagger: true
+
+  # Request timeout in seconds
+  timeout_secs: 30

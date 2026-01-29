@@ -6,6 +6,10 @@ authors.workspace = true
 license.workspace = true
 description = "Core orchestrator and data models for Triage Warden"
 
+[features]
+default = []
+database = ["sqlx"]
+
 [dependencies]
 tokio.workspace = true
 serde.workspace = true
@@ -23,6 +27,10 @@ tw-connectors = { path = "../tw-connectors" }
 tw-actions = { path = "../tw-actions" }
 tw-observability = { path = "../tw-observability" }
 
+# Optional database support
+sqlx = { workspace = true, optional = true }
+
 [dev-dependencies]
 mockall.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
+sqlx = { workspace = true }

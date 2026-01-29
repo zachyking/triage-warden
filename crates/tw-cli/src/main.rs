@@ -7,8 +7,12 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 use std::path::PathBuf;
 
+mod api_client;
+mod commands;
 mod config;
 
+use api_client::{ApiClient, ListIncidentsParams};
+use commands::{run_server, ServeConfig};
 use config::AppConfig;
 
 #[derive(Parser)]
@@ -28,6 +32,10 @@ struct Cli {
     /// Output format (text, json)
     #[arg(long, default_value = "text")]
     format: OutputFormat,
+
+    /// API server URL (for remote commands)
+    #[arg(long, default_value = "http://localhost:8080")]
+    api_url: String,
 
     #[command(subcommand)]
     command: Commands,
@@ -53,6 +61,25 @@ impl std::str::FromStr for OutputFormat {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Start the API server
+    Serve {
+        /// Port to listen on
+        #[arg(short, long, default_value = "8080")]
+        port: u16,
+
+        /// Host to bind to
+        #[arg(long, default_value = "0.0.0.0")]
+        host: String,
+
+        /// Database URL (sqlite:// or postgres://)
+        #[arg(short, long, default_value = "sqlite://triage-warden.db?mode=rwc")]
+        database: String,
+
+        /// Disable Swagger UI
+        #[arg(long)]
+        no_swagger: bool,
+    },
+
     /// Start the Triage Warden daemon
     Start {
         /// Run in foreground (don't daemonize)
@@ -218,6 +245,20 @@ async fn main() -> Result<()> {
 
     // Execute command
     match cli.command {
+        Commands::Serve {
+            port,
+            host,
+            database,
+            no_swagger,
+        } => {
+            cmd_serve(ServeConfig {
+                port,
+                host,
+                database_url: database,
+                enable_swagger: !no_swagger,
+                timeout_secs: 30,
+            }, config).await
+        }
         Commands::Start { foreground } => cmd_start(config, foreground).await,
         Commands::Stop => cmd_stop().await,
         Commands::Status => cmd_status(cli.format).await,
@@ -225,10 +266,10 @@ async fn main() -> Result<()> {
             cmd_validate(cfg_path.unwrap_or(config_path)).await
         }
         Commands::Config { show_secrets } => cmd_config(config, show_secrets, cli.format).await,
-        Commands::Incident { action } => cmd_incident(action, cli.format).await,
+        Commands::Incident { action } => cmd_incident(action, cli.format, &cli.api_url).await,
         Commands::Connector { action } => cmd_connector(action, config, cli.format).await,
         Commands::Action { action } => cmd_action(action, config, cli.format).await,
-        Commands::Metrics => cmd_metrics(cli.format).await,
+        Commands::Metrics => cmd_metrics(cli.format, &cli.api_url).await,
         Commands::Test { alert_type, dry_run } => cmd_test(config, &alert_type, dry_run).await,
     }
 }
@@ -239,6 +280,10 @@ fn default_config_path() -> PathBuf {
     } else {
         PathBuf::from("config/default.yaml")
     }
+}
+
+async fn cmd_serve(serve_config: ServeConfig, app_config: AppConfig) -> Result<()> {
+    run_server(serve_config, app_config).await
 }
 
 async fn cmd_start(config: AppConfig, foreground: bool) -> Result<()> {
@@ -353,21 +398,112 @@ async fn cmd_config(config: AppConfig, show_secrets: bool, format: OutputFormat)
     Ok(())
 }
 
-async fn cmd_incident(action: IncidentCommands, format: OutputFormat) -> Result<()> {
+async fn cmd_incident(action: IncidentCommands, format: OutputFormat, api_url: &str) -> Result<()> {
+    let client = ApiClient::new(api_url)?;
+
     match action {
         IncidentCommands::List { status, limit } => {
-            println!("{}", "Incidents".bold());
-            println!("─────────");
-            // In a real implementation, this would query the orchestrator
-            println!("No incidents found (daemon not running)");
+            let params = ListIncidentsParams {
+                status,
+                per_page: Some(limit as u32),
+                ..Default::default()
+            };
+
+            match client.list_incidents(&params).await {
+                Ok(response) => {
+                    if format == OutputFormat::Json {
+                        println!("{}", serde_json::to_string_pretty(&response)?);
+                    } else {
+                        println!("{}", "Incidents".bold());
+                        println!("─────────");
+                        if response.data.is_empty() {
+                            println!("No incidents found");
+                        } else {
+                            for incident in response.data {
+                                let severity_color = match incident.severity.as_str() {
+                                    "critical" => incident.severity.red(),
+                                    "high" => incident.severity.yellow(),
+                                    "medium" => incident.severity.cyan(),
+                                    _ => incident.severity.white(),
+                                };
+                                println!(
+                                    "  {} [{}] {} - {}",
+                                    incident.id.to_string()[..8].cyan(),
+                                    severity_color,
+                                    incident.status,
+                                    incident.title.unwrap_or_else(|| "Untitled".to_string())
+                                );
+                            }
+                            println!();
+                            println!(
+                                "Page {}/{} ({} total)",
+                                response.pagination.page,
+                                response.pagination.total_pages,
+                                response.pagination.total_items
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("{}: {}", "Error".red(), e);
+                    println!("Make sure the API server is running (triage-warden serve)");
+                }
+            }
         }
         IncidentCommands::Show { id } => {
-            println!("Incident: {}", id.cyan());
-            println!("(daemon not running)");
+            match uuid::Uuid::parse_str(&id) {
+                Ok(uuid) => match client.get_incident(uuid).await {
+                    Ok(incident) => {
+                        if format == OutputFormat::Json {
+                            println!("{}", serde_json::to_string_pretty(&incident)?);
+                        } else {
+                            println!("{} {}", "Incident:".bold(), incident.incident.id);
+                            println!("─────────────────────────────────────────");
+                            println!("  {} {}", "Status:".cyan(), incident.incident.status);
+                            println!("  {} {}", "Severity:".cyan(), incident.incident.severity);
+                            println!("  {} {}", "Source:".cyan(), incident.incident.source);
+                            if let Some(title) = &incident.incident.title {
+                                println!("  {} {}", "Title:".cyan(), title);
+                            }
+                            if let Some(verdict) = &incident.incident.verdict {
+                                println!("  {} {}", "Verdict:".cyan(), verdict);
+                            }
+                            println!("  {} {}", "Created:".cyan(), incident.incident.created_at);
+                            println!();
+                            println!("{} ({})", "Proposed Actions".bold(), incident.proposed_actions.len());
+                            for action in &incident.proposed_actions {
+                                println!(
+                                    "  {} [{}] {} - {}",
+                                    action.id.to_string()[..8].cyan(),
+                                    action.approval_status,
+                                    action.action_type,
+                                    action.reason
+                                );
+                            }
+                            println!();
+                            println!("{} ({})", "Audit Log".bold(), incident.audit_log.len());
+                            for entry in &incident.audit_log {
+                                println!(
+                                    "  {} {} by {}",
+                                    entry.timestamp.format("%Y-%m-%d %H:%M:%S"),
+                                    entry.action,
+                                    entry.actor
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        println!("{}: {}", "Error".red(), e);
+                    }
+                },
+                Err(_) => {
+                    println!("{}: Invalid UUID format", "Error".red());
+                }
+            }
         }
         IncidentCommands::Update { id, status } => {
             println!("Updating incident {} to status: {}", id.cyan(), status);
-            println!("(daemon not running)");
+            println!("(not implemented - use API directly)");
         }
     }
     Ok(())
@@ -469,16 +605,49 @@ async fn cmd_action(
     Ok(())
 }
 
-async fn cmd_metrics(format: OutputFormat) -> Result<()> {
-    println!("{}", "Triage Warden Metrics".bold());
-    println!("─────────────────────");
-    println!("(daemon not running - no metrics available)");
-    println!("\nKPIs would include:");
-    println!("  - Mean Time to Triage (MTTT)");
-    println!("  - Mean Time to Respond (MTTR)");
-    println!("  - Auto-resolution Rate");
-    println!("  - Override Rate");
-    println!("  - False Positive Rate");
+async fn cmd_metrics(format: OutputFormat, api_url: &str) -> Result<()> {
+    let client = ApiClient::new(api_url)?;
+
+    match client.metrics().await {
+        Ok(metrics) => {
+            if format == OutputFormat::Json {
+                println!("{}", serde_json::to_string_pretty(&metrics)?);
+            } else {
+                println!("{}", "Triage Warden Metrics".bold());
+                println!("─────────────────────");
+                println!();
+                println!("{}", "Incidents".bold());
+                println!("  Total: {}", metrics.incidents.total);
+                println!("  Created (last hour): {}", metrics.incidents.created_last_hour);
+                println!("  Resolved (last hour): {}", metrics.incidents.resolved_last_hour);
+                println!();
+                println!("{}", "By Status".bold());
+                for (status, count) in &metrics.incidents.by_status {
+                    println!("  {}: {}", status, count);
+                }
+                println!();
+                println!("{}", "Actions".bold());
+                println!("  Total executed: {}", metrics.actions.total_executed);
+                println!("  Success rate: {:.1}%", metrics.actions.success_rate * 100.0);
+                println!("  Pending approvals: {}", metrics.actions.pending_approvals);
+                println!();
+                println!("{}", "Performance".bold());
+                if let Some(mttt) = metrics.performance.mean_time_to_triage_seconds {
+                    println!("  Mean Time to Triage: {:.1}s", mttt);
+                }
+                if let Some(mttr) = metrics.performance.mean_time_to_respond_seconds {
+                    println!("  Mean Time to Respond: {:.1}s", mttr);
+                }
+                if let Some(arr) = metrics.performance.auto_resolution_rate {
+                    println!("  Auto-resolution Rate: {:.1}%", arr * 100.0);
+                }
+            }
+        }
+        Err(e) => {
+            println!("{}: {}", "Error".red(), e);
+            println!("Make sure the API server is running (triage-warden serve)");
+        }
+    }
     Ok(())
 }
 
