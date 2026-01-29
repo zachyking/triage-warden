@@ -41,6 +41,10 @@ use tw_connectors::edr::mock::MockEDRConnector;
 use tw_connectors::siem::mock::MockSIEMConnector;
 use tw_connectors::threat_intel::mock::MockThreatIntelConnector;
 use tw_connectors::traits::{EDRConnector, SIEMConnector, ThreatIntelConnector, TimeRange};
+use tw_policy::{
+    ApprovalLevel, ApprovalManager, KillSwitch, ModeManager, OperationMode, PolicyDecision,
+    PolicyEngine,
+};
 
 /// Global Tokio runtime for blocking async operations.
 static TOKIO_RUNTIME: OnceCell<Runtime> = OnceCell::new();
@@ -882,6 +886,275 @@ impl EDRBridge {
 }
 
 // ============================================================================
+// PolicyBridge - Policy Engine Bridge for Python
+// ============================================================================
+
+/// Bridge for policy engine operations.
+///
+/// Provides Python access to the policy engine, mode manager, kill switch,
+/// and approval workflows for the ReAct agent integration.
+///
+/// Example:
+///     policy = PolicyBridge()
+///     result = policy.check_action("isolate_host", "workstation-001", 0.95)
+///     mode = policy.get_operation_mode()
+///     active = policy.is_kill_switch_active()
+#[pyclass]
+pub struct PolicyBridge {
+    policy_engine: Arc<tokio::sync::RwLock<PolicyEngine>>,
+    mode_manager: ModeManager,
+    kill_switch: Arc<KillSwitch>,
+    approval_manager: ApprovalManager,
+}
+
+#[pymethods]
+impl PolicyBridge {
+    /// Creates a new PolicyBridge with default/mock implementations.
+    ///
+    /// Returns:
+    ///     PolicyBridge instance with default configurations
+    #[new]
+    pub fn new() -> PyResult<Self> {
+        Ok(Self {
+            policy_engine: Arc::new(tokio::sync::RwLock::new(PolicyEngine::default())),
+            mode_manager: ModeManager::new(),
+            kill_switch: Arc::new(KillSwitch::new()),
+            approval_manager: ApprovalManager::default(),
+        })
+    }
+
+    /// Check if an action is allowed by the policy engine.
+    ///
+    /// Args:
+    ///     action_type: Type of action (e.g., "isolate_host", "create_ticket")
+    ///     target: Target of the action (e.g., hostname, IP address)
+    ///     confidence: Confidence score from the AI analysis (0.0 to 1.0)
+    ///
+    /// Returns:
+    ///     dict with:
+    ///         - decision: "allowed", "denied", or "requires_approval"
+    ///         - reason: Explanation for the decision (for denied/requires_approval)
+    ///         - approval_level: Required approval level (for requires_approval)
+    ///
+    /// Example:
+    ///     result = policy.check_action("isolate_host", "workstation-001", 0.95)
+    ///     if result["decision"] == "allowed":
+    ///         # Proceed with action
+    ///     elif result["decision"] == "requires_approval":
+    ///         # Submit approval request
+    pub fn check_action(
+        &self,
+        py: Python<'_>,
+        action_type: &str,
+        target: &str,
+        confidence: f64,
+    ) -> PyResult<PyObject> {
+        // First check kill switch
+        if self.kill_switch.is_active() {
+            let result = serde_json::json!({
+                "decision": "denied",
+                "reason": "Kill switch is active - all automation halted",
+                "approval_level": null
+            });
+            return pythonize::pythonize(py, &result)
+                .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)));
+        }
+
+        // Build action context for policy evaluation
+        let context = tw_policy::engine::ActionContext {
+            action_type: action_type.to_string(),
+            target: tw_policy::engine::ActionTarget {
+                target_type: "host".to_string(),
+                identifier: target.to_string(),
+                criticality: None,
+                tags: vec![],
+            },
+            incident_severity: "high".to_string(),
+            confidence,
+            proposer: "ai".to_string(),
+            metadata: std::collections::HashMap::new(),
+        };
+
+        let policy_engine = Arc::clone(&self.policy_engine);
+
+        let decision = get_runtime().block_on(async move {
+            let engine = policy_engine.read().await;
+            engine.evaluate(&context).await
+        });
+
+        let result = match decision {
+            Ok(PolicyDecision::Allowed) => serde_json::json!({
+                "decision": "allowed",
+                "reason": null,
+                "approval_level": null
+            }),
+            Ok(PolicyDecision::Denied(deny_reason)) => serde_json::json!({
+                "decision": "denied",
+                "reason": deny_reason.message,
+                "approval_level": null
+            }),
+            Ok(PolicyDecision::RequiresApproval(level)) => {
+                let level_str = match level {
+                    ApprovalLevel::Analyst => "analyst",
+                    ApprovalLevel::Senior => "senior",
+                    ApprovalLevel::Manager => "manager",
+                    ApprovalLevel::Executive => "executive",
+                };
+                serde_json::json!({
+                    "decision": "requires_approval",
+                    "reason": format!("Action requires {} approval", level_str),
+                    "approval_level": level_str
+                })
+            }
+            Err(e) => serde_json::json!({
+                "decision": "denied",
+                "reason": format!("Policy evaluation error: {}", e),
+                "approval_level": null
+            }),
+        };
+
+        pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+    }
+
+    /// Get the current operation mode.
+    ///
+    /// Returns:
+    ///     str: "assisted", "supervised", or "autonomous"
+    ///
+    /// Example:
+    ///     mode = policy.get_operation_mode()
+    ///     if mode == "autonomous":
+    ///         # Full automation enabled
+    pub fn get_operation_mode(&self) -> PyResult<String> {
+        let mode = get_runtime().block_on(async { self.mode_manager.get_mode().await });
+        Ok(match mode {
+            OperationMode::Assisted => "assisted".to_string(),
+            OperationMode::Supervised => "supervised".to_string(),
+            OperationMode::Autonomous => "autonomous".to_string(),
+        })
+    }
+
+    /// Check if the kill switch is active.
+    ///
+    /// Returns:
+    ///     bool: True if kill switch is active (all automation halted)
+    ///
+    /// Example:
+    ///     if policy.is_kill_switch_active():
+    ///         print("Automation halted by kill switch")
+    pub fn is_kill_switch_active(&self) -> bool {
+        self.kill_switch.is_active()
+    }
+
+    /// Submit an approval request for an action.
+    ///
+    /// Args:
+    ///     action_type: Type of action requiring approval
+    ///     target: Target of the action
+    ///     level: Required approval level ("analyst", "senior", "manager", "executive")
+    ///
+    /// Returns:
+    ///     str: The unique request_id for tracking the approval
+    ///
+    /// Raises:
+    ///     ValueError: If the approval level is invalid
+    ///
+    /// Example:
+    ///     request_id = policy.submit_approval_request("isolate_host", "server-001", "senior")
+    ///     # Later check status with check_approval_status(request_id)
+    pub fn submit_approval_request(
+        &self,
+        action_type: &str,
+        target: &str,
+        level: &str,
+    ) -> PyResult<String> {
+        let approval_level = match level.to_lowercase().as_str() {
+            "analyst" => ApprovalLevel::Analyst,
+            "senior" => ApprovalLevel::Senior,
+            "manager" => ApprovalLevel::Manager,
+            "executive" => ApprovalLevel::Executive,
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "Invalid approval level: {}. Must be one of: analyst, senior, manager, executive",
+                    level
+                )))
+            }
+        };
+
+        let request = get_runtime().block_on(async {
+            self.approval_manager
+                .submit_request(action_type, target, approval_level, "ai-agent")
+                .await
+        });
+
+        Ok(request.id.to_string())
+    }
+
+    /// Check the status of an approval request.
+    ///
+    /// Args:
+    ///     request_id: The unique request ID returned from submit_approval_request
+    ///
+    /// Returns:
+    ///     dict with:
+    ///         - status: "pending", "approved", "denied", or "expired"
+    ///         - decided_by: Who made the decision (None if still pending)
+    ///
+    /// Raises:
+    ///     ValueError: If request_id is not a valid UUID
+    ///
+    /// Example:
+    ///     status = policy.check_approval_status(request_id)
+    ///     if status["status"] == "approved":
+    ///         # Proceed with action
+    ///     elif status["status"] == "pending":
+    ///         # Wait for approval
+    pub fn check_approval_status(&self, py: Python<'_>, request_id: &str) -> PyResult<PyObject> {
+        let uuid = request_id
+            .parse::<Uuid>()
+            .map_err(|e| PyValueError::new_err(format!("Invalid request_id: {}", e)))?;
+
+        let request = get_runtime().block_on(async { self.approval_manager.get_request(uuid).await });
+
+        let result = match request {
+            Some(req) => {
+                use tw_policy::ManagedApprovalStatus;
+                let status_str = match req.status {
+                    ManagedApprovalStatus::Pending => "pending",
+                    ManagedApprovalStatus::Approved => "approved",
+                    ManagedApprovalStatus::Denied => "denied",
+                    ManagedApprovalStatus::Expired => "expired",
+                    ManagedApprovalStatus::Cancelled => "denied", // Map cancelled to denied
+                };
+                serde_json::json!({
+                    "status": status_str,
+                    "decided_by": req.decision_by
+                })
+            }
+            None => serde_json::json!({
+                "status": "expired",
+                "decided_by": null
+            }),
+        };
+
+        pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+    }
+}
+
+impl Default for PolicyBridge {
+    fn default() -> Self {
+        Self {
+            policy_engine: Arc::new(tokio::sync::RwLock::new(PolicyEngine::default())),
+            mode_manager: ModeManager::new(),
+            kill_switch: Arc::new(KillSwitch::new()),
+            approval_manager: ApprovalManager::default(),
+        }
+    }
+}
+
+// ============================================================================
 // Legacy TriageWardenBridge (kept for backward compatibility)
 // ============================================================================
 
@@ -1084,6 +1357,7 @@ fn tw_bridge(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<ThreatIntelBridge>()?;
     m.add_class::<SIEMBridge>()?;
     m.add_class::<EDRBridge>()?;
+    m.add_class::<PolicyBridge>()?;
 
     // Add version
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
@@ -1448,5 +1722,176 @@ mod tests {
         // Verify it's a RuntimeError with the expected message
         let err_str = format!("{}", py_err);
         assert!(err_str.contains("Not found"));
+    }
+
+    // ========================================================================
+    // PolicyBridge Tests
+    // ========================================================================
+
+    #[test]
+    fn test_policy_bridge_kill_switch_inactive_by_default() {
+        let bridge = PolicyBridge::default();
+        assert!(!bridge.is_kill_switch_active());
+    }
+
+    #[test]
+    fn test_policy_bridge_operation_mode_default() {
+        let bridge = PolicyBridge::default();
+        let mode = bridge.get_operation_mode().unwrap();
+        assert_eq!(mode, "supervised");
+    }
+
+    #[test]
+    fn test_policy_bridge_submit_approval_request() {
+        let bridge = PolicyBridge::default();
+        let request_id = bridge
+            .submit_approval_request("isolate_host", "workstation-001", "analyst")
+            .unwrap();
+
+        // Verify it's a valid UUID
+        assert!(request_id.parse::<Uuid>().is_ok());
+    }
+
+    #[test]
+    fn test_policy_bridge_submit_approval_invalid_level() {
+        let bridge = PolicyBridge::default();
+        let result = bridge.submit_approval_request("isolate_host", "workstation-001", "invalid");
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_policy_engine_check_action_low_risk_high_confidence() {
+        // Test that low-risk actions with high confidence are allowed
+        let engine = PolicyEngine::default();
+
+        let context = tw_policy::engine::ActionContext {
+            action_type: "create_ticket".to_string(),
+            target: tw_policy::engine::ActionTarget {
+                target_type: "ticket".to_string(),
+                identifier: "INC-001".to_string(),
+                criticality: None,
+                tags: vec![],
+            },
+            incident_severity: "medium".to_string(),
+            confidence: 0.95,
+            proposer: "ai".to_string(),
+            metadata: std::collections::HashMap::new(),
+        };
+
+        let decision = get_runtime()
+            .block_on(async { engine.evaluate(&context).await })
+            .unwrap();
+
+        assert_eq!(decision, PolicyDecision::Allowed);
+    }
+
+    #[test]
+    fn test_policy_engine_deny_dangerous_action() {
+        // Test that dangerous actions are denied
+        let engine = PolicyEngine::default();
+
+        let context = tw_policy::engine::ActionContext {
+            action_type: "delete_user".to_string(),
+            target: tw_policy::engine::ActionTarget {
+                target_type: "user".to_string(),
+                identifier: "user@example.com".to_string(),
+                criticality: None,
+                tags: vec![],
+            },
+            incident_severity: "critical".to_string(),
+            confidence: 0.99,
+            proposer: "ai".to_string(),
+            metadata: std::collections::HashMap::new(),
+        };
+
+        let decision = get_runtime()
+            .block_on(async { engine.evaluate(&context).await })
+            .unwrap();
+
+        assert!(matches!(decision, PolicyDecision::Denied(_)));
+    }
+
+    #[test]
+    fn test_policy_engine_requires_approval_for_isolate_host() {
+        let engine = PolicyEngine::default();
+
+        let context = tw_policy::engine::ActionContext {
+            action_type: "isolate_host".to_string(),
+            target: tw_policy::engine::ActionTarget {
+                target_type: "host".to_string(),
+                identifier: "workstation-001".to_string(),
+                criticality: None,
+                tags: vec![],
+            },
+            incident_severity: "high".to_string(),
+            confidence: 0.95,
+            proposer: "ai".to_string(),
+            metadata: std::collections::HashMap::new(),
+        };
+
+        let decision = get_runtime()
+            .block_on(async { engine.evaluate(&context).await })
+            .unwrap();
+
+        assert!(matches!(
+            decision,
+            PolicyDecision::RequiresApproval(ApprovalLevel::Analyst)
+        ));
+    }
+
+    #[test]
+    fn test_mode_manager_supervised_default() {
+        let manager = ModeManager::new();
+        let mode = get_runtime().block_on(async { manager.get_mode().await });
+        assert_eq!(mode, OperationMode::Supervised);
+    }
+
+    #[test]
+    fn test_kill_switch_activation() {
+        let kill_switch = KillSwitch::new();
+        assert!(!kill_switch.is_active());
+
+        get_runtime()
+            .block_on(async { kill_switch.activate("test_admin").await })
+            .unwrap();
+
+        assert!(kill_switch.is_active());
+
+        get_runtime()
+            .block_on(async { kill_switch.deactivate("test_admin").await })
+            .unwrap();
+
+        assert!(!kill_switch.is_active());
+    }
+
+    #[test]
+    fn test_approval_manager_request_lifecycle() {
+        let manager = ApprovalManager::default();
+
+        // Submit request
+        let request = get_runtime().block_on(async {
+            manager
+                .submit_request(
+                    "isolate_host",
+                    "server-001",
+                    ApprovalLevel::Senior,
+                    "ai-agent",
+                )
+                .await
+        });
+
+        assert_eq!(
+            request.status,
+            tw_policy::ManagedApprovalStatus::Pending
+        );
+
+        // Check status
+        let retrieved = get_runtime()
+            .block_on(async { manager.get_request(request.id).await })
+            .unwrap();
+
+        assert_eq!(retrieved.action_type, "isolate_host");
+        assert_eq!(retrieved.target, "server-001");
     }
 }

@@ -34,6 +34,7 @@ once_cell = "1.19"
 
 tw-core = { path = "../crates/tw-core" }
 tw-connectors = { path = "../crates/tw-connectors" }
+tw-policy = { path = "../crates/tw-policy" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

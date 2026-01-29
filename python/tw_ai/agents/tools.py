@@ -45,6 +45,17 @@ try:
 except ImportError:
     logger.warning("tw_bridge.SIEMBridge not available, using mock fallback")
 
+# Try to import PolicyBridge from the Rust PyO3 bridge
+_POLICY_BRIDGE_AVAILABLE = False
+PolicyBridge = None
+
+try:
+    from tw_bridge import PolicyBridge
+    _POLICY_BRIDGE_AVAILABLE = True
+    logger.info("tw_bridge.PolicyBridge available")
+except ImportError:
+    logger.warning("tw_bridge.PolicyBridge not available, using mock fallback")
+
 
 # =============================================================================
 # ToolResult Dataclass
@@ -134,6 +145,26 @@ def is_siem_bridge_available() -> bool:
 def is_edr_bridge_available() -> bool:
     """Check if the EDR PyO3 bridge is available."""
     return _EDR_BRIDGE_AVAILABLE
+
+
+def is_policy_bridge_available() -> bool:
+    """Check if the Policy PyO3 bridge is available."""
+    return _POLICY_BRIDGE_AVAILABLE
+
+
+_policy_bridge: Any = None
+
+
+def get_policy_bridge() -> Any:
+    """Get or create the Policy bridge instance."""
+    global _policy_bridge
+    if _policy_bridge is None and _POLICY_BRIDGE_AVAILABLE:
+        try:
+            _policy_bridge = PolicyBridge()
+            logger.info("PolicyBridge initialized successfully")
+        except Exception as e:
+            logger.error("Failed to initialize PolicyBridge", error=str(e))
+    return _policy_bridge
 
 
 # =============================================================================
@@ -254,6 +285,145 @@ def _mock_domain_lookup(domain: str) -> dict[str, Any]:
         "categories": [],
         "source": "mock",
     }
+
+
+# =============================================================================
+# Mock Fallback Implementations for Policy
+# =============================================================================
+
+
+def _mock_check_action(action_type: str, target: str, confidence: float) -> dict[str, Any]:
+    """Mock policy check for testing when bridge is unavailable.
+
+    Default behavior:
+    - Low-risk actions (create_ticket, send_notification) with high confidence: allowed
+    - Host isolation: requires approval
+    - Dangerous actions (delete_user, wipe_host): denied
+    - Everything else: requires approval
+    """
+    # Dangerous actions are always denied
+    if action_type in ("delete_user", "wipe_host", "destroy_data"):
+        return {
+            "decision": "denied",
+            "reason": f"Action '{action_type}' is not allowed by policy",
+            "approval_level": None,
+        }
+
+    # Low-risk actions with high confidence are allowed
+    if action_type in ("create_ticket", "add_ticket_comment", "send_notification") and confidence >= 0.9:
+        return {
+            "decision": "allowed",
+            "reason": None,
+            "approval_level": None,
+        }
+
+    # Host isolation requires analyst approval
+    if action_type == "isolate_host":
+        return {
+            "decision": "requires_approval",
+            "reason": "Action requires analyst approval",
+            "approval_level": "analyst",
+        }
+
+    # Protected targets require senior approval
+    protected_patterns = ["-prod-", "dc01", "dc02", "admin", "root"]
+    if any(pattern in target.lower() for pattern in protected_patterns):
+        return {
+            "decision": "requires_approval",
+            "reason": "Target is protected and requires senior approval",
+            "approval_level": "senior",
+        }
+
+    # Default: require analyst approval
+    return {
+        "decision": "requires_approval",
+        "reason": "Action requires analyst approval",
+        "approval_level": "analyst",
+    }
+
+
+def _mock_get_operation_mode() -> str:
+    """Mock operation mode for testing when bridge is unavailable."""
+    return "supervised"
+
+
+def _mock_is_kill_switch_active() -> bool:
+    """Mock kill switch status for testing when bridge is unavailable."""
+    return False
+
+
+# Approval request storage for mock fallback
+_mock_approval_requests: dict[str, dict[str, Any]] = {}
+_mock_approval_counter: int = 0
+
+
+def _mock_submit_approval_request(action_type: str, target: str, level: str) -> str:
+    """Mock approval request submission when bridge is unavailable."""
+    global _mock_approval_counter
+    import uuid
+    request_id = str(uuid.uuid4())
+    _mock_approval_requests[request_id] = {
+        "action_type": action_type,
+        "target": target,
+        "level": level,
+        "status": "pending",
+        "decided_by": None,
+    }
+    _mock_approval_counter += 1
+    return request_id
+
+
+def _mock_check_approval_status(request_id: str) -> dict[str, Any]:
+    """Mock approval status check when bridge is unavailable."""
+    if request_id in _mock_approval_requests:
+        req = _mock_approval_requests[request_id]
+        return {
+            "status": req["status"],
+            "decided_by": req["decided_by"],
+        }
+    return {
+        "status": "expired",
+        "decided_by": None,
+    }
+
+
+# =============================================================================
+# Policy Helper Functions
+# =============================================================================
+
+
+def is_action_allowed(action_type: str, target: str, confidence: float) -> bool:
+    """Check if an action is allowed by the policy engine.
+
+    This is a convenience function that calls check_policy and returns
+    a simple boolean indicating whether the action can proceed.
+
+    Args:
+        action_type: Type of action (e.g., "isolate_host", "create_ticket")
+        target: Target of the action (e.g., hostname, IP address)
+        confidence: Confidence score from AI analysis (0.0 to 1.0)
+
+    Returns:
+        True if the action is allowed, False if denied or requires approval
+
+    Example:
+        if is_action_allowed("create_ticket", "INC-001", 0.95):
+            # Proceed with creating ticket
+            pass
+    """
+    bridge = get_policy_bridge()
+
+    if bridge is not None:
+        try:
+            result = bridge.check_action(action_type, target, confidence)
+            return result.get("decision") == "allowed"
+        except Exception as e:
+            logger.error("Policy check failed", error=str(e))
+            return False
+
+    # Mock fallback
+    result = _mock_check_action(action_type, target, confidence)
+    return result.get("decision") == "allowed"
 
 
 def _format_event_for_llm(event: dict[str, Any]) -> str:
@@ -1233,6 +1403,268 @@ def create_triage_tools() -> ToolRegistry:
                 "required": ["description"],
             },
             handler=map_to_mitre,
+        )
+    )
+
+    # ========================================================================
+    # Policy Tools - Check actions against policy engine
+    # ========================================================================
+
+    async def check_policy(
+        action_type: str, target: str, confidence: float = 0.9
+    ) -> ToolResult:
+        """Check if an action is allowed by the policy engine.
+
+        Evaluates the proposed action against the policy engine rules,
+        considering the current operation mode and kill switch status.
+
+        Args:
+            action_type: Type of action (e.g., "isolate_host", "create_ticket")
+            target: Target of the action (e.g., hostname, IP address)
+            confidence: Confidence score from AI analysis (0.0 to 1.0, default 0.9)
+
+        Returns:
+            ToolResult with:
+                - decision: "allowed", "denied", or "requires_approval"
+                - reason: Explanation for the decision
+                - approval_level: Required approval level (if requires_approval)
+                - operation_mode: Current operation mode
+                - kill_switch_active: Whether kill switch is engaged
+        """
+        start_time = time.perf_counter()
+        bridge = get_policy_bridge()
+
+        try:
+            if bridge is not None:
+                result = bridge.check_action(action_type, target, confidence)
+                operation_mode = bridge.get_operation_mode()
+                kill_switch_active = bridge.is_kill_switch_active()
+                is_mock = False
+            else:
+                result = _mock_check_action(action_type, target, confidence)
+                operation_mode = _mock_get_operation_mode()
+                kill_switch_active = _mock_is_kill_switch_active()
+                is_mock = True
+
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+
+            return ToolResult.ok(
+                data={
+                    "decision": result.get("decision", "denied"),
+                    "reason": result.get("reason"),
+                    "approval_level": result.get("approval_level"),
+                    "operation_mode": operation_mode,
+                    "kill_switch_active": kill_switch_active,
+                    "action_type": action_type,
+                    "target": target,
+                    "confidence": confidence,
+                    "is_mock": is_mock,
+                },
+                execution_time_ms=execution_time_ms,
+            )
+        except Exception as e:
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error(
+                "check_policy_failed",
+                action_type=action_type,
+                target=target,
+                error=str(e),
+            )
+            return ToolResult.fail(
+                error=f"Policy check failed: {str(e)}",
+                execution_time_ms=execution_time_ms,
+            )
+
+    registry.register(
+        Tool(
+            name="check_policy",
+            description=(
+                "Check if a proposed action is allowed by the policy engine. "
+                "Returns the decision (allowed, denied, or requires_approval), "
+                "the current operation mode, and kill switch status. "
+                "Use this before taking any significant action to ensure compliance."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action_type": {
+                        "type": "string",
+                        "description": (
+                            "Type of action to check (e.g., 'isolate_host', "
+                            "'create_ticket', 'block_ip', 'disable_user')"
+                        ),
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Target of the action (hostname, IP, user, etc.)",
+                    },
+                    "confidence": {
+                        "type": "number",
+                        "description": "Confidence score from AI analysis (0.0 to 1.0, default 0.9)",
+                        "default": 0.9,
+                    },
+                },
+                "required": ["action_type", "target"],
+            },
+            handler=check_policy,
+        )
+    )
+
+    async def submit_approval(
+        action_type: str, target: str, level: str = "analyst"
+    ) -> ToolResult:
+        """Submit an approval request for an action that requires human approval.
+
+        Call this when check_policy returns "requires_approval" to create
+        a formal approval request that can be tracked and decided by humans.
+
+        Args:
+            action_type: Type of action requiring approval
+            target: Target of the action
+            level: Required approval level (analyst, senior, manager, executive)
+
+        Returns:
+            ToolResult with:
+                - request_id: Unique identifier for tracking the approval
+                - status: Current status (always "pending" for new requests)
+        """
+        start_time = time.perf_counter()
+        bridge = get_policy_bridge()
+
+        try:
+            if bridge is not None:
+                request_id = bridge.submit_approval_request(action_type, target, level)
+                is_mock = False
+            else:
+                request_id = _mock_submit_approval_request(action_type, target, level)
+                is_mock = True
+
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+
+            return ToolResult.ok(
+                data={
+                    "request_id": request_id,
+                    "status": "pending",
+                    "action_type": action_type,
+                    "target": target,
+                    "approval_level": level,
+                    "is_mock": is_mock,
+                },
+                execution_time_ms=execution_time_ms,
+            )
+        except Exception as e:
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error(
+                "submit_approval_failed",
+                action_type=action_type,
+                target=target,
+                level=level,
+                error=str(e),
+            )
+            return ToolResult.fail(
+                error=f"Approval submission failed: {str(e)}",
+                execution_time_ms=execution_time_ms,
+            )
+
+    registry.register(
+        Tool(
+            name="submit_approval",
+            description=(
+                "Submit an approval request for an action that requires human approval. "
+                "Use this when check_policy returns 'requires_approval'. "
+                "Returns a request_id that can be used to track the approval status."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action_type": {
+                        "type": "string",
+                        "description": "Type of action requiring approval",
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Target of the action",
+                    },
+                    "level": {
+                        "type": "string",
+                        "description": "Required approval level (analyst, senior, manager, executive)",
+                        "enum": ["analyst", "senior", "manager", "executive"],
+                        "default": "analyst",
+                    },
+                },
+                "required": ["action_type", "target"],
+            },
+            handler=submit_approval,
+        )
+    )
+
+    async def get_approval_status(request_id: str) -> ToolResult:
+        """Check the status of an approval request.
+
+        Use this to poll for the status of a previously submitted
+        approval request.
+
+        Args:
+            request_id: The unique request ID from submit_approval
+
+        Returns:
+            ToolResult with:
+                - status: "pending", "approved", "denied", or "expired"
+                - decided_by: Who made the decision (if decided)
+        """
+        start_time = time.perf_counter()
+        bridge = get_policy_bridge()
+
+        try:
+            if bridge is not None:
+                result = bridge.check_approval_status(request_id)
+                is_mock = False
+            else:
+                result = _mock_check_approval_status(request_id)
+                is_mock = True
+
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+
+            return ToolResult.ok(
+                data={
+                    "request_id": request_id,
+                    "status": result.get("status", "expired"),
+                    "decided_by": result.get("decided_by"),
+                    "is_mock": is_mock,
+                },
+                execution_time_ms=execution_time_ms,
+            )
+        except Exception as e:
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error(
+                "get_approval_status_failed",
+                request_id=request_id,
+                error=str(e),
+            )
+            return ToolResult.fail(
+                error=f"Approval status check failed: {str(e)}",
+                execution_time_ms=execution_time_ms,
+            )
+
+    registry.register(
+        Tool(
+            name="get_approval_status",
+            description=(
+                "Check the status of an approval request. "
+                "Returns the current status (pending, approved, denied, or expired) "
+                "and who made the decision if it has been decided."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "request_id": {
+                        "type": "string",
+                        "description": "The unique request ID from submit_approval",
+                    },
+                },
+                "required": ["request_id"],
+            },
+            handler=get_approval_status,
         )
     )
 
