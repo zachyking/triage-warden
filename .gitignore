@@ -62,3 +62,10 @@ htmlcov/
 *.so
 *.dylib
 *.dll
+
+# Orchestration (local dev tools)
+run-stage*.sh
+.pm-logs/
+.worktrees/
+docs/stage*-plan.md
+research.md
