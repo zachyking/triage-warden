@@ -11,6 +11,7 @@ pub mod config;
 pub mod engine;
 pub mod kill_switch;
 pub mod mode;
+pub mod notifications;
 pub mod rules;
 pub mod sanitization;
 
@@ -25,3 +26,7 @@ pub use kill_switch::{KillSwitch, KillSwitchActive, KillSwitchError, KillSwitchE
 pub use mode::{ActionRisk, ModeChange, ModeManager, OperationMode};
 pub use rules::{PolicyRule, RuleCondition, RuleEffect};
 pub use sanitization::{SanitizationError, SanitizationResult, Sanitizer};
+pub use notifications::{
+    CompositeNotifier, LogNotifier, Notification, NotificationError, NotificationPriority,
+    NotificationType, Notifier, SlackNotifier, WebhookNotifier,
+};

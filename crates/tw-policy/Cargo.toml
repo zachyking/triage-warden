@@ -17,6 +17,7 @@ tracing.workspace = true
 async-trait.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+reqwest.workspace = true
 regex = "1.10"
 
 [dev-dependencies]
