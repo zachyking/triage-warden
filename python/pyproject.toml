@@ -32,6 +32,7 @@ dependencies = [
     "structlog>=23.0.0",
     "chromadb>=0.4.0",
     "sentence-transformers>=2.2.0",
+    "pyyaml>=6.0.0",
 ]
 
 [project.optional-dependencies]
