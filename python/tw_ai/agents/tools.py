@@ -10,6 +10,19 @@ import structlog
 
 from tw_ai.llm.base import ToolDefinition
 
+# Import email analysis modules
+from tw_ai.analysis.email import (
+    parse_email_alert,
+    extract_urls,
+    extract_urls_from_html,
+    EmailAnalysis,
+    ExtractedURL,
+)
+from tw_ai.analysis.phishing import (
+    analyze_phishing_indicators,
+    PhishingIndicators,
+)
+
 logger = structlog.get_logger()
 
 # =============================================================================
@@ -384,6 +397,168 @@ def _mock_check_approval_status(request_id: str) -> dict[str, Any]:
     return {
         "status": "expired",
         "decided_by": None,
+    }
+
+
+# =============================================================================
+# Email Triage Helper Functions
+# =============================================================================
+
+
+def _normalize_email_data_for_phishing(email_data: dict[str, Any]) -> dict[str, Any]:
+    """Normalize email data to the format expected by analyze_phishing_indicators.
+
+    Handles both raw email alert data and output from analyze_email tool.
+
+    Args:
+        email_data: Email data in various formats.
+
+    Returns:
+        Normalized dict with expected fields for phishing analysis.
+    """
+    normalized: dict[str, Any] = {}
+
+    # Subject
+    normalized["subject"] = email_data.get("subject", "")
+
+    # Body - try various field names
+    body = email_data.get("body", "")
+    if not body:
+        body = email_data.get("body_text", "") or email_data.get("body_html", "")
+    normalized["body"] = body
+
+    # Sender email - try various field names
+    sender_email = email_data.get("sender_email", "")
+    if not sender_email:
+        sender_email = email_data.get("sender", "") or email_data.get("from", "")
+    normalized["sender_email"] = sender_email
+
+    # Sender display name
+    normalized["sender_display_name"] = email_data.get("sender_display_name", "")
+
+    # Reply-to
+    normalized["reply_to"] = email_data.get("reply_to", "")
+
+    # URLs - handle both list of strings and list of dicts
+    urls_data = email_data.get("urls", [])
+    urls: list[str] = []
+    url_display_texts: list[dict[str, str]] = []
+
+    for url_item in urls_data:
+        if isinstance(url_item, str):
+            urls.append(url_item)
+        elif isinstance(url_item, dict):
+            url_str = url_item.get("url", "")
+            if url_str:
+                urls.append(url_str)
+                display_text = url_item.get("display_text")
+                if display_text:
+                    url_display_texts.append({
+                        "url": url_str,
+                        "display_text": display_text,
+                    })
+
+    normalized["urls"] = urls
+    normalized["url_display_texts"] = url_display_texts
+
+    # Attachments - handle both list of strings and list of dicts
+    attachments_data = email_data.get("attachments", [])
+    attachments: list[str] = []
+
+    for att_item in attachments_data:
+        if isinstance(att_item, str):
+            attachments.append(att_item)
+        elif isinstance(att_item, dict):
+            filename = att_item.get("filename", att_item.get("name", ""))
+            if filename:
+                attachments.append(filename)
+
+    normalized["attachments"] = attachments
+
+    return normalized
+
+
+def _mock_check_sender_reputation(sender_email: str) -> dict[str, Any]:
+    """Mock sender reputation check for testing when real service is unavailable.
+
+    Provides realistic mock data for known domains and generic responses
+    for unknown senders.
+    """
+    # Extract domain from email
+    domain = ""
+    if "@" in sender_email:
+        domain = sender_email.split("@")[-1].lower().strip()
+
+    # Known trusted domains (high reputation)
+    trusted_domains = {
+        "google.com": {"score": 95, "domain_age_days": 9500, "category": "technology"},
+        "microsoft.com": {"score": 95, "domain_age_days": 10000, "category": "technology"},
+        "github.com": {"score": 90, "domain_age_days": 5800, "category": "technology"},
+        "amazon.com": {"score": 92, "domain_age_days": 10500, "category": "e-commerce"},
+        "apple.com": {"score": 95, "domain_age_days": 10000, "category": "technology"},
+    }
+
+    # Known suspicious/malicious domains
+    suspicious_domains = {
+        "evil.example.com": {"score": 5, "domain_age_days": 7, "category": "malicious"},
+        "phishing.bad": {"score": 0, "domain_age_days": 3, "category": "phishing"},
+        "malware.test": {"score": 10, "domain_age_days": 14, "category": "malware"},
+    }
+
+    # Check trusted domains
+    if domain in trusted_domains:
+        info = trusted_domains[domain]
+        return {
+            "sender_email": sender_email,
+            "domain": domain,
+            "score": info["score"],
+            "is_known_sender": True,
+            "domain_age_days": info["domain_age_days"],
+            "category": info["category"],
+            "risk_level": "low",
+            "is_mock": True,
+        }
+
+    # Check suspicious domains
+    if domain in suspicious_domains:
+        info = suspicious_domains[domain]
+        return {
+            "sender_email": sender_email,
+            "domain": domain,
+            "score": info["score"],
+            "is_known_sender": False,
+            "domain_age_days": info["domain_age_days"],
+            "category": info["category"],
+            "risk_level": "high",
+            "is_mock": True,
+        }
+
+    # Check for newly registered or suspicious patterns
+    # Domains with numbers or hyphens mimicking brands
+    suspicious_patterns = ["paypa1", "micros0ft", "g00gle", "amaz0n", "app1e"]
+    for pattern in suspicious_patterns:
+        if pattern in domain:
+            return {
+                "sender_email": sender_email,
+                "domain": domain,
+                "score": 15,
+                "is_known_sender": False,
+                "domain_age_days": 30,
+                "category": "suspicious",
+                "risk_level": "high",
+                "is_mock": True,
+            }
+
+    # Default: unknown sender
+    return {
+        "sender_email": sender_email,
+        "domain": domain,
+        "score": 50,
+        "is_known_sender": False,
+        "domain_age_days": None,  # Unknown
+        "category": "unknown",
+        "risk_level": "medium",
+        "is_mock": True,
     }
 
 
@@ -1665,6 +1840,391 @@ def create_triage_tools() -> ToolRegistry:
                 "required": ["request_id"],
             },
             handler=get_approval_status,
+        )
+    )
+
+    # ========================================================================
+    # Email Triage Tools
+    # ========================================================================
+
+    async def analyze_email(email_data: dict[str, Any]) -> ToolResult:
+        """Parse and analyze an email alert for security-relevant information.
+
+        Uses parse_email_alert() from the email analysis module to extract
+        headers, URLs, attachments, authentication results, and other
+        security-relevant data from email alert JSON.
+
+        Args:
+            email_data: Dictionary containing email alert data with fields like:
+                - message_id: Unique message identifier
+                - subject: Email subject
+                - from/sender: Sender address
+                - to/recipients: Recipient addresses
+                - headers: Raw email headers
+                - body_text: Plain text body
+                - body_html: HTML body
+                - attachments: List of attachment info
+
+        Returns:
+            ToolResult with EmailAnalysis as dict including:
+                - message_id, subject, sender, sender_display_name
+                - recipients, cc, reply_to
+                - headers, body_text, body_html
+                - urls: List of extracted URLs with domain info
+                - attachments: List of attachment info with hashes
+                - authentication: SPF, DKIM, DMARC results
+        """
+        start_time = time.perf_counter()
+
+        try:
+            analysis: EmailAnalysis = parse_email_alert(email_data)
+
+            # Convert dataclass to dict for serialization
+            result_data = {
+                "message_id": analysis.message_id,
+                "subject": analysis.subject,
+                "sender": analysis.sender,
+                "sender_display_name": analysis.sender_display_name,
+                "reply_to": analysis.reply_to,
+                "recipients": analysis.recipients,
+                "cc": analysis.cc,
+                "headers": analysis.headers,
+                "body_text": analysis.body_text,
+                "body_html": analysis.body_html,
+                "urls": [
+                    {
+                        "url": url.url,
+                        "domain": url.domain,
+                        "display_text": url.display_text,
+                        "is_shortened": url.is_shortened,
+                        "is_ip_based": url.is_ip_based,
+                    }
+                    for url in analysis.urls
+                ],
+                "attachments": [
+                    {
+                        "filename": att.filename,
+                        "content_type": att.content_type,
+                        "size_bytes": att.size_bytes,
+                        "md5": att.md5,
+                        "sha256": att.sha256,
+                    }
+                    for att in analysis.attachments
+                ],
+                "received_timestamps": [
+                    ts.isoformat() for ts in analysis.received_timestamps
+                ],
+                "authentication": {
+                    "spf": analysis.authentication.spf,
+                    "dkim": analysis.authentication.dkim,
+                    "dmarc": analysis.authentication.dmarc,
+                },
+            }
+
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+
+            return ToolResult.ok(
+                data=result_data,
+                execution_time_ms=execution_time_ms,
+            )
+        except Exception as e:
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error("analyze_email_failed", error=str(e))
+            return ToolResult.fail(
+                error=f"Email analysis failed: {str(e)}",
+                execution_time_ms=execution_time_ms,
+            )
+
+    registry.register(
+        Tool(
+            name="analyze_email",
+            description=(
+                "Parse and analyze an email alert for security-relevant information. "
+                "Extracts sender info, recipients, headers, URLs, attachments, and "
+                "email authentication results (SPF, DKIM, DMARC). Use this to "
+                "understand the structure and content of a suspicious email."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "email_data": {
+                        "type": "object",
+                        "description": (
+                            "Email alert data containing message_id, subject, "
+                            "from/sender, to/recipients, headers, body_text, "
+                            "body_html, and attachments"
+                        ),
+                    }
+                },
+                "required": ["email_data"],
+            },
+            handler=analyze_email,
+        )
+    )
+
+    async def check_phishing_indicators(email_data: dict[str, Any]) -> ToolResult:
+        """Analyze email for phishing indicators and calculate risk score.
+
+        Uses analyze_phishing_indicators() from the phishing analysis module
+        to detect typosquatting, urgency language, credential requests,
+        URL/text mismatches, and other phishing signals.
+
+        Args:
+            email_data: Dictionary containing email information. Can be:
+                - Raw email data with subject, body, sender_email, etc.
+                - Or output from analyze_email with extracted fields
+
+        Returns:
+            ToolResult with PhishingIndicators as dict including:
+                - typosquat_domains: Detected typosquatting domains
+                - urgency_phrases: Urgency language found
+                - credential_request_detected: Whether credentials are requested
+                - suspicious_urls: List of suspicious URLs
+                - url_text_mismatch: Whether display text differs from URL
+                - sender_domain_mismatch: Whether sender impersonates another org
+                - attachment_risk_level: none/low/medium/high/critical
+                - overall_risk_score: 0-100 risk score
+                - risk_factors: Human-readable list of risk factors
+        """
+        start_time = time.perf_counter()
+
+        try:
+            # Normalize email_data to the format expected by analyze_phishing_indicators
+            normalized_data = _normalize_email_data_for_phishing(email_data)
+
+            indicators: PhishingIndicators = analyze_phishing_indicators(normalized_data)
+
+            # Convert dataclass to dict for serialization
+            result_data = {
+                "typosquat_domains": [
+                    {
+                        "suspicious_domain": m.suspicious_domain,
+                        "similar_to": m.similar_to,
+                        "similarity_score": m.similarity_score,
+                        "technique": m.technique,
+                    }
+                    for m in indicators.typosquat_domains
+                ],
+                "urgency_phrases": indicators.urgency_phrases,
+                "credential_request_detected": indicators.credential_request_detected,
+                "suspicious_urls": indicators.suspicious_urls,
+                "url_text_mismatch": indicators.url_text_mismatch,
+                "sender_domain_mismatch": indicators.sender_domain_mismatch,
+                "attachment_risk_level": indicators.attachment_risk_level,
+                "overall_risk_score": indicators.overall_risk_score,
+                "risk_factors": indicators.risk_factors,
+            }
+
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+
+            return ToolResult.ok(
+                data=result_data,
+                execution_time_ms=execution_time_ms,
+            )
+        except Exception as e:
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error("check_phishing_indicators_failed", error=str(e))
+            return ToolResult.fail(
+                error=f"Phishing indicator check failed: {str(e)}",
+                execution_time_ms=execution_time_ms,
+            )
+
+    registry.register(
+        Tool(
+            name="check_phishing_indicators",
+            description=(
+                "Analyze an email for phishing indicators and calculate a risk score. "
+                "Detects typosquatting domains, urgency language, credential requests, "
+                "URL/text mismatches, sender domain impersonation, and risky attachments. "
+                "Returns a risk score (0-100) and list of risk factors. Use this to "
+                "assess whether an email is likely a phishing attempt."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "email_data": {
+                        "type": "object",
+                        "description": (
+                            "Email data containing subject, body, sender_email, "
+                            "sender_display_name, reply_to, urls, attachments. "
+                            "Can be raw email data or output from analyze_email."
+                        ),
+                    }
+                },
+                "required": ["email_data"],
+            },
+            handler=check_phishing_indicators,
+        )
+    )
+
+    async def extract_email_urls(
+        text: str, include_html: bool = True
+    ) -> ToolResult:
+        """Extract URLs from email content.
+
+        Uses extract_urls() and extract_urls_from_html() from the email
+        analysis module to find and normalize URLs in text content.
+        Handles defanged URLs (hxxp, [.], etc.) automatically.
+
+        Args:
+            text: Text content to extract URLs from.
+            include_html: If True and text appears to contain HTML,
+                also extract URLs from anchor tags with display text.
+
+        Returns:
+            ToolResult with list of ExtractedURL as dicts including:
+                - url: The normalized URL
+                - domain: Domain portion of the URL
+                - display_text: For HTML links, the visible anchor text
+                - is_shortened: Whether URL uses a shortening service
+                - is_ip_based: Whether URL uses an IP instead of domain
+        """
+        start_time = time.perf_counter()
+
+        try:
+            urls: list[ExtractedURL] = []
+            seen_urls: set[str] = set()
+
+            # Check if text contains HTML
+            has_html = include_html and ("<a " in text.lower() or "<a>" in text.lower())
+
+            if has_html:
+                # Extract from HTML (also extracts plain text URLs)
+                html_urls = extract_urls_from_html(text)
+                for url in html_urls:
+                    if url.url not in seen_urls:
+                        seen_urls.add(url.url)
+                        urls.append(url)
+            else:
+                # Extract from plain text only
+                text_urls = extract_urls(text)
+                for url in text_urls:
+                    if url.url not in seen_urls:
+                        seen_urls.add(url.url)
+                        urls.append(url)
+
+            # Convert to dicts for serialization
+            result_data = {
+                "urls": [
+                    {
+                        "url": url.url,
+                        "domain": url.domain,
+                        "display_text": url.display_text,
+                        "is_shortened": url.is_shortened,
+                        "is_ip_based": url.is_ip_based,
+                    }
+                    for url in urls
+                ],
+                "total_count": len(urls),
+                "shortened_count": sum(1 for url in urls if url.is_shortened),
+                "ip_based_count": sum(1 for url in urls if url.is_ip_based),
+            }
+
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+
+            return ToolResult.ok(
+                data=result_data,
+                execution_time_ms=execution_time_ms,
+            )
+        except Exception as e:
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error("extract_email_urls_failed", error=str(e))
+            return ToolResult.fail(
+                error=f"URL extraction failed: {str(e)}",
+                execution_time_ms=execution_time_ms,
+            )
+
+    registry.register(
+        Tool(
+            name="extract_email_urls",
+            description=(
+                "Extract URLs from email content (plain text or HTML). "
+                "Handles defanged URLs (hxxp://, [.], [://]) automatically. "
+                "Returns normalized URLs with domain info, identifies shortened "
+                "URLs (bit.ly, etc.) and IP-based URLs. For HTML, extracts "
+                "anchor display text to detect URL/text mismatches."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "Text content to extract URLs from",
+                    },
+                    "include_html": {
+                        "type": "boolean",
+                        "description": "Extract from HTML anchor tags if present (default: true)",
+                        "default": True,
+                    },
+                },
+                "required": ["text"],
+            },
+            handler=extract_email_urls,
+        )
+    )
+
+    async def check_sender_reputation(sender_email: str) -> ToolResult:
+        """Check the reputation of an email sender.
+
+        Performs reputation lookup for the sender email address,
+        including domain age, known sender status, and reputation score.
+
+        NOTE: This is currently a mock implementation for development.
+        Production will integrate with email reputation services.
+
+        Args:
+            sender_email: The sender's email address to check.
+
+        Returns:
+            ToolResult with reputation dict including:
+                - sender_email: The email address checked
+                - domain: The domain portion of the email
+                - score: Reputation score (0-100, higher is better)
+                - is_known_sender: Whether sender is in known/trusted list
+                - domain_age_days: Age of the domain in days (if available)
+                - category: Categorization (trusted, suspicious, unknown, etc.)
+                - risk_level: low/medium/high based on reputation
+        """
+        start_time = time.perf_counter()
+
+        try:
+            result_data = _mock_check_sender_reputation(sender_email)
+
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+
+            return ToolResult.ok(
+                data=result_data,
+                execution_time_ms=execution_time_ms,
+            )
+        except Exception as e:
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error("check_sender_reputation_failed", error=str(e))
+            return ToolResult.fail(
+                error=f"Sender reputation check failed: {str(e)}",
+                execution_time_ms=execution_time_ms,
+            )
+
+    registry.register(
+        Tool(
+            name="check_sender_reputation",
+            description=(
+                "Check the reputation of an email sender. "
+                "Returns a reputation score (0-100, higher is better), "
+                "whether the sender is in a known/trusted list, domain age, "
+                "and risk level. Use this to assess sender trustworthiness "
+                "when investigating suspicious emails."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "sender_email": {
+                        "type": "string",
+                        "description": "The sender's email address to check",
+                    },
+                },
+                "required": ["sender_email"],
+            },
+            handler=check_sender_reputation,
         )
     )
 

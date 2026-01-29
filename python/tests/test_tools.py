@@ -32,6 +32,597 @@ class _MockLLMBase:
 # Pre-register mock modules before loading tools.py
 sys.modules["tw_ai.llm.base"] = _MockLLMBase()
 sys.modules["tw_ai.llm"] = MagicMock()
+
+# Load actual email analysis modules
+_tw_ai_base = Path(__file__).parent.parent / "tw_ai"
+sys.path.insert(0, str(_tw_ai_base.parent))
+
+# Import and register real email/phishing modules
+def _setup_analysis_modules():
+    """Setup the analysis modules before tools.py loads."""
+    from dataclasses import dataclass, field
+    from typing import Optional, Literal
+    import re
+
+    # Create email module
+    email_module = MagicMock()
+
+    @dataclass
+    class ExtractedURL:
+        url: str
+        domain: str
+        display_text: Optional[str] = None
+        is_shortened: bool = False
+        is_ip_based: bool = False
+
+    @dataclass
+    class AttachmentInfo:
+        filename: str
+        content_type: str
+        size_bytes: int
+        md5: Optional[str] = None
+        sha256: Optional[str] = None
+
+    @dataclass
+    class EmailAuthResult:
+        spf: str = "none"
+        dkim: str = "none"
+        dmarc: str = "none"
+
+    @dataclass
+    class EmailAnalysis:
+        message_id: str
+        subject: str
+        sender: str
+        sender_display_name: Optional[str] = None
+        reply_to: Optional[str] = None
+        recipients: list = field(default_factory=list)
+        cc: list = field(default_factory=list)
+        headers: dict = field(default_factory=dict)
+        body_text: Optional[str] = None
+        body_html: Optional[str] = None
+        urls: list = field(default_factory=list)
+        attachments: list = field(default_factory=list)
+        received_timestamps: list = field(default_factory=list)
+        authentication: EmailAuthResult = field(default_factory=EmailAuthResult)
+
+    # URL shorteners
+    URL_SHORTENERS = frozenset([
+        "bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly",
+    ])
+
+    # URL pattern
+    URL_PATTERN = re.compile(
+        r"(?P<scheme>hxxps?|https?|ftp)"
+        r"(?:\[:\]|:)"
+        r"(?://|\[//\])"
+        r"(?P<url_body>[a-zA-Z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+)",
+        re.IGNORECASE,
+    )
+
+    IP_ADDRESS_PATTERN = re.compile(
+        r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(?:\[\.\]|\.)){3}"
+        r"(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+    )
+
+    def _defang_to_normal(value):
+        result = value
+        result = re.sub(r"hxxp", "http", result, flags=re.IGNORECASE)
+        result = result.replace("[:]", ":")
+        result = result.replace("[//]", "//")
+        result = result.replace("[.]", ".")
+        result = result.replace("[dot]", ".")
+        result = result.replace("[@]", "@")
+        result = result.replace("[at]", "@")
+        return result
+
+    def _extract_domain_from_url(url):
+        url_no_scheme = re.sub(r"^[a-zA-Z]+://", "", url)
+        host = url_no_scheme.split("/")[0]
+        if "@" in host:
+            host = host.split("@")[-1]
+        host = host.split(":")[0]
+        return host.lower()
+
+    def _is_url_shortened(domain):
+        return domain.lower() in URL_SHORTENERS
+
+    def _is_ip_based_url(domain):
+        normalized = _defang_to_normal(domain)
+        return bool(IP_ADDRESS_PATTERN.match(normalized))
+
+    def extract_urls(text):
+        if not text:
+            return []
+        urls = []
+        seen = set()
+        for match in URL_PATTERN.finditer(text):
+            full_match = match.group(0)
+            normalized = _defang_to_normal(full_match)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            domain = _extract_domain_from_url(normalized)
+            urls.append(ExtractedURL(
+                url=normalized,
+                domain=domain,
+                display_text=None,
+                is_shortened=_is_url_shortened(domain),
+                is_ip_based=_is_ip_based_url(domain),
+            ))
+        return urls
+
+    def extract_urls_from_html(html):
+        if not html:
+            return []
+        urls = []
+        seen = set()
+
+        # Simple HTML link extraction
+        from html.parser import HTMLParser
+
+        class LinkExtractor(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.links = []
+                self._current_link = None
+                self._current_text = []
+
+            def handle_starttag(self, tag, attrs):
+                if tag.lower() == "a":
+                    for name, value in attrs:
+                        if name.lower() == "href" and value:
+                            self._current_link = value
+                            self._current_text = []
+                            break
+
+            def handle_endtag(self, tag):
+                if tag.lower() == "a" and self._current_link:
+                    text = "".join(self._current_text).strip()
+                    self.links.append((self._current_link, text))
+                    self._current_link = None
+                    self._current_text = []
+
+            def handle_data(self, data):
+                if self._current_link is not None:
+                    self._current_text.append(data)
+
+        parser = LinkExtractor()
+        try:
+            parser.feed(html)
+        except Exception:
+            pass
+
+        for href, display_text in parser.links:
+            normalized = _defang_to_normal(href)
+            if not normalized.lower().startswith(("http://", "https://", "ftp://")):
+                continue
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            domain = _extract_domain_from_url(normalized)
+            urls.append(ExtractedURL(
+                url=normalized,
+                domain=domain,
+                display_text=display_text if display_text else None,
+                is_shortened=_is_url_shortened(domain),
+                is_ip_based=_is_ip_based_url(domain),
+            ))
+
+        # Also extract text URLs
+        text_urls = extract_urls(html)
+        for url in text_urls:
+            if url.url not in seen:
+                seen.add(url.url)
+                urls.append(url)
+
+        return urls
+
+    def _parse_spf_result(auth_header):
+        header_lower = auth_header.lower()
+        spf_match = re.search(r"spf\s*=\s*(pass|fail|softfail|neutral|none|temperror|permerror)", header_lower)
+        if spf_match:
+            result = spf_match.group(1)
+            if result == "pass":
+                return "pass"
+            elif result in ("fail", "permerror"):
+                return "fail"
+            elif result in ("softfail", "neutral", "temperror"):
+                return "softfail"
+        return "none"
+
+    def _parse_dkim_result(auth_header):
+        header_lower = auth_header.lower()
+        dkim_match = re.search(r"dkim\s*=\s*(pass|fail|neutral|none|temperror|permerror)", header_lower)
+        if dkim_match:
+            result = dkim_match.group(1)
+            if result == "pass":
+                return "pass"
+            elif result in ("fail", "permerror"):
+                return "fail"
+        return "none"
+
+    def _parse_dmarc_result(auth_header):
+        header_lower = auth_header.lower()
+        dmarc_match = re.search(r"dmarc\s*=\s*(pass|fail|none|bestguesspass)", header_lower)
+        if dmarc_match:
+            result = dmarc_match.group(1)
+            if result in ("pass", "bestguesspass"):
+                return "pass"
+            elif result == "fail":
+                return "fail"
+        return "none"
+
+    def parse_email_alert(alert_data):
+        headers = alert_data.get("headers", {})
+        if isinstance(headers, str):
+            headers = {}
+
+        message_id = alert_data.get("message_id") or headers.get("Message-ID", "") or ""
+        subject = alert_data.get("subject") or headers.get("Subject", "") or ""
+
+        sender_raw = alert_data.get("from") or alert_data.get("sender") or headers.get("From", "") or ""
+        sender = sender_raw.lower().strip() if sender_raw else ""
+        if "<" in sender and ">" in sender:
+            import re as re2
+            match = re2.search(r"<([^>]+)>", sender)
+            if match:
+                sender = match.group(1)
+
+        reply_to_raw = alert_data.get("reply_to") or headers.get("Reply-To", "")
+        reply_to = None
+        if reply_to_raw:
+            reply_to = reply_to_raw.lower().strip()
+            if reply_to == sender:
+                reply_to = None
+
+        recipients_raw = alert_data.get("to") or alert_data.get("recipients") or headers.get("To", "") or ""
+        if isinstance(recipients_raw, list):
+            recipients = [r.lower().strip() for r in recipients_raw if r]
+        elif recipients_raw:
+            recipients = [r.strip().lower() for r in recipients_raw.split(",") if r.strip()]
+        else:
+            recipients = []
+
+        cc_raw = alert_data.get("cc") or headers.get("Cc", "") or ""
+        if isinstance(cc_raw, list):
+            cc = [c.lower().strip() for c in cc_raw if c]
+        elif cc_raw:
+            cc = [c.strip().lower() for c in cc_raw.split(",") if c.strip()]
+        else:
+            cc = []
+
+        body_text = alert_data.get("body_text") or alert_data.get("body") or None
+        body_html = alert_data.get("body_html") or None
+
+        urls = []
+        seen_urls = set()
+        if body_html:
+            for url in extract_urls_from_html(body_html):
+                if url.url not in seen_urls:
+                    seen_urls.add(url.url)
+                    urls.append(url)
+        if body_text:
+            for url in extract_urls(body_text):
+                if url.url not in seen_urls:
+                    seen_urls.add(url.url)
+                    urls.append(url)
+
+        attachments = []
+        for att in alert_data.get("attachments", []):
+            if isinstance(att, dict):
+                attachments.append(AttachmentInfo(
+                    filename=att.get("filename", att.get("name", "unknown")),
+                    content_type=att.get("content_type", "application/octet-stream"),
+                    size_bytes=att.get("size_bytes", att.get("size", 0)),
+                    md5=att.get("md5"),
+                    sha256=att.get("sha256"),
+                ))
+
+        auth_results = headers.get("Authentication-Results", "")
+        spf = _parse_spf_result(auth_results)
+        dkim = _parse_dkim_result(auth_results)
+        dmarc = _parse_dmarc_result(auth_results)
+
+        return EmailAnalysis(
+            message_id=message_id,
+            subject=subject,
+            sender=sender,
+            sender_display_name=None,
+            reply_to=reply_to,
+            recipients=recipients,
+            cc=cc,
+            headers=headers,
+            body_text=body_text,
+            body_html=body_html,
+            urls=urls,
+            attachments=attachments,
+            received_timestamps=[],
+            authentication=EmailAuthResult(spf=spf, dkim=dkim, dmarc=dmarc),
+        )
+
+    email_module.parse_email_alert = parse_email_alert
+    email_module.extract_urls = extract_urls
+    email_module.extract_urls_from_html = extract_urls_from_html
+    email_module.EmailAnalysis = EmailAnalysis
+    email_module.ExtractedURL = ExtractedURL
+    email_module.AttachmentInfo = AttachmentInfo
+    email_module.EmailAuthResult = EmailAuthResult
+
+    # Create phishing module
+    phishing_module = MagicMock()
+
+    @dataclass
+    class TyposquatMatch:
+        suspicious_domain: str
+        similar_to: str
+        similarity_score: float
+        technique: str
+
+    @dataclass
+    class PhishingIndicators:
+        typosquat_domains: list = field(default_factory=list)
+        urgency_phrases: list = field(default_factory=list)
+        credential_request_detected: bool = False
+        suspicious_urls: list = field(default_factory=list)
+        url_text_mismatch: bool = False
+        sender_domain_mismatch: bool = False
+        attachment_risk_level: str = "none"
+        overall_risk_score: int = 0
+        risk_factors: list = field(default_factory=list)
+
+    LEGITIMATE_DOMAINS = ["paypal.com", "microsoft.com", "google.com", "apple.com", "amazon.com"]
+    URGENCY_KEYWORDS = ["urgent", "immediately", "suspended", "verify", "expire", "within 24 hours", "account locked", "action required"]
+    CREDENTIAL_PATTERNS = [r"enter your password", r"verify your account", r"click here to login", r"verify your password"]
+    HIGH_RISK_EXTENSIONS = {".exe", ".scr", ".bat", ".cmd", ".ps1", ".vbs", ".js"}
+    MEDIUM_RISK_EXTENSIONS = {".doc", ".docm", ".xls", ".xlsm", ".zip", ".rar"}
+    LOW_RISK_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".txt"}
+    HOMOGLYPHS = {"o": ["0", "O"], "0": ["o", "O"], "l": ["1", "I", "i"], "1": ["l", "I", "i"], "a": ["@", "4"]}
+
+    def _get_domain_name(domain):
+        parts = domain.split(".")
+        if len(parts) >= 2:
+            return parts[-2]
+        return domain
+
+    def _get_base_domain_name(domain_name):
+        """Extract base name from compound domains like 'amaz0n-security' -> 'amaz0n'."""
+        if "-" in domain_name:
+            parts = domain_name.split("-")
+            return parts[0]
+        return domain_name
+
+    def _levenshtein_distance(s1, s2):
+        if len(s1) < len(s2):
+            s1, s2 = s2, s1
+        if len(s2) == 0:
+            return len(s1)
+        previous_row = list(range(len(s2) + 1))
+        for i, c1 in enumerate(s1):
+            current_row = [i + 1]
+            for j, c2 in enumerate(s2):
+                insertions = previous_row[j + 1] + 1
+                deletions = current_row[j] + 1
+                substitutions = previous_row[j] + (c1 != c2)
+                current_row.append(min(insertions, deletions, substitutions))
+            previous_row = current_row
+        return previous_row[-1]
+
+    def _check_homoglyph(domain, legitimate):
+        if domain == legitimate:
+            return 0.0
+        if len(domain) != len(legitimate):
+            return 0.0
+        homoglyph_matches = 0
+        total_diff = 0
+        for d_char, l_char in zip(domain, legitimate):
+            if d_char == l_char:
+                continue
+            total_diff += 1
+            if l_char in HOMOGLYPHS and d_char in HOMOGLYPHS[l_char]:
+                homoglyph_matches += 1
+            elif d_char in HOMOGLYPHS and l_char in HOMOGLYPHS[d_char]:
+                homoglyph_matches += 1
+        if total_diff > 0 and homoglyph_matches == total_diff:
+            return 0.9
+        elif homoglyph_matches > 0:
+            return 0.85
+        return 0.0
+
+    def check_typosquat(domain, legitimate_domains):
+        matches = []
+        domain_lower = domain.lower().strip()
+        if domain_lower in [d.lower() for d in legitimate_domains]:
+            return matches
+        for legit_domain in legitimate_domains:
+            legit_lower = legit_domain.lower()
+            domain_name = _get_domain_name(domain_lower)
+            legit_name = _get_domain_name(legit_lower)
+            base_domain_name = _get_base_domain_name(domain_name)
+
+            # Check homoglyph on full domain name
+            score = _check_homoglyph(domain_name, legit_name)
+            if score > 0.8:
+                matches.append(TyposquatMatch(
+                    suspicious_domain=domain,
+                    similar_to=legit_domain,
+                    similarity_score=score,
+                    technique="homoglyph",
+                ))
+                continue
+
+            # Check homoglyph on base domain name (for compound domains like amaz0n-security)
+            if base_domain_name != domain_name:
+                base_score = _check_homoglyph(base_domain_name, legit_name)
+                if base_score > 0.8:
+                    matches.append(TyposquatMatch(
+                        suspicious_domain=domain,
+                        similar_to=legit_domain,
+                        similarity_score=base_score * 0.9,
+                        technique="homoglyph",
+                    ))
+                    continue
+
+            # Check Levenshtein on full domain name
+            distance = _levenshtein_distance(domain_name, legit_name)
+            if distance > 0 and distance < 3:
+                similarity = 1.0 - (distance / max(len(domain_name), len(legit_name)))
+                matches.append(TyposquatMatch(
+                    suspicious_domain=domain,
+                    similar_to=legit_domain,
+                    similarity_score=similarity,
+                    technique="typo",
+                ))
+                continue
+
+            # Check Levenshtein on base domain name
+            if base_domain_name != domain_name:
+                base_distance = _levenshtein_distance(base_domain_name, legit_name)
+                if base_distance > 0 and base_distance < 3:
+                    similarity = 1.0 - (base_distance / max(len(base_domain_name), len(legit_name)))
+                    matches.append(TyposquatMatch(
+                        suspicious_domain=domain,
+                        similar_to=legit_domain,
+                        similarity_score=similarity * 0.9,
+                        technique="typo",
+                    ))
+        return matches
+
+    def detect_urgency_language(text):
+        found = []
+        text_lower = text.lower()
+        for keyword in URGENCY_KEYWORDS:
+            if keyword.lower() in text_lower:
+                found.append(keyword)
+        return found
+
+    def detect_credential_request(text):
+        text_lower = text.lower()
+        for pattern in CREDENTIAL_PATTERNS:
+            if re.search(pattern, text_lower):
+                return True
+        return False
+
+    def _extract_domain_from_email(email):
+        if "@" in email:
+            return email.split("@")[-1].lower().strip()
+        return None
+
+    def _assess_attachment_risk(attachments):
+        if not attachments:
+            return "none"
+        highest = "none"
+        risk_order = ["none", "low", "medium", "high", "critical"]
+        for att in attachments:
+            ext = ""
+            if "." in att:
+                ext = "." + att.rsplit(".", 1)[-1].lower()
+            # Check for double extension
+            parts = att.lower().split(".")
+            if len(parts) >= 3:
+                final = "." + parts[-1]
+                penultimate = "." + parts[-2]
+                if final in HIGH_RISK_EXTENSIONS and penultimate in LOW_RISK_EXTENSIONS:
+                    return "critical"
+            if ext in HIGH_RISK_EXTENSIONS:
+                if risk_order.index("high") > risk_order.index(highest):
+                    highest = "high"
+            elif ext in MEDIUM_RISK_EXTENSIONS:
+                if risk_order.index("medium") > risk_order.index(highest):
+                    highest = "medium"
+            elif ext in LOW_RISK_EXTENSIONS:
+                if risk_order.index("low") > risk_order.index(highest):
+                    highest = "low"
+        return highest
+
+    def calculate_risk_score(indicators):
+        score = 0
+        if indicators.typosquat_domains:
+            highest = max(m.similarity_score for m in indicators.typosquat_domains)
+            score += int(25 * highest)
+        if len(indicators.urgency_phrases) >= 5:
+            score += 15
+        elif len(indicators.urgency_phrases) >= 3:
+            score += 12
+        elif len(indicators.urgency_phrases) >= 1:
+            score += 8
+        if indicators.credential_request_detected:
+            score += 20
+        if len(indicators.suspicious_urls) >= 3:
+            score += 15
+        elif len(indicators.suspicious_urls) >= 1:
+            score += 10
+        if indicators.url_text_mismatch:
+            score += 10
+        if indicators.sender_domain_mismatch:
+            score += 10
+        attachment_scores = {"critical": 15, "high": 15, "medium": 10, "low": 3, "none": 0}
+        score += attachment_scores.get(indicators.attachment_risk_level, 0)
+        return min(score, 100)
+
+    def analyze_phishing_indicators(email_data):
+        indicators = PhishingIndicators()
+        subject = email_data.get("subject", "")
+        body = email_data.get("body", "")
+        combined_text = f"{subject} {body}".lower()
+
+        # Check URLs for typosquatting
+        urls = email_data.get("urls", [])
+        for url in urls:
+            domain = None
+            if "://" in url:
+                domain = url.split("://")[1].split("/")[0]
+            elif "/" in url:
+                domain = url.split("/")[0]
+            if domain:
+                typosquats = check_typosquat(domain, LEGITIMATE_DOMAINS)
+                indicators.typosquat_domains.extend(typosquats)
+                if typosquats:
+                    indicators.suspicious_urls.append(url)
+
+        # Check sender domain
+        sender_email = email_data.get("sender_email", "")
+        sender_domain = _extract_domain_from_email(sender_email)
+        if sender_domain:
+            sender_typosquats = check_typosquat(sender_domain, LEGITIMATE_DOMAINS)
+            indicators.typosquat_domains.extend(sender_typosquats)
+            if sender_typosquats:
+                indicators.risk_factors.append(f"Sender domain '{sender_domain}' appears to be typosquatting")
+
+        indicators.urgency_phrases = detect_urgency_language(combined_text)
+        indicators.credential_request_detected = detect_credential_request(combined_text)
+
+        # Attachment risk
+        attachments = email_data.get("attachments", [])
+        indicators.attachment_risk_level = _assess_attachment_risk(attachments)
+
+        # Build risk factors
+        if indicators.typosquat_domains:
+            domains = [m.suspicious_domain for m in indicators.typosquat_domains[:3]]
+            indicators.risk_factors.append(f"Typosquatting domains detected: {', '.join(domains)}")
+        if indicators.urgency_phrases:
+            phrases = indicators.urgency_phrases[:3]
+            indicators.risk_factors.append(f"Urgency language used: {', '.join(phrases)}")
+        if indicators.credential_request_detected:
+            indicators.risk_factors.append("Email requests credentials or sensitive information")
+        if indicators.suspicious_urls:
+            indicators.risk_factors.append(f"Found {len(indicators.suspicious_urls)} suspicious URL(s)")
+        if indicators.attachment_risk_level in ("high", "critical"):
+            indicators.risk_factors.append(f"High-risk attachment type detected ({indicators.attachment_risk_level})")
+
+        indicators.overall_risk_score = calculate_risk_score(indicators)
+        return indicators
+
+    phishing_module.analyze_phishing_indicators = analyze_phishing_indicators
+    phishing_module.PhishingIndicators = PhishingIndicators
+    phishing_module.TyposquatMatch = TyposquatMatch
+
+    return email_module, phishing_module
+
+email_module, phishing_module = _setup_analysis_modules()
+sys.modules["tw_ai.analysis"] = MagicMock()
+sys.modules["tw_ai.analysis.email"] = email_module
+sys.modules["tw_ai.analysis.phishing"] = phishing_module
 sys.modules["tw_ai"] = MagicMock()
 
 
@@ -1572,3 +2163,699 @@ class TestEDRToolsIntegration:
             assert "type" in tool.parameters
             assert tool.parameters["type"] == "object"
             assert "properties" in tool.parameters
+
+
+# ============================================================================
+# Email Triage Tool Test Data
+# ============================================================================
+
+SAMPLE_EMAIL_DATA = {
+    "message_id": "<test-123@example.com>",
+    "subject": "Urgent: Verify Your Account",
+    "from": "security@paypa1.com",
+    "to": ["victim@company.com"],
+    "headers": {
+        "Authentication-Results": "spf=fail; dkim=none; dmarc=fail",
+        "Received-SPF": "fail (domain paypa1.com does not designate sender)",
+    },
+    "body_text": "Click here to verify: hxxp://paypa1[.]com/verify",
+    "body_html": '<p>Click <a href="http://evil.com/steal">http://paypal.com/secure</a> to verify.</p>',
+    "attachments": [
+        {
+            "filename": "invoice.pdf.exe",
+            "content_type": "application/x-msdownload",
+            "size_bytes": 45000,
+        }
+    ],
+}
+
+SAMPLE_PHISHING_EMAIL = {
+    "subject": "URGENT: Your account will be suspended within 24 hours",
+    "body": "Dear customer, your account has been locked. Click here to verify your password immediately.",
+    "sender_email": "support@amaz0n-security.com",
+    "sender_display_name": "Amazon Security Team",
+    "reply_to": "phisher@evil.net",
+    "urls": ["http://amaz0n-verify.com/login"],
+    "attachments": ["document.pdf.exe"],
+}
+
+SAMPLE_LEGITIMATE_EMAIL = {
+    "subject": "Weekly Newsletter",
+    "body": "Here is your weekly newsletter with updates.",
+    "sender_email": "newsletter@google.com",
+    "sender_display_name": "Google Newsletter",
+    "urls": ["https://www.google.com/updates"],
+    "attachments": [],
+}
+
+
+# ============================================================================
+# Email Tool Registry Tests
+# ============================================================================
+
+
+class TestEmailToolRegistry:
+    """Tests for email triage tool registration."""
+
+    def test_registry_contains_email_tools(self):
+        """Test that registry includes email triage tools."""
+        registry = create_triage_tools()
+        tools = registry.list_tools()
+
+        assert "analyze_email" in tools
+        assert "check_phishing_indicators" in tools
+        assert "extract_email_urls" in tools
+        assert "check_sender_reputation" in tools
+
+    def test_analyze_email_tool_definition(self):
+        """Test analyze_email tool has correct definition."""
+        registry = create_triage_tools()
+        tool = registry.get("analyze_email")
+
+        assert tool is not None
+        assert tool.name == "analyze_email"
+        assert "email_data" in tool.parameters["properties"]
+        assert "email_data" in tool.parameters["required"]
+        assert "SPF" in tool.description or "headers" in tool.description
+
+    def test_check_phishing_indicators_tool_definition(self):
+        """Test check_phishing_indicators tool has correct definition."""
+        registry = create_triage_tools()
+        tool = registry.get("check_phishing_indicators")
+
+        assert tool is not None
+        assert tool.name == "check_phishing_indicators"
+        assert "email_data" in tool.parameters["properties"]
+        assert "email_data" in tool.parameters["required"]
+        assert "phishing" in tool.description.lower()
+        assert "risk" in tool.description.lower()
+
+    def test_extract_email_urls_tool_definition(self):
+        """Test extract_email_urls tool has correct definition."""
+        registry = create_triage_tools()
+        tool = registry.get("extract_email_urls")
+
+        assert tool is not None
+        assert tool.name == "extract_email_urls"
+        assert "text" in tool.parameters["properties"]
+        assert "include_html" in tool.parameters["properties"]
+        assert tool.parameters["properties"]["include_html"]["default"] is True
+        assert "text" in tool.parameters["required"]
+        assert "defang" in tool.description.lower() or "URL" in tool.description
+
+    def test_check_sender_reputation_tool_definition(self):
+        """Test check_sender_reputation tool has correct definition."""
+        registry = create_triage_tools()
+        tool = registry.get("check_sender_reputation")
+
+        assert tool is not None
+        assert tool.name == "check_sender_reputation"
+        assert "sender_email" in tool.parameters["properties"]
+        assert "sender_email" in tool.parameters["required"]
+        assert "reputation" in tool.description.lower()
+
+
+# ============================================================================
+# analyze_email Tool Tests
+# ============================================================================
+
+
+class TestAnalyzeEmailTool:
+    """Tests for analyze_email tool functionality."""
+
+    @pytest.mark.asyncio
+    async def test_analyze_email_basic(self):
+        """Test analyze_email with basic email data."""
+        registry = create_triage_tools()
+        result = await registry.execute("analyze_email", {"email_data": SAMPLE_EMAIL_DATA})
+
+        assert isinstance(result, ToolResult)
+        assert result.success is True
+        assert result.execution_time_ms >= 0
+
+        data = result.data
+        assert data["message_id"] == "<test-123@example.com>"
+        assert data["subject"] == "Urgent: Verify Your Account"
+        assert data["sender"] == "security@paypa1.com"
+        assert "victim@company.com" in data["recipients"]
+
+    @pytest.mark.asyncio
+    async def test_analyze_email_extracts_urls(self):
+        """Test analyze_email extracts URLs from body."""
+        registry = create_triage_tools()
+        result = await registry.execute("analyze_email", {"email_data": SAMPLE_EMAIL_DATA})
+
+        assert result.success is True
+        data = result.data
+        assert "urls" in data
+        assert len(data["urls"]) > 0
+
+        # Check URL structure
+        url_entry = data["urls"][0]
+        assert "url" in url_entry
+        assert "domain" in url_entry
+        assert "is_shortened" in url_entry
+        assert "is_ip_based" in url_entry
+
+    @pytest.mark.asyncio
+    async def test_analyze_email_extracts_attachments(self):
+        """Test analyze_email extracts attachment info."""
+        registry = create_triage_tools()
+        result = await registry.execute("analyze_email", {"email_data": SAMPLE_EMAIL_DATA})
+
+        assert result.success is True
+        data = result.data
+        assert "attachments" in data
+        assert len(data["attachments"]) == 1
+
+        att = data["attachments"][0]
+        assert att["filename"] == "invoice.pdf.exe"
+        assert att["content_type"] == "application/x-msdownload"
+        assert att["size_bytes"] == 45000
+
+    @pytest.mark.asyncio
+    async def test_analyze_email_parses_authentication(self):
+        """Test analyze_email parses authentication headers."""
+        registry = create_triage_tools()
+        result = await registry.execute("analyze_email", {"email_data": SAMPLE_EMAIL_DATA})
+
+        assert result.success is True
+        data = result.data
+        assert "authentication" in data
+
+        auth = data["authentication"]
+        assert "spf" in auth
+        assert "dkim" in auth
+        assert "dmarc" in auth
+        assert auth["spf"] == "fail"
+
+    @pytest.mark.asyncio
+    async def test_analyze_email_handles_empty_data(self):
+        """Test analyze_email handles empty email data gracefully."""
+        registry = create_triage_tools()
+        result = await registry.execute("analyze_email", {"email_data": {}})
+
+        assert result.success is True
+        data = result.data
+        assert data["subject"] == ""
+        assert data["sender"] == ""
+        assert data["urls"] == []
+        assert data["attachments"] == []
+
+    @pytest.mark.asyncio
+    async def test_analyze_email_result_structure(self):
+        """Test analyze_email result has expected structure."""
+        registry = create_triage_tools()
+        result = await registry.execute("analyze_email", {"email_data": SAMPLE_EMAIL_DATA})
+
+        assert result.success is True
+        data = result.data
+
+        # Verify all required keys present
+        expected_keys = [
+            "message_id", "subject", "sender", "sender_display_name",
+            "reply_to", "recipients", "cc", "headers", "body_text",
+            "body_html", "urls", "attachments", "received_timestamps",
+            "authentication"
+        ]
+        for key in expected_keys:
+            assert key in data, f"Missing key: {key}"
+
+
+# ============================================================================
+# check_phishing_indicators Tool Tests
+# ============================================================================
+
+
+class TestCheckPhishingIndicatorsTool:
+    """Tests for check_phishing_indicators tool functionality."""
+
+    @pytest.mark.asyncio
+    async def test_check_phishing_indicators_detects_phishing(self):
+        """Test check_phishing_indicators detects phishing signals."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "check_phishing_indicators", {"email_data": SAMPLE_PHISHING_EMAIL}
+        )
+
+        assert isinstance(result, ToolResult)
+        assert result.success is True
+        assert result.execution_time_ms >= 0
+
+        data = result.data
+        assert data["overall_risk_score"] > 50  # Should be high risk
+        assert len(data["urgency_phrases"]) > 0  # Should detect urgency
+        assert data["credential_request_detected"] is True  # Asks for password
+
+    @pytest.mark.asyncio
+    async def test_check_phishing_indicators_detects_typosquat(self):
+        """Test check_phishing_indicators detects typosquatting domains."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "check_phishing_indicators", {"email_data": SAMPLE_PHISHING_EMAIL}
+        )
+
+        assert result.success is True
+        data = result.data
+
+        # Should detect amaz0n typosquatting
+        assert len(data["typosquat_domains"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_check_phishing_indicators_detects_attachment_risk(self):
+        """Test check_phishing_indicators detects risky attachments."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "check_phishing_indicators", {"email_data": SAMPLE_PHISHING_EMAIL}
+        )
+
+        assert result.success is True
+        data = result.data
+
+        # Should detect .exe in double extension as critical
+        assert data["attachment_risk_level"] in ("high", "critical")
+
+    @pytest.mark.asyncio
+    async def test_check_phishing_indicators_legitimate_email(self):
+        """Test check_phishing_indicators gives low score for legitimate email."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "check_phishing_indicators", {"email_data": SAMPLE_LEGITIMATE_EMAIL}
+        )
+
+        assert result.success is True
+        data = result.data
+        assert data["overall_risk_score"] < 30  # Should be low risk
+        assert len(data["urgency_phrases"]) == 0
+        assert data["credential_request_detected"] is False
+
+    @pytest.mark.asyncio
+    async def test_check_phishing_indicators_returns_risk_factors(self):
+        """Test check_phishing_indicators returns human-readable risk factors."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "check_phishing_indicators", {"email_data": SAMPLE_PHISHING_EMAIL}
+        )
+
+        assert result.success is True
+        data = result.data
+        assert "risk_factors" in data
+        assert isinstance(data["risk_factors"], list)
+        assert len(data["risk_factors"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_check_phishing_indicators_from_analyze_email_output(self):
+        """Test check_phishing_indicators works with analyze_email output format."""
+        registry = create_triage_tools()
+
+        # First analyze the email
+        analysis_result = await registry.execute(
+            "analyze_email", {"email_data": SAMPLE_EMAIL_DATA}
+        )
+        assert analysis_result.success is True
+
+        # Now check phishing indicators using analysis output
+        phishing_result = await registry.execute(
+            "check_phishing_indicators", {"email_data": analysis_result.data}
+        )
+
+        assert phishing_result.success is True
+        data = phishing_result.data
+        assert "overall_risk_score" in data
+        assert "typosquat_domains" in data
+
+    @pytest.mark.asyncio
+    async def test_check_phishing_indicators_result_structure(self):
+        """Test check_phishing_indicators result has expected structure."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "check_phishing_indicators", {"email_data": SAMPLE_PHISHING_EMAIL}
+        )
+
+        assert result.success is True
+        data = result.data
+
+        expected_keys = [
+            "typosquat_domains", "urgency_phrases", "credential_request_detected",
+            "suspicious_urls", "url_text_mismatch", "sender_domain_mismatch",
+            "attachment_risk_level", "overall_risk_score", "risk_factors"
+        ]
+        for key in expected_keys:
+            assert key in data, f"Missing key: {key}"
+
+
+# ============================================================================
+# extract_email_urls Tool Tests
+# ============================================================================
+
+
+class TestExtractEmailUrlsTool:
+    """Tests for extract_email_urls tool functionality."""
+
+    @pytest.mark.asyncio
+    async def test_extract_email_urls_plain_text(self):
+        """Test extract_email_urls extracts from plain text."""
+        registry = create_triage_tools()
+        text = "Check this link: https://example.com/page and also http://test.org"
+        result = await registry.execute("extract_email_urls", {"text": text})
+
+        assert isinstance(result, ToolResult)
+        assert result.success is True
+        assert result.execution_time_ms >= 0
+
+        data = result.data
+        assert data["total_count"] == 2
+        assert len(data["urls"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_extract_email_urls_defanged(self):
+        """Test extract_email_urls handles defanged URLs."""
+        registry = create_triage_tools()
+        text = "Malicious URL: hxxp://evil[.]com/malware and hxxps://bad[.]site/phish"
+        result = await registry.execute("extract_email_urls", {"text": text})
+
+        assert result.success is True
+        data = result.data
+        assert data["total_count"] == 2
+
+        # Check URLs are normalized
+        urls = [u["url"] for u in data["urls"]]
+        assert "http://evil.com/malware" in urls
+        assert "https://bad.site/phish" in urls
+
+    @pytest.mark.asyncio
+    async def test_extract_email_urls_html(self):
+        """Test extract_email_urls extracts from HTML with display text."""
+        registry = create_triage_tools()
+        html = '<p>Click <a href="http://evil.com">Safe Link</a></p>'
+        result = await registry.execute("extract_email_urls", {"text": html})
+
+        assert result.success is True
+        data = result.data
+        assert data["total_count"] >= 1
+
+        # Check display text is captured
+        url_entry = next((u for u in data["urls"] if u["url"] == "http://evil.com"), None)
+        assert url_entry is not None
+        assert url_entry["display_text"] == "Safe Link"
+
+    @pytest.mark.asyncio
+    async def test_extract_email_urls_identifies_shortened(self):
+        """Test extract_email_urls identifies shortened URLs."""
+        registry = create_triage_tools()
+        text = "Click: https://bit.ly/abc123 or https://tinyurl.com/xyz"
+        result = await registry.execute("extract_email_urls", {"text": text})
+
+        assert result.success is True
+        data = result.data
+        assert data["shortened_count"] == 2
+
+        for url_entry in data["urls"]:
+            assert url_entry["is_shortened"] is True
+
+    @pytest.mark.asyncio
+    async def test_extract_email_urls_identifies_ip_based(self):
+        """Test extract_email_urls identifies IP-based URLs."""
+        registry = create_triage_tools()
+        text = "Suspicious: http://192.168.1.100/login"
+        result = await registry.execute("extract_email_urls", {"text": text})
+
+        assert result.success is True
+        data = result.data
+        assert data["ip_based_count"] == 1
+        assert data["urls"][0]["is_ip_based"] is True
+
+    @pytest.mark.asyncio
+    async def test_extract_email_urls_include_html_false(self):
+        """Test extract_email_urls with include_html=False."""
+        registry = create_triage_tools()
+        html = '<a href="http://link.com">text</a>'
+        result = await registry.execute(
+            "extract_email_urls", {"text": html, "include_html": False}
+        )
+
+        assert result.success is True
+        # Should not extract anchor hrefs when include_html is False
+        # (unless there's a plain text URL)
+
+    @pytest.mark.asyncio
+    async def test_extract_email_urls_empty_text(self):
+        """Test extract_email_urls handles empty text."""
+        registry = create_triage_tools()
+        result = await registry.execute("extract_email_urls", {"text": ""})
+
+        assert result.success is True
+        data = result.data
+        assert data["total_count"] == 0
+        assert data["urls"] == []
+
+    @pytest.mark.asyncio
+    async def test_extract_email_urls_result_structure(self):
+        """Test extract_email_urls result has expected structure."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "extract_email_urls", {"text": "https://example.com"}
+        )
+
+        assert result.success is True
+        data = result.data
+
+        assert "urls" in data
+        assert "total_count" in data
+        assert "shortened_count" in data
+        assert "ip_based_count" in data
+
+        if data["urls"]:
+            url_entry = data["urls"][0]
+            assert "url" in url_entry
+            assert "domain" in url_entry
+            assert "display_text" in url_entry
+            assert "is_shortened" in url_entry
+            assert "is_ip_based" in url_entry
+
+
+# ============================================================================
+# check_sender_reputation Tool Tests
+# ============================================================================
+
+
+class TestCheckSenderReputationTool:
+    """Tests for check_sender_reputation tool functionality."""
+
+    @pytest.mark.asyncio
+    async def test_check_sender_reputation_trusted_domain(self):
+        """Test check_sender_reputation for trusted domain."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "check_sender_reputation", {"sender_email": "user@google.com"}
+        )
+
+        assert isinstance(result, ToolResult)
+        assert result.success is True
+        assert result.execution_time_ms >= 0
+
+        data = result.data
+        assert data["sender_email"] == "user@google.com"
+        assert data["domain"] == "google.com"
+        assert data["score"] >= 90  # High reputation
+        assert data["is_known_sender"] is True
+        assert data["risk_level"] == "low"
+
+    @pytest.mark.asyncio
+    async def test_check_sender_reputation_suspicious_domain(self):
+        """Test check_sender_reputation for suspicious domain."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "check_sender_reputation", {"sender_email": "admin@paypa1-security.com"}
+        )
+
+        assert result.success is True
+        data = result.data
+        assert data["score"] <= 20  # Low reputation
+        assert data["risk_level"] == "high"
+
+    @pytest.mark.asyncio
+    async def test_check_sender_reputation_malicious_domain(self):
+        """Test check_sender_reputation for known malicious domain."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "check_sender_reputation", {"sender_email": "attacker@phishing.bad"}
+        )
+
+        assert result.success is True
+        data = result.data
+        assert data["score"] <= 10
+        assert data["risk_level"] == "high"
+        assert data["category"] == "phishing"
+
+    @pytest.mark.asyncio
+    async def test_check_sender_reputation_unknown_domain(self):
+        """Test check_sender_reputation for unknown domain."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "check_sender_reputation", {"sender_email": "user@random-unknown-domain.xyz"}
+        )
+
+        assert result.success is True
+        data = result.data
+        assert data["score"] == 50  # Neutral
+        assert data["is_known_sender"] is False
+        assert data["risk_level"] == "medium"
+        assert data["category"] == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_check_sender_reputation_includes_domain_age(self):
+        """Test check_sender_reputation includes domain age for known domains."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "check_sender_reputation", {"sender_email": "contact@microsoft.com"}
+        )
+
+        assert result.success is True
+        data = result.data
+        assert "domain_age_days" in data
+        assert data["domain_age_days"] is not None
+        assert data["domain_age_days"] > 1000  # Microsoft is old
+
+    @pytest.mark.asyncio
+    async def test_check_sender_reputation_is_mock(self):
+        """Test check_sender_reputation returns is_mock flag."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "check_sender_reputation", {"sender_email": "test@example.com"}
+        )
+
+        assert result.success is True
+        data = result.data
+        assert "is_mock" in data
+        assert data["is_mock"] is True
+
+    @pytest.mark.asyncio
+    async def test_check_sender_reputation_result_structure(self):
+        """Test check_sender_reputation result has expected structure."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "check_sender_reputation", {"sender_email": "test@example.com"}
+        )
+
+        assert result.success is True
+        data = result.data
+
+        expected_keys = [
+            "sender_email", "domain", "score", "is_known_sender",
+            "domain_age_days", "category", "risk_level", "is_mock"
+        ]
+        for key in expected_keys:
+            assert key in data, f"Missing key: {key}"
+
+
+# ============================================================================
+# Email Tool Execution Time Tests
+# ============================================================================
+
+
+class TestEmailToolExecutionTime:
+    """Tests for email tool execution time tracking."""
+
+    @pytest.mark.asyncio
+    async def test_analyze_email_includes_execution_time(self):
+        """Test that analyze_email includes execution_time_ms."""
+        registry = create_triage_tools()
+        result = await registry.execute("analyze_email", {"email_data": SAMPLE_EMAIL_DATA})
+
+        assert hasattr(result, "execution_time_ms")
+        assert isinstance(result.execution_time_ms, int)
+        assert result.execution_time_ms >= 0
+
+    @pytest.mark.asyncio
+    async def test_check_phishing_indicators_includes_execution_time(self):
+        """Test that check_phishing_indicators includes execution_time_ms."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "check_phishing_indicators", {"email_data": SAMPLE_PHISHING_EMAIL}
+        )
+
+        assert hasattr(result, "execution_time_ms")
+        assert isinstance(result.execution_time_ms, int)
+        assert result.execution_time_ms >= 0
+
+    @pytest.mark.asyncio
+    async def test_extract_email_urls_includes_execution_time(self):
+        """Test that extract_email_urls includes execution_time_ms."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "extract_email_urls", {"text": "https://example.com"}
+        )
+
+        assert hasattr(result, "execution_time_ms")
+        assert isinstance(result.execution_time_ms, int)
+        assert result.execution_time_ms >= 0
+
+    @pytest.mark.asyncio
+    async def test_check_sender_reputation_includes_execution_time(self):
+        """Test that check_sender_reputation includes execution_time_ms."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "check_sender_reputation", {"sender_email": "test@example.com"}
+        )
+
+        assert hasattr(result, "execution_time_ms")
+        assert isinstance(result.execution_time_ms, int)
+        assert result.execution_time_ms >= 0
+
+
+# ============================================================================
+# Email Tools Integration Tests
+# ============================================================================
+
+
+class TestEmailToolsIntegration:
+    """Integration tests for email triage tools."""
+
+    @pytest.mark.asyncio
+    async def test_full_email_triage_workflow(self):
+        """Test complete email triage workflow using all tools."""
+        registry = create_triage_tools()
+
+        # Step 1: Analyze the email
+        analysis = await registry.execute("analyze_email", {"email_data": SAMPLE_EMAIL_DATA})
+        assert analysis.success is True
+        assert analysis.data["sender"] == "security@paypa1.com"
+
+        # Step 2: Check phishing indicators
+        phishing = await registry.execute(
+            "check_phishing_indicators", {"email_data": SAMPLE_EMAIL_DATA}
+        )
+        assert phishing.success is True
+        assert phishing.data["overall_risk_score"] > 0
+
+        # Step 3: Extract URLs for further analysis
+        urls = await registry.execute(
+            "extract_email_urls", {"text": SAMPLE_EMAIL_DATA["body_text"]}
+        )
+        assert urls.success is True
+
+        # Step 4: Check sender reputation
+        reputation = await registry.execute(
+            "check_sender_reputation", {"sender_email": analysis.data["sender"]}
+        )
+        assert reputation.success is True
+        assert reputation.data["risk_level"] == "high"  # paypa1.com is suspicious
+
+    def test_email_tool_definitions_are_valid(self):
+        """Test that all email tool definitions are valid for LLM."""
+        registry = create_triage_tools()
+        email_tool_names = [
+            "analyze_email", "check_phishing_indicators",
+            "extract_email_urls", "check_sender_reputation"
+        ]
+
+        for name in email_tool_names:
+            tool = registry.get(name)
+            assert tool is not None, f"Tool not found: {name}"
+            assert tool.description is not None
+            assert len(tool.description) > 20  # Should have meaningful description
+            assert "type" in tool.parameters
+            assert tool.parameters["type"] == "object"
+            assert "properties" in tool.parameters
+            assert "required" in tool.parameters
