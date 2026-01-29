@@ -330,6 +330,22 @@ def _mock_check_action(action_type: str, target: str, confidence: float) -> dict
             "approval_level": None,
         }
 
+    # Phishing response actions: email-level allowed with high confidence
+    if action_type in ("quarantine_email", "block_sender_email") and confidence >= 0.9:
+        return {
+            "decision": "allowed",
+            "reason": None,
+            "approval_level": None,
+        }
+
+    # Domain blocks require senior approval (higher risk of blocking legitimate traffic)
+    if action_type == "block_sender_domain":
+        return {
+            "decision": "requires_approval",
+            "reason": "Domain blocks require senior approval",
+            "approval_level": "senior",
+        }
+
     # Host isolation requires analyst approval
     if action_type == "isolate_host":
         return {
@@ -2225,6 +2241,451 @@ def create_triage_tools() -> ToolRegistry:
                 "required": ["sender_email"],
             },
             handler=check_sender_reputation,
+        )
+    )
+
+    # ========================================================================
+    # Phishing Response Action Tools
+    # ========================================================================
+
+    async def quarantine_email(message_id: str, reason: str) -> ToolResult:
+        """Quarantine a suspicious or malicious email.
+
+        Moves the email to quarantine and prevents delivery/access.
+        Requires policy approval before execution.
+
+        Args:
+            message_id: Unique identifier of the email message
+            reason: Reason for quarantining the email
+
+        Returns:
+            ToolResult with:
+                - success: Whether the action completed
+                - action_id: Unique identifier for this action
+                - message: Human-readable result message
+        """
+        start_time = time.perf_counter()
+
+        try:
+            # Check policy before taking action
+            if not is_action_allowed("quarantine_email", message_id, 0.9):
+                execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                logger.warning(
+                    "quarantine_email_denied_by_policy",
+                    message_id=message_id,
+                    reason=reason,
+                )
+                return ToolResult.ok(
+                    data={
+                        "success": False,
+                        "action_id": None,
+                        "message": "Action denied by policy. Requires approval.",
+                    },
+                    execution_time_ms=execution_time_ms,
+                )
+
+            # Generate action ID
+            import uuid
+            action_id = f"qe-{uuid.uuid4().hex[:12]}"
+
+            # Mock implementation - log the action
+            logger.info(
+                "quarantine_email_executed",
+                action_id=action_id,
+                message_id=message_id,
+                reason=reason,
+            )
+
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+
+            return ToolResult.ok(
+                data={
+                    "success": True,
+                    "action_id": action_id,
+                    "message": f"Email {message_id} quarantined successfully. Reason: {reason}",
+                },
+                execution_time_ms=execution_time_ms,
+            )
+        except Exception as e:
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error(
+                "quarantine_email_failed",
+                message_id=message_id,
+                reason=reason,
+                error=str(e),
+            )
+            return ToolResult.fail(
+                error=f"Failed to quarantine email: {str(e)}",
+                execution_time_ms=execution_time_ms,
+            )
+
+    registry.register(
+        Tool(
+            name="quarantine_email",
+            description=(
+                "Quarantine a suspicious or malicious email. "
+                "Moves the email to quarantine storage and prevents delivery or access. "
+                "Requires policy approval. Use this for confirmed phishing emails."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "message_id": {
+                        "type": "string",
+                        "description": "Unique identifier of the email message to quarantine",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Reason for quarantining the email (e.g., 'phishing', 'malware attachment')",
+                    },
+                },
+                "required": ["message_id", "reason"],
+            },
+            handler=quarantine_email,
+            requires_confirmation=True,
+        )
+    )
+
+    async def block_sender(
+        sender: str, block_type: str, reason: str
+    ) -> ToolResult:
+        """Block an email sender or domain.
+
+        Adds the sender or domain to the block list to prevent future emails.
+        Domain blocks require higher approval level than email blocks.
+
+        Args:
+            sender: Email address or domain to block
+            block_type: Type of block - "email" for single address, "domain" for entire domain
+            reason: Reason for blocking
+
+        Returns:
+            ToolResult with:
+                - success: Whether the action completed
+                - action_id: Unique identifier for this action
+                - blocked: The email/domain that was blocked
+        """
+        start_time = time.perf_counter()
+
+        try:
+            # Validate block_type
+            if block_type not in ("email", "domain"):
+                execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                return ToolResult.fail(
+                    error=f"Invalid block_type: {block_type}. Must be 'email' or 'domain'.",
+                    execution_time_ms=execution_time_ms,
+                )
+
+            # Domain blocks require higher approval (senior level)
+            action_type = "block_sender_domain" if block_type == "domain" else "block_sender_email"
+
+            if not is_action_allowed(action_type, sender, 0.9):
+                execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                approval_note = "Domain blocks require senior approval." if block_type == "domain" else ""
+                logger.warning(
+                    "block_sender_denied_by_policy",
+                    sender=sender,
+                    block_type=block_type,
+                    reason=reason,
+                )
+                return ToolResult.ok(
+                    data={
+                        "success": False,
+                        "action_id": None,
+                        "blocked": None,
+                        "message": f"Action denied by policy. Requires approval. {approval_note}",
+                    },
+                    execution_time_ms=execution_time_ms,
+                )
+
+            # Generate action ID
+            import uuid
+            action_id = f"bs-{uuid.uuid4().hex[:12]}"
+
+            # Mock implementation - log the action
+            logger.info(
+                "block_sender_executed",
+                action_id=action_id,
+                sender=sender,
+                block_type=block_type,
+                reason=reason,
+            )
+
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+
+            return ToolResult.ok(
+                data={
+                    "success": True,
+                    "action_id": action_id,
+                    "blocked": sender,
+                    "block_type": block_type,
+                    "message": f"Successfully blocked {block_type}: {sender}. Reason: {reason}",
+                },
+                execution_time_ms=execution_time_ms,
+            )
+        except Exception as e:
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error(
+                "block_sender_failed",
+                sender=sender,
+                block_type=block_type,
+                reason=reason,
+                error=str(e),
+            )
+            return ToolResult.fail(
+                error=f"Failed to block sender: {str(e)}",
+                execution_time_ms=execution_time_ms,
+            )
+
+    registry.register(
+        Tool(
+            name="block_sender",
+            description=(
+                "Block an email sender or entire domain. "
+                "Use block_type='email' to block a single address, or "
+                "block_type='domain' to block all emails from a domain. "
+                "Domain blocks require higher approval level."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "sender": {
+                        "type": "string",
+                        "description": "Email address or domain to block",
+                    },
+                    "block_type": {
+                        "type": "string",
+                        "enum": ["email", "domain"],
+                        "description": "Type of block: 'email' for single address, 'domain' for entire domain",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Reason for blocking the sender",
+                    },
+                },
+                "required": ["sender", "block_type", "reason"],
+            },
+            handler=block_sender,
+            requires_confirmation=True,
+        )
+    )
+
+    async def notify_user(
+        recipient: str,
+        notification_type: str,
+        subject: str,
+        body: str,
+    ) -> ToolResult:
+        """Send a security notification to a user.
+
+        Sends notifications about phishing attempts, security alerts,
+        or actions taken on their behalf.
+
+        Args:
+            recipient: Email address of the notification recipient
+            notification_type: Type of notification (phishing_warning, security_alert, action_taken)
+            subject: Subject line of the notification
+            body: Body content of the notification
+
+        Returns:
+            ToolResult with:
+                - success: Whether the notification was sent
+                - notification_id: Unique identifier for tracking
+        """
+        start_time = time.perf_counter()
+
+        try:
+            # Validate notification_type
+            valid_types = ("phishing_warning", "security_alert", "action_taken")
+            if notification_type not in valid_types:
+                execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                return ToolResult.fail(
+                    error=f"Invalid notification_type: {notification_type}. Must be one of: {valid_types}",
+                    execution_time_ms=execution_time_ms,
+                )
+
+            # Generate notification ID
+            import uuid
+            notification_id = f"notif-{uuid.uuid4().hex[:12]}"
+
+            # Mock implementation - log the notification
+            logger.info(
+                "notify_user_executed",
+                notification_id=notification_id,
+                recipient=recipient,
+                notification_type=notification_type,
+                subject=subject,
+            )
+
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+
+            return ToolResult.ok(
+                data={
+                    "success": True,
+                    "notification_id": notification_id,
+                    "recipient": recipient,
+                    "notification_type": notification_type,
+                    "message": f"Notification sent to {recipient}",
+                },
+                execution_time_ms=execution_time_ms,
+            )
+        except Exception as e:
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error(
+                "notify_user_failed",
+                recipient=recipient,
+                notification_type=notification_type,
+                error=str(e),
+            )
+            return ToolResult.fail(
+                error=f"Failed to send notification: {str(e)}",
+                execution_time_ms=execution_time_ms,
+            )
+
+    registry.register(
+        Tool(
+            name="notify_user",
+            description=(
+                "Send a security notification to a user. "
+                "Use for phishing warnings, security alerts, or notifying users "
+                "of actions taken on suspicious emails they received."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "recipient": {
+                        "type": "string",
+                        "description": "Email address of the notification recipient",
+                    },
+                    "notification_type": {
+                        "type": "string",
+                        "enum": ["phishing_warning", "security_alert", "action_taken"],
+                        "description": "Type of notification to send",
+                    },
+                    "subject": {
+                        "type": "string",
+                        "description": "Subject line of the notification",
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Body content of the notification message",
+                    },
+                },
+                "required": ["recipient", "notification_type", "subject", "body"],
+            },
+            handler=notify_user,
+        )
+    )
+
+    async def create_security_ticket(
+        title: str,
+        description: str,
+        severity: str,
+        indicators: list,
+    ) -> ToolResult:
+        """Create a security incident ticket.
+
+        Creates a ticket in the ticketing system for tracking and
+        investigation of security incidents.
+
+        Args:
+            title: Title/summary of the security ticket
+            description: Detailed description of the incident
+            severity: Severity level (critical, high, medium, low)
+            indicators: List of IOCs or indicators related to the incident
+
+        Returns:
+            ToolResult with:
+                - success: Whether the ticket was created
+                - ticket_id: Unique ticket identifier
+                - ticket_url: URL to access the ticket
+        """
+        start_time = time.perf_counter()
+
+        try:
+            # Validate severity
+            valid_severities = ("critical", "high", "medium", "low")
+            if severity.lower() not in valid_severities:
+                execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                return ToolResult.fail(
+                    error=f"Invalid severity: {severity}. Must be one of: {valid_severities}",
+                    execution_time_ms=execution_time_ms,
+                )
+
+            # Generate ticket ID
+            import uuid
+            ticket_id = f"SEC-{uuid.uuid4().hex[:8].upper()}"
+            ticket_url = f"https://tickets.example.com/security/{ticket_id}"
+
+            # Mock implementation - log the ticket creation
+            logger.info(
+                "create_security_ticket_executed",
+                ticket_id=ticket_id,
+                title=title,
+                severity=severity,
+                indicators_count=len(indicators) if indicators else 0,
+            )
+
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+
+            return ToolResult.ok(
+                data={
+                    "success": True,
+                    "ticket_id": ticket_id,
+                    "ticket_url": ticket_url,
+                    "title": title,
+                    "severity": severity.lower(),
+                    "indicators_count": len(indicators) if indicators else 0,
+                    "message": f"Security ticket {ticket_id} created successfully",
+                },
+                execution_time_ms=execution_time_ms,
+            )
+        except Exception as e:
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error(
+                "create_security_ticket_failed",
+                title=title,
+                severity=severity,
+                error=str(e),
+            )
+            return ToolResult.fail(
+                error=f"Failed to create security ticket: {str(e)}",
+                execution_time_ms=execution_time_ms,
+            )
+
+    registry.register(
+        Tool(
+            name="create_security_ticket",
+            description=(
+                "Create a security incident ticket for tracking and investigation. "
+                "Include relevant indicators of compromise (IOCs) such as malicious "
+                "URLs, sender addresses, file hashes, and IP addresses."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Title/summary of the security ticket",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Detailed description of the incident",
+                    },
+                    "severity": {
+                        "type": "string",
+                        "enum": ["critical", "high", "medium", "low"],
+                        "description": "Severity level of the incident",
+                    },
+                    "indicators": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of indicators of compromise (IOCs)",
+                    },
+                },
+                "required": ["title", "description", "severity", "indicators"],
+            },
+            handler=create_security_ticket,
         )
     )
 

@@ -2859,3 +2859,551 @@ class TestEmailToolsIntegration:
             assert tool.parameters["type"] == "object"
             assert "properties" in tool.parameters
             assert "required" in tool.parameters
+
+
+# ============================================================================
+# Phishing Response Action Tool Registry Tests
+# ============================================================================
+
+
+class TestPhishingResponseActionToolRegistry:
+    """Tests for phishing response action tool registration."""
+
+    def test_registry_contains_phishing_response_tools(self):
+        """Test that registry includes phishing response action tools."""
+        registry = create_triage_tools()
+        tools = registry.list_tools()
+
+        assert "quarantine_email" in tools
+        assert "block_sender" in tools
+        assert "notify_user" in tools
+        assert "create_security_ticket" in tools
+
+    def test_quarantine_email_tool_definition(self):
+        """Test quarantine_email tool has correct definition."""
+        registry = create_triage_tools()
+        tool = registry.get("quarantine_email")
+
+        assert tool is not None
+        assert tool.name == "quarantine_email"
+        assert "message_id" in tool.parameters["properties"]
+        assert "reason" in tool.parameters["properties"]
+        assert "message_id" in tool.parameters["required"]
+        assert "reason" in tool.parameters["required"]
+        assert tool.requires_confirmation is True
+
+    def test_block_sender_tool_definition(self):
+        """Test block_sender tool has correct definition."""
+        registry = create_triage_tools()
+        tool = registry.get("block_sender")
+
+        assert tool is not None
+        assert tool.name == "block_sender"
+        assert "sender" in tool.parameters["properties"]
+        assert "block_type" in tool.parameters["properties"]
+        assert "reason" in tool.parameters["properties"]
+        assert tool.parameters["properties"]["block_type"]["enum"] == ["email", "domain"]
+        assert set(tool.parameters["required"]) == {"sender", "block_type", "reason"}
+        assert tool.requires_confirmation is True
+
+    def test_notify_user_tool_definition(self):
+        """Test notify_user tool has correct definition."""
+        registry = create_triage_tools()
+        tool = registry.get("notify_user")
+
+        assert tool is not None
+        assert tool.name == "notify_user"
+        assert "recipient" in tool.parameters["properties"]
+        assert "notification_type" in tool.parameters["properties"]
+        assert "subject" in tool.parameters["properties"]
+        assert "body" in tool.parameters["properties"]
+        assert tool.parameters["properties"]["notification_type"]["enum"] == [
+            "phishing_warning", "security_alert", "action_taken"
+        ]
+        assert set(tool.parameters["required"]) == {"recipient", "notification_type", "subject", "body"}
+
+    def test_create_security_ticket_tool_definition(self):
+        """Test create_security_ticket tool has correct definition."""
+        registry = create_triage_tools()
+        tool = registry.get("create_security_ticket")
+
+        assert tool is not None
+        assert tool.name == "create_security_ticket"
+        assert "title" in tool.parameters["properties"]
+        assert "description" in tool.parameters["properties"]
+        assert "severity" in tool.parameters["properties"]
+        assert "indicators" in tool.parameters["properties"]
+        assert tool.parameters["properties"]["severity"]["enum"] == ["critical", "high", "medium", "low"]
+        assert tool.parameters["properties"]["indicators"]["type"] == "array"
+        assert set(tool.parameters["required"]) == {"title", "description", "severity", "indicators"}
+
+
+# ============================================================================
+# quarantine_email Tool Tests
+# ============================================================================
+
+
+class TestQuarantineEmailTool:
+    """Tests for quarantine_email tool functionality."""
+
+    @pytest.mark.asyncio
+    async def test_quarantine_email_success(self):
+        """Test quarantine_email succeeds when policy allows."""
+        with patch.object(_tools, "_POLICY_BRIDGE_AVAILABLE", False):
+            with patch.object(_tools, "_policy_bridge", None):
+                registry = create_triage_tools()
+                result = await registry.execute(
+                    "quarantine_email",
+                    {"message_id": "MSG-12345", "reason": "phishing detected"}
+                )
+
+                assert isinstance(result, ToolResult)
+                assert result.success is True
+                assert result.data["success"] is True
+                assert result.data["action_id"] is not None
+                assert result.data["action_id"].startswith("qe-")
+                assert "MSG-12345" in result.data["message"]
+                assert result.execution_time_ms >= 0
+
+    @pytest.mark.asyncio
+    async def test_quarantine_email_includes_reason_in_message(self):
+        """Test quarantine_email includes reason in result message."""
+        with patch.object(_tools, "_POLICY_BRIDGE_AVAILABLE", False):
+            with patch.object(_tools, "_policy_bridge", None):
+                registry = create_triage_tools()
+                result = await registry.execute(
+                    "quarantine_email",
+                    {"message_id": "MSG-99999", "reason": "malware attachment"}
+                )
+
+                assert result.data["success"] is True
+                assert "malware attachment" in result.data["message"]
+
+    @pytest.mark.asyncio
+    async def test_quarantine_email_policy_check(self):
+        """Test quarantine_email checks policy before execution."""
+        # When policy denies, action should not be allowed
+        def mock_check_denied(action_type, target, confidence):
+            return {"decision": "requires_approval", "reason": "Test denial", "approval_level": "analyst"}
+
+        with patch.object(_tools, "_POLICY_BRIDGE_AVAILABLE", False):
+            with patch.object(_tools, "_mock_check_action", mock_check_denied):
+                registry = create_triage_tools()
+                result = await registry.execute(
+                    "quarantine_email",
+                    {"message_id": "MSG-DENIED", "reason": "test"}
+                )
+
+                assert result.success is True  # ToolResult is success, but action wasn't executed
+                assert result.data["success"] is False
+                assert "denied" in result.data["message"].lower() or "approval" in result.data["message"].lower()
+
+
+# ============================================================================
+# block_sender Tool Tests
+# ============================================================================
+
+
+class TestBlockSenderTool:
+    """Tests for block_sender tool functionality."""
+
+    @pytest.mark.asyncio
+    async def test_block_sender_email_success(self):
+        """Test block_sender with email type succeeds."""
+        with patch.object(_tools, "_POLICY_BRIDGE_AVAILABLE", False):
+            with patch.object(_tools, "_policy_bridge", None):
+                registry = create_triage_tools()
+                result = await registry.execute(
+                    "block_sender",
+                    {
+                        "sender": "attacker@evil.com",
+                        "block_type": "email",
+                        "reason": "phishing sender"
+                    }
+                )
+
+                assert isinstance(result, ToolResult)
+                assert result.success is True
+                assert result.data["success"] is True
+                assert result.data["action_id"] is not None
+                assert result.data["action_id"].startswith("bs-")
+                assert result.data["blocked"] == "attacker@evil.com"
+                assert result.data["block_type"] == "email"
+
+    @pytest.mark.asyncio
+    async def test_block_sender_domain_requires_approval(self):
+        """Test block_sender with domain type requires higher approval."""
+        with patch.object(_tools, "_POLICY_BRIDGE_AVAILABLE", False):
+            with patch.object(_tools, "_policy_bridge", None):
+                registry = create_triage_tools()
+                result = await registry.execute(
+                    "block_sender",
+                    {
+                        "sender": "evil.com",
+                        "block_type": "domain",
+                        "reason": "malicious domain"
+                    }
+                )
+
+                # Domain blocks require senior approval by default
+                assert result.success is True
+                assert result.data["success"] is False
+                assert "approval" in result.data["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_block_sender_invalid_block_type(self):
+        """Test block_sender fails with invalid block_type."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "block_sender",
+            {
+                "sender": "test@test.com",
+                "block_type": "invalid_type",
+                "reason": "test"
+            }
+        )
+
+        assert result.success is False
+        assert "invalid" in result.error.lower() or "block_type" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_block_sender_includes_reason(self):
+        """Test block_sender includes reason in result message."""
+        with patch.object(_tools, "_POLICY_BRIDGE_AVAILABLE", False):
+            with patch.object(_tools, "_policy_bridge", None):
+                registry = create_triage_tools()
+                result = await registry.execute(
+                    "block_sender",
+                    {
+                        "sender": "spam@spam.net",
+                        "block_type": "email",
+                        "reason": "repeated spam"
+                    }
+                )
+
+                assert result.data["success"] is True
+                assert "repeated spam" in result.data["message"]
+
+
+# ============================================================================
+# notify_user Tool Tests
+# ============================================================================
+
+
+class TestNotifyUserTool:
+    """Tests for notify_user tool functionality."""
+
+    @pytest.mark.asyncio
+    async def test_notify_user_phishing_warning(self):
+        """Test notify_user with phishing_warning type."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "notify_user",
+            {
+                "recipient": "user@company.com",
+                "notification_type": "phishing_warning",
+                "subject": "Phishing Email Detected",
+                "body": "A phishing email was detected and removed from your inbox."
+            }
+        )
+
+        assert isinstance(result, ToolResult)
+        assert result.success is True
+        assert result.data["success"] is True
+        assert result.data["notification_id"] is not None
+        assert result.data["notification_id"].startswith("notif-")
+        assert result.data["recipient"] == "user@company.com"
+        assert result.data["notification_type"] == "phishing_warning"
+
+    @pytest.mark.asyncio
+    async def test_notify_user_security_alert(self):
+        """Test notify_user with security_alert type."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "notify_user",
+            {
+                "recipient": "admin@company.com",
+                "notification_type": "security_alert",
+                "subject": "Security Alert",
+                "body": "Suspicious activity detected on your account."
+            }
+        )
+
+        assert result.success is True
+        assert result.data["notification_type"] == "security_alert"
+
+    @pytest.mark.asyncio
+    async def test_notify_user_action_taken(self):
+        """Test notify_user with action_taken type."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "notify_user",
+            {
+                "recipient": "user@company.com",
+                "notification_type": "action_taken",
+                "subject": "Security Action Completed",
+                "body": "The malicious email has been quarantined."
+            }
+        )
+
+        assert result.success is True
+        assert result.data["notification_type"] == "action_taken"
+
+    @pytest.mark.asyncio
+    async def test_notify_user_invalid_notification_type(self):
+        """Test notify_user fails with invalid notification_type."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "notify_user",
+            {
+                "recipient": "user@company.com",
+                "notification_type": "invalid_type",
+                "subject": "Test",
+                "body": "Test body"
+            }
+        )
+
+        assert result.success is False
+        assert "invalid" in result.error.lower() or "notification_type" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_notify_user_includes_execution_time(self):
+        """Test notify_user includes execution time."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "notify_user",
+            {
+                "recipient": "test@test.com",
+                "notification_type": "phishing_warning",
+                "subject": "Test",
+                "body": "Test body"
+            }
+        )
+
+        assert result.execution_time_ms >= 0
+
+
+# ============================================================================
+# create_security_ticket Tool Tests
+# ============================================================================
+
+
+class TestCreateSecurityTicketTool:
+    """Tests for create_security_ticket tool functionality."""
+
+    @pytest.mark.asyncio
+    async def test_create_security_ticket_success(self):
+        """Test create_security_ticket creates ticket successfully."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "create_security_ticket",
+            {
+                "title": "Phishing Campaign Detected",
+                "description": "Multiple users received phishing emails from attacker@evil.com",
+                "severity": "high",
+                "indicators": ["attacker@evil.com", "http://evil.com/phish", "192.168.1.100"]
+            }
+        )
+
+        assert isinstance(result, ToolResult)
+        assert result.success is True
+        assert result.data["success"] is True
+        assert result.data["ticket_id"] is not None
+        assert result.data["ticket_id"].startswith("SEC-")
+        assert "ticket_url" in result.data
+        assert "tickets.example.com" in result.data["ticket_url"]
+        assert result.data["severity"] == "high"
+        assert result.data["indicators_count"] == 3
+
+    @pytest.mark.asyncio
+    async def test_create_security_ticket_with_all_severities(self):
+        """Test create_security_ticket accepts all valid severity levels."""
+        registry = create_triage_tools()
+
+        for severity in ["critical", "high", "medium", "low"]:
+            result = await registry.execute(
+                "create_security_ticket",
+                {
+                    "title": f"Test {severity} incident",
+                    "description": "Test description",
+                    "severity": severity,
+                    "indicators": []
+                }
+            )
+
+            assert result.success is True
+            assert result.data["severity"] == severity
+
+    @pytest.mark.asyncio
+    async def test_create_security_ticket_invalid_severity(self):
+        """Test create_security_ticket fails with invalid severity."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "create_security_ticket",
+            {
+                "title": "Test",
+                "description": "Test",
+                "severity": "ultra-critical",
+                "indicators": []
+            }
+        )
+
+        assert result.success is False
+        assert "invalid" in result.error.lower() or "severity" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_create_security_ticket_empty_indicators(self):
+        """Test create_security_ticket works with empty indicators list."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "create_security_ticket",
+            {
+                "title": "Minor Security Event",
+                "description": "An event with no IOCs",
+                "severity": "low",
+                "indicators": []
+            }
+        )
+
+        assert result.success is True
+        assert result.data["indicators_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_create_security_ticket_includes_execution_time(self):
+        """Test create_security_ticket includes execution time."""
+        registry = create_triage_tools()
+        result = await registry.execute(
+            "create_security_ticket",
+            {
+                "title": "Test",
+                "description": "Test",
+                "severity": "medium",
+                "indicators": ["ioc1"]
+            }
+        )
+
+        assert result.execution_time_ms >= 0
+
+    @pytest.mark.asyncio
+    async def test_create_security_ticket_unique_ids(self):
+        """Test create_security_ticket generates unique ticket IDs."""
+        registry = create_triage_tools()
+        ticket_ids = set()
+
+        for i in range(5):
+            result = await registry.execute(
+                "create_security_ticket",
+                {
+                    "title": f"Test ticket {i}",
+                    "description": "Test",
+                    "severity": "low",
+                    "indicators": []
+                }
+            )
+            ticket_ids.add(result.data["ticket_id"])
+
+        # All ticket IDs should be unique
+        assert len(ticket_ids) == 5
+
+
+# ============================================================================
+# Phishing Response Action Integration Tests
+# ============================================================================
+
+
+class TestPhishingResponseActionIntegration:
+    """Integration tests for phishing response action tools."""
+
+    @pytest.mark.asyncio
+    async def test_all_action_tools_return_tool_result(self):
+        """Test all phishing response action tools return ToolResult."""
+        with patch.object(_tools, "_POLICY_BRIDGE_AVAILABLE", False):
+            with patch.object(_tools, "_policy_bridge", None):
+                registry = create_triage_tools()
+
+                # quarantine_email
+                result = await registry.execute(
+                    "quarantine_email",
+                    {"message_id": "MSG-TEST", "reason": "test"}
+                )
+                assert isinstance(result, ToolResult)
+
+                # block_sender
+                result = await registry.execute(
+                    "block_sender",
+                    {"sender": "test@test.com", "block_type": "email", "reason": "test"}
+                )
+                assert isinstance(result, ToolResult)
+
+                # notify_user
+                result = await registry.execute(
+                    "notify_user",
+                    {
+                        "recipient": "test@test.com",
+                        "notification_type": "phishing_warning",
+                        "subject": "Test",
+                        "body": "Test"
+                    }
+                )
+                assert isinstance(result, ToolResult)
+
+                # create_security_ticket
+                result = await registry.execute(
+                    "create_security_ticket",
+                    {
+                        "title": "Test",
+                        "description": "Test",
+                        "severity": "low",
+                        "indicators": []
+                    }
+                )
+                assert isinstance(result, ToolResult)
+
+    def test_action_tool_definitions_are_valid(self):
+        """Test that all action tool definitions are valid for LLM."""
+        registry = create_triage_tools()
+        action_tool_names = [
+            "quarantine_email",
+            "block_sender",
+            "notify_user",
+            "create_security_ticket"
+        ]
+
+        for name in action_tool_names:
+            tool = registry.get(name)
+            assert tool is not None
+            assert tool.description is not None
+            assert len(tool.description) > 20  # Should have meaningful description
+            assert "type" in tool.parameters
+            assert tool.parameters["type"] == "object"
+            assert "properties" in tool.parameters
+            assert "required" in tool.parameters
+
+    @pytest.mark.asyncio
+    async def test_action_tools_include_execution_timing(self):
+        """Test all action tools include execution timing."""
+        registry = create_triage_tools()
+
+        result = await registry.execute(
+            "notify_user",
+            {
+                "recipient": "test@test.com",
+                "notification_type": "security_alert",
+                "subject": "Test",
+                "body": "Test"
+            }
+        )
+        assert hasattr(result, "execution_time_ms")
+        assert isinstance(result.execution_time_ms, int)
+        assert result.execution_time_ms >= 0
+
+        result = await registry.execute(
+            "create_security_ticket",
+            {
+                "title": "Test",
+                "description": "Test",
+                "severity": "low",
+                "indicators": []
+            }
+        )
+        assert result.execution_time_ms >= 0
