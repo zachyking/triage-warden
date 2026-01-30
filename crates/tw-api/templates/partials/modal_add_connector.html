@@ -1,0 +1,203 @@
+<div class="modal-backdrop" id="add-connector-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 class="modal-title">Add Connector</h2>
+      <button class="modal-close" onclick="this.closest('.modal-backdrop').remove()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <form hx-post="/api/connectors" hx-swap="none" hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); htmx.trigger(document.body, 'showToast', {detail: {type: 'success', title: 'Connector Added', message: 'New connector has been configured.'}}); location.reload(); }">
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Connector Type</label>
+          <select name="connector_type" class="form-input form-select" required onchange="updateConnectorFields(this.value)">
+            <option value="">Select a connector type...</option>
+            <optgroup label="SIEM">
+              <option value="splunk">Splunk</option>
+              <option value="elastic">Elastic SIEM</option>
+              <option value="sentinel">Microsoft Sentinel</option>
+            </optgroup>
+            <optgroup label="EDR">
+              <option value="crowdstrike">CrowdStrike Falcon</option>
+              <option value="defender">Microsoft Defender</option>
+              <option value="sentinelone">SentinelOne</option>
+            </optgroup>
+            <optgroup label="Ticketing">
+              <option value="jira">Jira</option>
+              <option value="servicenow">ServiceNow</option>
+            </optgroup>
+            <optgroup label="Threat Intelligence">
+              <option value="virustotal">VirusTotal</option>
+              <option value="alienvault">AlienVault OTX</option>
+            </optgroup>
+            <optgroup label="Email">
+              <option value="m365">Microsoft 365</option>
+              <option value="google">Google Workspace</option>
+            </optgroup>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Display Name</label>
+          <input type="text" name="name" class="form-input" placeholder="e.g., Production Splunk" required>
+        </div>
+
+        <div id="connector-fields">
+          <!-- Dynamic fields populated by JavaScript -->
+          <div class="form-group">
+            <label class="form-label">API URL / Host</label>
+            <input type="url" name="api_url" class="form-input" placeholder="https://api.example.com">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">API Key / Token</label>
+            <input type="password" name="api_key" class="form-input" placeholder="Enter API key">
+          </div>
+        </div>
+
+        <div class="form-group mt-4">
+          <div class="flex items-center gap-3">
+            <label class="switch">
+              <input type="checkbox" name="enabled" checked>
+              <span class="switch-track"></span>
+              <span class="switch-thumb"></span>
+            </label>
+            <span class="text-sm">Enable connector</span>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-ghost" onclick="this.closest('.modal-backdrop').remove()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Add Connector</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+function updateConnectorFields(type) {
+  const container = document.getElementById('connector-fields');
+  let fields = '';
+
+  switch(type) {
+    case 'splunk':
+      fields = `
+        <div class="form-group">
+          <label class="form-label">Splunk Host</label>
+          <input type="url" name="api_url" class="form-input" placeholder="https://splunk.company.com:8089" required>
+        </div>
+        <div class="grid grid-2 gap-4">
+          <div class="form-group">
+            <label class="form-label">Username</label>
+            <input type="text" name="username" class="form-input" placeholder="admin">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Password</label>
+            <input type="password" name="password" class="form-input" placeholder="Password">
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">App Context</label>
+          <input type="text" name="app" class="form-input" placeholder="search" value="search">
+        </div>
+      `;
+      break;
+
+    case 'crowdstrike':
+      fields = `
+        <div class="form-group">
+          <label class="form-label">API Region</label>
+          <select name="region" class="form-input form-select">
+            <option value="us-1">US-1 (api.crowdstrike.com)</option>
+            <option value="us-2">US-2 (api.us-2.crowdstrike.com)</option>
+            <option value="eu-1">EU-1 (api.eu-1.crowdstrike.com)</option>
+            <option value="us-gov-1">US-GOV-1 (api.laggar.gcw.crowdstrike.com)</option>
+          </select>
+        </div>
+        <div class="grid grid-2 gap-4">
+          <div class="form-group">
+            <label class="form-label">Client ID</label>
+            <input type="text" name="client_id" class="form-input" placeholder="OAuth Client ID" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Client Secret</label>
+            <input type="password" name="client_secret" class="form-input" placeholder="OAuth Client Secret" required>
+          </div>
+        </div>
+      `;
+      break;
+
+    case 'jira':
+      fields = `
+        <div class="form-group">
+          <label class="form-label">Jira URL</label>
+          <input type="url" name="api_url" class="form-input" placeholder="https://yourcompany.atlassian.net" required>
+        </div>
+        <div class="grid grid-2 gap-4">
+          <div class="form-group">
+            <label class="form-label">Email</label>
+            <input type="email" name="username" class="form-input" placeholder="user@company.com" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label">API Token</label>
+            <input type="password" name="api_key" class="form-input" placeholder="Atlassian API Token" required>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Default Project Key</label>
+          <input type="text" name="project" class="form-input" placeholder="SEC">
+        </div>
+      `;
+      break;
+
+    case 'virustotal':
+      fields = `
+        <div class="form-group">
+          <label class="form-label">API Key</label>
+          <input type="password" name="api_key" class="form-input" placeholder="VirusTotal API Key" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Rate Limit (requests/min)</label>
+          <input type="number" name="rate_limit" class="form-input" value="4" min="1" max="500">
+          <p class="text-xs text-muted mt-1">Free tier: 4/min, Premium: 500/min</p>
+        </div>
+      `;
+      break;
+
+    case 'm365':
+      fields = `
+        <div class="form-group">
+          <label class="form-label">Tenant ID</label>
+          <input type="text" name="tenant_id" class="form-input" placeholder="Azure AD Tenant ID" required>
+        </div>
+        <div class="grid grid-2 gap-4">
+          <div class="form-group">
+            <label class="form-label">Client ID</label>
+            <input type="text" name="client_id" class="form-input" placeholder="App Registration Client ID" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Client Secret</label>
+            <input type="password" name="client_secret" class="form-input" placeholder="App Secret" required>
+          </div>
+        </div>
+      `;
+      break;
+
+    default:
+      fields = `
+        <div class="form-group">
+          <label class="form-label">API URL / Host</label>
+          <input type="url" name="api_url" class="form-input" placeholder="https://api.example.com">
+        </div>
+        <div class="form-group">
+          <label class="form-label">API Key / Token</label>
+          <input type="password" name="api_key" class="form-input" placeholder="Enter API key">
+        </div>
+      `;
+  }
+
+  container.innerHTML = fields;
+}
+</script>

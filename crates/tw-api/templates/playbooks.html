@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block title %}Playbooks - Triage Warden{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Playbooks</h1>
+    <p class="page-subtitle">Automated response workflows for common incident types</p>
+  </div>
+  <button class="btn btn-primary btn-lg"
+          hx-get="/web/modals/add-playbook"
+          hx-target="#modal-container"
+          hx-swap="innerHTML">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 5v14m-7-7h14"/>
+    </svg>
+    New Playbook
+  </button>
+</div>
+
+<div class="grid grid-3 gap-4">
+  {% for playbook in playbooks %}
+  <div class="card">
+    <div class="card-body">
+      <div class="flex justify-between items-start mb-3">
+        <div class="flex items-center gap-2">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-accent">
+            <path d="M4 19.5A2.5 2.5 0 016.5 17H20"/>
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/>
+          </svg>
+          <h3 class="font-semibold">{{ playbook.name }}</h3>
+        </div>
+        <span class="badge badge-{% if playbook.enabled %}success{% else %}info{% endif %}">
+          {% if playbook.enabled %}Active{% else %}Disabled{% endif %}
+        </span>
+      </div>
+      <p class="text-sm text-secondary mb-4">{{ playbook.description }}</p>
+      <div class="flex gap-4 text-xs text-muted mb-4">
+        <div>
+          <span class="font-semibold">{{ playbook.trigger_count }}</span> triggers
+        </div>
+        <div>
+          <span class="font-semibold">{{ playbook.step_count }}</span> steps
+        </div>
+        <div>
+          <span class="font-semibold">{{ playbook.execution_count }}</span> runs
+        </div>
+      </div>
+      <div class="flex gap-2">
+        <a href="/playbooks/{{ playbook.id }}" class="btn btn-secondary btn-sm">Configure</a>
+        <button class="btn btn-ghost btn-sm"
+                hx-post="/api/playbooks/{{ playbook.id }}/toggle"
+                hx-swap="none">
+          {% if playbook.enabled %}Disable{% else %}Enable{% endif %}
+        </button>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+
+  {% if playbooks.is_empty() %}
+  <div class="card" style="grid-column: span 3;">
+    <div class="empty-state">
+      <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M4 19.5A2.5 2.5 0 016.5 17H20"/>
+        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/>
+      </svg>
+      <div class="empty-state-title">No playbooks configured</div>
+      <div class="empty-state-text">Create a playbook to automate incident response workflows.</div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

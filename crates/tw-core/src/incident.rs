@@ -180,6 +180,19 @@ pub enum Severity {
     Critical,
 }
 
+impl Severity {
+    /// Returns the database-compatible string representation (lowercase).
+    pub fn as_db_str(&self) -> &'static str {
+        match self {
+            Severity::Info => "info",
+            Severity::Low => "low",
+            Severity::Medium => "medium",
+            Severity::High => "high",
+            Severity::Critical => "critical",
+        }
+    }
+}
+
 impl std::fmt::Display for Severity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -216,6 +229,24 @@ pub enum IncidentStatus {
     Escalated,
     /// Closed without action
     Closed,
+}
+
+impl IncidentStatus {
+    /// Returns the database-compatible string representation (snake_case).
+    pub fn as_db_str(&self) -> &'static str {
+        match self {
+            IncidentStatus::New => "new",
+            IncidentStatus::Enriching => "enriching",
+            IncidentStatus::Analyzing => "analyzing",
+            IncidentStatus::PendingReview => "pending_review",
+            IncidentStatus::PendingApproval => "pending_approval",
+            IncidentStatus::Executing => "executing",
+            IncidentStatus::Resolved => "resolved",
+            IncidentStatus::FalsePositive => "false_positive",
+            IncidentStatus::Escalated => "escalated",
+            IncidentStatus::Closed => "closed",
+        }
+    }
 }
 
 impl std::fmt::Display for IncidentStatus {

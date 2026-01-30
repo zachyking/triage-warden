@@ -11,6 +11,7 @@ pub mod middleware;
 pub mod routes;
 pub mod server;
 pub mod state;
+pub mod web;
 pub mod webhooks;
 
 pub use error::ApiError;

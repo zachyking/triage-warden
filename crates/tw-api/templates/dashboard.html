@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Triage Warden{% endblock %}
+
+{% block content %}
+<!-- KPI Grid -->
+<div class="kpi-grid" id="kpi-grid" hx-get="/web/partials/kpis" hx-trigger="every 30s" hx-swap="innerHTML">
+  <div class="kpi-card{% if metrics.critical_count > 0 %} critical{% endif %}">
+    <div class="kpi-label">Critical</div>
+    <div class="kpi-value">{{ metrics.critical_count }}</div>
+    <div class="kpi-trend">Require immediate action</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Open Incidents</div>
+    <div class="kpi-value">{{ metrics.open_count }}</div>
+    <div class="kpi-trend">{{ metrics.high_count }} high, {{ metrics.medium_count }} medium, {{ metrics.low_count }} low</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Avg Response Time</div>
+    <div class="kpi-value accent">{{ metrics.avg_response_time }}</div>
+    <div class="kpi-trend{% if metrics.response_time_trend < 0 %} positive{% else if metrics.response_time_trend > 0 %} negative{% endif %}">
+      {% if metrics.response_time_trend < 0 %}{{ metrics.response_time_trend }}%{% else if metrics.response_time_trend > 0 %}+{{ metrics.response_time_trend }}%{% else %}--{% endif %} from last week
+    </div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Auto-Resolved</div>
+    <div class="kpi-value">{{ metrics.auto_resolved_pct }}%</div>
+    <div class="kpi-trend{% if metrics.auto_resolved_trend > 0 %} positive{% else if metrics.auto_resolved_trend < 0 %} negative{% endif %}">
+      {% if metrics.auto_resolved_trend > 0 %}+{{ metrics.auto_resolved_trend }}%{% else if metrics.auto_resolved_trend < 0 %}{{ metrics.auto_resolved_trend }}%{% else %}--{% endif %} from last week
+    </div>
+  </div>
+</div>
+
+<!-- Toolbar -->
+<div class="toolbar">
+  <div class="search-box">
+    <svg class="search-box-icon" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+    </svg>
+    <input type="text"
+           name="q"
+           placeholder="Search incidents, IPs, users..."
+           hx-get="/web/partials/incidents"
+           hx-trigger="input changed delay:300ms, search"
+           hx-target="#incident-list"
+           hx-include="[name='severity']">
+  </div>
+  <div class="filter-group" hx-target="#incident-list" hx-swap="innerHTML">
+    <button class="filter-btn active"
+            name="severity"
+            value=""
+            hx-get="/web/partials/incidents"
+            hx-include="[name='q']">All</button>
+    <button class="filter-btn"
+            name="severity"
+            value="critical"
+            hx-get="/web/partials/incidents"
+            hx-include="[name='q']">Critical</button>
+    <button class="filter-btn"
+            name="severity"
+            value="high"
+            hx-get="/web/partials/incidents"
+            hx-include="[name='q']">High</button>
+    <button class="filter-btn"
+            name="severity"
+            value="medium"
+            hx-get="/web/partials/incidents"
+            hx-include="[name='q']">Medium</button>
+    <button class="filter-btn"
+            name="severity"
+            value="low"
+            hx-get="/web/partials/incidents"
+            hx-include="[name='q']">Low</button>
+  </div>
+</div>
+
+<!-- Incidents List -->
+<div class="card">
+  <div class="card-header">
+    <h2 class="card-title">Active Incidents</h2>
+    <a href="/incidents" class="btn btn-secondary">View All</a>
+  </div>
+  <div class="card-body no-padding">
+    <ul class="incident-list" id="incident-list" hx-get="/web/partials/incidents" hx-trigger="every 30s" hx-swap="innerHTML">
+      {% for incident in recent_incidents %}
+      {% include "partials/incident_row.html" %}
+      {% endfor %}
+      {% if recent_incidents.is_empty() %}
+      <li class="empty-state">
+        <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <div class="empty-state-title">No active incidents</div>
+        <div class="empty-state-text">All clear! No incidents require attention.</div>
+      </li>
+      {% endif %}
+    </ul>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Handle filter button active state
+  document.querySelectorAll('.filter-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+      this.classList.add('active');
+    });
+  });
+</script>
+{% endblock %}

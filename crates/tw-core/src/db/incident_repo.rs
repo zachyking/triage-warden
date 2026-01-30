@@ -111,8 +111,9 @@ impl IncidentRepository for SqliteIncidentRepository {
     async fn create(&self, incident: &Incident) -> Result<Incident, DbError> {
         let id = incident.id.to_string();
         let source = serde_json::to_string(&incident.source)?;
-        let severity = serde_json::to_string(&incident.severity)?;
-        let status = serde_json::to_string(&incident.status)?;
+        // Use plain strings for severity/status to match DB schema constraints
+        let severity = incident.severity.as_db_str();
+        let status = incident.status.as_db_str();
         let alert_data = serde_json::to_string(&incident.alert_data)?;
         let enrichments = serde_json::to_string(&incident.enrichments)?;
         let analysis = incident
@@ -198,19 +199,15 @@ impl IncidentRepository for SqliteIncidentRepository {
         let mut query_builder = sqlx::query_as::<_, IncidentRow>(&query);
 
         if let Some(statuses) = &filter.status {
-            let status_json: Vec<String> = statuses
-                .iter()
-                .map(|s| serde_json::to_string(s).unwrap_or_default())
-                .collect();
-            query_builder = query_builder.bind(serde_json::to_string(&status_json)?);
+            // Use plain strings (not JSON-quoted) for DB comparison
+            let status_strs: Vec<&str> = statuses.iter().map(|s| s.as_db_str()).collect();
+            query_builder = query_builder.bind(serde_json::to_string(&status_strs)?);
         }
 
         if let Some(severities) = &filter.severity {
-            let severity_json: Vec<String> = severities
-                .iter()
-                .map(|s| serde_json::to_string(s).unwrap_or_default())
-                .collect();
-            query_builder = query_builder.bind(serde_json::to_string(&severity_json)?);
+            // Use plain strings (not JSON-quoted) for DB comparison
+            let severity_strs: Vec<&str> = severities.iter().map(|s| s.as_db_str()).collect();
+            query_builder = query_builder.bind(serde_json::to_string(&severity_strs)?);
         }
 
         if let Some(since) = &filter.since {
@@ -252,19 +249,15 @@ impl IncidentRepository for SqliteIncidentRepository {
         let mut query_builder = sqlx::query_scalar::<_, i64>(&query);
 
         if let Some(statuses) = &filter.status {
-            let status_json: Vec<String> = statuses
-                .iter()
-                .map(|s| serde_json::to_string(s).unwrap_or_default())
-                .collect();
-            query_builder = query_builder.bind(serde_json::to_string(&status_json)?);
+            // Use plain strings (not JSON-quoted) for DB comparison
+            let status_strs: Vec<&str> = statuses.iter().map(|s| s.as_db_str()).collect();
+            query_builder = query_builder.bind(serde_json::to_string(&status_strs)?);
         }
 
         if let Some(severities) = &filter.severity {
-            let severity_json: Vec<String> = severities
-                .iter()
-                .map(|s| serde_json::to_string(s).unwrap_or_default())
-                .collect();
-            query_builder = query_builder.bind(serde_json::to_string(&severity_json)?);
+            // Use plain strings (not JSON-quoted) for DB comparison
+            let severity_strs: Vec<&str> = severities.iter().map(|s| s.as_db_str()).collect();
+            query_builder = query_builder.bind(serde_json::to_string(&severity_strs)?);
         }
 
         if let Some(since) = &filter.since {
@@ -290,12 +283,12 @@ impl IncidentRepository for SqliteIncidentRepository {
 
         if let Some(status) = &update.status {
             set_clauses.push("status = ?".to_string());
-            values.push(serde_json::to_string(status)?);
+            values.push(status.as_db_str().to_string());
         }
 
         if let Some(severity) = &update.severity {
             set_clauses.push("severity = ?".to_string());
-            values.push(serde_json::to_string(severity)?);
+            values.push(severity.as_db_str().to_string());
         }
 
         if let Some(analysis) = &update.analysis {
@@ -336,8 +329,9 @@ impl IncidentRepository for SqliteIncidentRepository {
     async fn save(&self, incident: &Incident) -> Result<Incident, DbError> {
         let id = incident.id.to_string();
         let source = serde_json::to_string(&incident.source)?;
-        let severity = serde_json::to_string(&incident.severity)?;
-        let status = serde_json::to_string(&incident.status)?;
+        // Use plain strings for severity/status to match DB schema constraints
+        let severity = incident.severity.as_db_str();
+        let status = incident.status.as_db_str();
         let alert_data = serde_json::to_string(&incident.alert_data)?;
         let enrichments = serde_json::to_string(&incident.enrichments)?;
         let analysis = incident
@@ -639,11 +633,15 @@ impl TryFrom<IncidentRow> for Incident {
     type Error = DbError;
 
     fn try_from(row: IncidentRow) -> Result<Self, Self::Error> {
+        // Severity and status are stored as plain strings, wrap in quotes for JSON parsing
+        let severity_json = format!("\"{}\"", row.severity);
+        let status_json = format!("\"{}\"", row.status);
+
         Ok(Incident {
             id: Uuid::parse_str(&row.id).map_err(|e| DbError::Serialization(e.to_string()))?,
             source: serde_json::from_str(&row.source)?,
-            severity: serde_json::from_str(&row.severity)?,
-            status: serde_json::from_str(&row.status)?,
+            severity: serde_json::from_str(&severity_json)?,
+            status: serde_json::from_str(&status_json)?,
             alert_data: serde_json::from_str(&row.alert_data)?,
             enrichments: serde_json::from_str(&row.enrichments)?,
             analysis: row.analysis.map(|a| serde_json::from_str(&a)).transpose()?,

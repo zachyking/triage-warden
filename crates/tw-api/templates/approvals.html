@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+
+{% block title %}Approvals - Triage Warden{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Pending Approvals</h1>
+    <p class="page-subtitle">{{ pending_actions.len() }} actions awaiting your approval</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body no-padding">
+    {% if !pending_actions.is_empty() %}
+    <table class="table" id="approvals-table">
+      <thead>
+        <tr>
+          <th>Incident</th>
+          <th>Action</th>
+          <th>Target</th>
+          <th>Risk</th>
+          <th>Proposed</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for action in pending_actions %}
+        <tr id="action-{{ action.id }}">
+          <td>
+            <a href="/incidents/{{ action.incident_id }}"
+               class="text-primary"
+               hx-get="/incidents/{{ action.incident_id }}"
+               hx-push-url="true"
+               hx-target="body">
+              {{ action.incident_title }}
+            </a>
+            <div class="text-xs text-muted">{{ action.incident_id }}</div>
+          </td>
+          <td>
+            <span class="font-semibold">{{ action.action_type }}</span>
+            <div class="text-xs text-muted">{{ action.description }}</div>
+          </td>
+          <td>
+            {% if let Some(target) = action.target %}
+            <code class="font-mono">{{ target }}</code>
+            {% else %}
+            <span class="text-muted">-</span>
+            {% endif %}
+          </td>
+          <td>
+            <span class="badge badge-{% if action.risk_level == "high" %}critical{% else if action.risk_level == "medium" %}high{% else %}info{% endif %}">
+              {{ action.risk_level }}
+            </span>
+          </td>
+          <td>
+            <span class="text-sm">{{ action.proposed_at }}</span>
+            <div class="text-xs text-muted">by {{ action.proposed_by }}</div>
+          </td>
+          <td>
+            <div class="flex gap-2">
+              <button class="btn btn-success btn-sm"
+                      hx-post="/api/incidents/{{ action.incident_id }}/approve"
+                      hx-vals='{"action_id": "{{ action.id }}", "approved": true}'
+                      hx-target="#action-{{ action.id }}"
+                      hx-swap="outerHTML"
+                      hx-on::after-request="if(event.detail.successful) showToast('success', 'Action Approved', 'The action has been approved and will execute shortly.')">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M5 13l4 4L19 7"/>
+                </svg>
+                Approve
+              </button>
+              <button class="btn btn-ghost btn-sm"
+                      hx-post="/api/incidents/{{ action.incident_id }}/approve"
+                      hx-vals='{"action_id": "{{ action.id }}", "approved": false}'
+                      hx-target="#action-{{ action.id }}"
+                      hx-swap="outerHTML"
+                      hx-on::after-request="if(event.detail.successful) showToast('info', 'Action Rejected', 'The action has been rejected.')">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+                Reject
+              </button>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+      <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+      <div class="empty-state-title">No pending approvals</div>
+      <div class="empty-state-text">All actions have been reviewed. Nice work!</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Recently Processed -->
+{% if !recent_approvals.is_empty() %}
+<div class="mt-6">
+  <h2 class="page-title text-lg mb-4">Recently Processed</h2>
+  <div class="card">
+    <div class="card-body no-padding">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Incident</th>
+            <th>Action</th>
+            <th>Decision</th>
+            <th>Processed</th>
+            <th>By</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for action in recent_approvals %}
+          <tr class="opacity-60">
+            <td>
+              <a href="/incidents/{{ action.incident_id }}" class="text-secondary">
+                {{ action.incident_title }}
+              </a>
+            </td>
+            <td>{{ action.action_type }}</td>
+            <td>
+              <span class="badge badge-{% if action.approved %}success{% else %}info{% endif %}">
+                {% if action.approved %}Approved{% else %}Rejected{% endif %}
+              </span>
+            </td>
+            <td>{{ action.processed_at }}</td>
+            <td>{{ action.processed_by }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,294 @@
+{% extends "base.html" %}
+
+{% block title %}{{ incident.title }} - Triage Warden{% endblock %}
+
+{% block content %}
+<!-- Breadcrumb -->
+<div class="flex items-center gap-2 mb-4 text-sm">
+  <a href="/incidents" class="text-muted" hx-get="/incidents" hx-push-url="true" hx-target="body">Incidents</a>
+  <span class="text-muted">/</span>
+  <span class="text-secondary">{{ incident.id }}</span>
+</div>
+
+<!-- Header -->
+<div class="page-header">
+  <div class="flex items-center gap-3">
+    <div class="severity-dot {{ incident.severity }}" style="width: 16px; height: 16px;"></div>
+    <div>
+      <h1 class="page-title">{{ incident.title }}</h1>
+      <p class="page-subtitle">
+        <span class="badge badge-{{ incident.severity }}">{{ incident.severity }}</span>
+        &bull; {{ incident.source }}
+        &bull; {{ incident.created_at }}
+      </p>
+    </div>
+  </div>
+  <div class="flex gap-2">
+    {% if incident.status != "resolved" %}
+    <button class="btn btn-primary btn-lg"
+            hx-post="/api/incidents/{{ incident.id }}/actions"
+            hx-vals='{"action": "auto_triage"}'
+            hx-target="#action-result"
+            hx-swap="innerHTML">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+      </svg>
+      Run AI Triage
+    </button>
+    <button class="btn btn-success btn-lg"
+            hx-post="/api/incidents/{{ incident.id }}/resolve"
+            hx-target="body">
+      Mark Resolved
+    </button>
+    {% endif %}
+  </div>
+</div>
+
+<div id="action-result"></div>
+
+<div class="grid grid-2 gap-4">
+  <!-- Left Column: Details -->
+  <div>
+    <!-- AI Analysis -->
+    {% if let Some(analysis) = incident.analysis %}
+    <div class="card mb-4">
+      <div class="card-header">
+        <h3 class="card-title flex items-center gap-2">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+          </svg>
+          AI Analysis
+        </h3>
+        <span class="badge badge-{{ analysis.verdict }}">{{ analysis.verdict }}</span>
+      </div>
+      <div class="card-body">
+        <div class="flex gap-4 mb-4">
+          <div>
+            <div class="text-xs text-muted mb-1">Confidence</div>
+            <div class="font-mono font-semibold">{{ analysis.confidence }}%</div>
+          </div>
+          <div>
+            <div class="text-xs text-muted mb-1">Risk Score</div>
+            <div class="font-mono font-semibold text-{{ incident.severity }}">{{ analysis.risk_score }}/100</div>
+          </div>
+        </div>
+
+        <div class="mb-4">
+          <div class="text-xs text-muted mb-1">Summary</div>
+          <p class="text-sm">{{ analysis.summary }}</p>
+        </div>
+
+        {% if !analysis.mitre_techniques.is_empty() %}
+        <div class="mb-4">
+          <div class="text-xs text-muted mb-2">MITRE ATT&CK Techniques</div>
+          <div class="flex flex-wrap gap-2">
+            {% for technique in analysis.mitre_techniques %}
+            <span class="badge badge-info">{{ technique.id }}: {{ technique.name }}</span>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+
+        {% if let Some(reasoning) = analysis.reasoning %}
+        <div>
+          <div class="text-xs text-muted mb-1">Reasoning</div>
+          <div class="code-block">
+            <code>{{ reasoning }}</code>
+          </div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Enrichments -->
+    <div class="card mb-4">
+      <div class="card-header">
+        <h3 class="card-title">Enrichments</h3>
+        {% if incident.status != "resolved" %}
+        <button class="btn btn-secondary btn-sm"
+                hx-post="/api/incidents/{{ incident.id }}/enrich"
+                hx-target="#enrichments-body"
+                hx-swap="innerHTML">
+          <span class="htmx-indicator spinner"></span>
+          Refresh
+        </button>
+        {% endif %}
+      </div>
+      <div class="card-body" id="enrichments-body">
+        {% if !incident.enrichments.is_empty() %}
+        {% for enrichment in incident.enrichments %}
+        <div class="mb-4">
+          <div class="flex justify-between items-center mb-2">
+            <span class="font-semibold text-sm">{{ enrichment.source }}</span>
+            <span class="badge badge-{% if enrichment.threat_level == "malicious" %}critical{% else if enrichment.threat_level == "suspicious" %}high{% else %}info{% endif %}">
+              {{ enrichment.threat_level }}
+            </span>
+          </div>
+          <div class="text-xs text-muted mb-1">{{ enrichment.indicator_type }}: <code>{{ enrichment.indicator }}</code></div>
+          {% if let Some(details) = enrichment.details %}
+          <div class="code-block mt-2">
+            <code>{{ details }}</code>
+          </div>
+          {% endif %}
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="empty-state">
+          <div class="empty-state-title">No enrichments yet</div>
+          <div class="empty-state-text">Click refresh to gather threat intelligence.</div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- IoCs -->
+    {% if !incident.iocs.is_empty() %}
+    <div class="card mb-4">
+      <div class="card-header">
+        <h3 class="card-title">Indicators of Compromise</h3>
+      </div>
+      <div class="card-body no-padding">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Value</th>
+              <th>Threat Level</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for ioc in incident.iocs %}
+            <tr>
+              <td>{{ ioc.ioc_type }}</td>
+              <td><code class="font-mono">{{ ioc.value }}</code></td>
+              <td><span class="badge badge-{% if ioc.threat_level == "malicious" %}critical{% else if ioc.threat_level == "suspicious" %}high{% else %}info{% endif %}">{{ ioc.threat_level }}</span></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Alert Data -->
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Raw Alert Data</h3>
+      </div>
+      <div class="card-body">
+        <div class="code-block">
+          <code>{{ incident.alert_data }}</code>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right Column: Actions & Timeline -->
+  <div>
+    <!-- Proposed Actions -->
+    {% if !incident.proposed_actions.is_empty() %}
+    <div class="card mb-4">
+      <div class="card-header">
+        <h3 class="card-title">Proposed Actions</h3>
+      </div>
+      <div class="card-body">
+        {% for action in incident.proposed_actions %}
+        <div class="flex justify-between items-center p-3 bg-tertiary rounded-md mb-2">
+          <div>
+            <div class="font-semibold text-sm">{{ action.action_type }}</div>
+            <div class="text-xs text-muted">{{ action.description }}</div>
+            {% if let Some(target) = action.target %}
+            <div class="text-xs text-secondary mt-1">Target: <code>{{ target }}</code></div>
+            {% endif %}
+          </div>
+          <div class="flex gap-2">
+            {% if action.status == "pending_approval" %}
+            <button class="btn btn-success btn-sm"
+                    hx-post="/api/incidents/{{ incident.id }}/approve"
+                    hx-vals='{"action_id": "{{ action.id }}", "approved": true}'
+                    hx-target="closest .card"
+                    hx-swap="outerHTML">Approve</button>
+            <button class="btn btn-danger btn-sm"
+                    hx-post="/api/incidents/{{ incident.id }}/approve"
+                    hx-vals='{"action_id": "{{ action.id }}", "approved": false}'
+                    hx-target="closest .card"
+                    hx-swap="outerHTML">Reject</button>
+            {% else if action.status == "approved" %}
+            <span class="badge badge-success">Approved</span>
+            {% else if action.status == "executed" %}
+            <span class="badge badge-success">Executed</span>
+            {% else if action.status == "rejected" %}
+            <span class="badge badge-info">Rejected</span>
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Manual Actions -->
+    {% if incident.status != "resolved" %}
+    <div class="card mb-4">
+      <div class="card-header">
+        <h3 class="card-title">Execute Action</h3>
+      </div>
+      <div class="card-body">
+        <form hx-post="/api/incidents/{{ incident.id }}/actions" hx-target="#action-result" hx-swap="innerHTML">
+          <div class="form-group">
+            <label class="form-label">Action Type</label>
+            <select name="action" class="form-input form-select" required>
+              <option value="">Select action...</option>
+              <option value="isolate_host">Isolate Host</option>
+              <option value="disable_user">Disable User</option>
+              <option value="block_ip">Block IP Address</option>
+              <option value="quarantine_email">Quarantine Email</option>
+              <option value="create_ticket">Create Ticket</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Target (optional)</label>
+            <input type="text" name="target" class="form-input" placeholder="e.g., hostname, username, IP">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Reason</label>
+            <textarea name="reason" class="form-input form-textarea" placeholder="Describe the reason for this action..." required></textarea>
+          </div>
+          <button type="submit" class="btn btn-primary">
+            <span class="htmx-indicator spinner"></span>
+            Execute Action
+          </button>
+        </form>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Audit Timeline -->
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Activity Timeline</h3>
+      </div>
+      <div class="card-body">
+        <div class="timeline">
+          {% for entry in incident.audit_log %}
+          <div class="timeline-item{% if loop.first %} active{% endif %}{% if entry.action == "resolved" %} success{% endif %}">
+            <div class="timeline-dot"></div>
+            <div class="timeline-content">
+              <div class="timeline-time">{{ entry.timestamp }}</div>
+              <div class="timeline-title">{{ entry.action }}</div>
+              <div class="timeline-description">{{ entry.actor }}{% if let Some(details) = entry.details %} - {{ details }}{% endif %}</div>
+            </div>
+          </div>
+          {% endfor %}
+          {% if incident.audit_log.is_empty() %}
+          <div class="empty-state">
+            <div class="empty-state-text">No activity recorded yet.</div>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

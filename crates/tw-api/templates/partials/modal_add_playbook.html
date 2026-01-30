@@ -1,0 +1,56 @@
+<div class="modal-backdrop" id="add-playbook-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 class="modal-title">Create New Playbook</h2>
+      <button class="modal-close" onclick="this.closest('.modal-backdrop').remove()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <form hx-post="/api/playbooks" hx-swap="none" hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); htmx.trigger(document.body, 'showToast', {detail: {type: 'success', title: 'Playbook Created', message: 'New playbook has been created successfully.'}}); location.reload(); }">
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Playbook Name</label>
+          <input type="text" name="name" class="form-input" placeholder="e.g., Phishing Response" required>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Description</label>
+          <textarea name="description" class="form-input form-textarea" placeholder="Describe what this playbook does..." rows="3"></textarea>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Trigger Type</label>
+          <select name="trigger_type" class="form-input form-select">
+            <option value="alert_type">Alert Type Match</option>
+            <option value="severity">Severity Level</option>
+            <option value="source">Alert Source</option>
+            <option value="manual">Manual Trigger Only</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Trigger Condition</label>
+          <input type="text" name="trigger_condition" class="form-input" placeholder="e.g., phishing, ransomware, malware">
+          <p class="text-xs text-muted mt-1">Comma-separated values or regex pattern</p>
+        </div>
+
+        <div class="form-group">
+          <div class="flex items-center gap-3">
+            <label class="switch">
+              <input type="checkbox" name="enabled" checked>
+              <span class="switch-track"></span>
+              <span class="switch-thumb"></span>
+            </label>
+            <span class="text-sm">Enable playbook immediately</span>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-ghost" onclick="this.closest('.modal-backdrop').remove()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Create Playbook</button>
+      </div>
+    </form>
+  </div>
+</div>

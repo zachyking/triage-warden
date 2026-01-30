@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - Triage Warden{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Settings</h1>
+    <p class="page-subtitle">Configure system settings and integrations</p>
+  </div>
+</div>
+
+<div class="tabs">
+  <a href="/settings" class="tab{% if tab == "general" %} active{% endif %}">General</a>
+  <a href="/settings?tab=connectors" class="tab{% if tab == "connectors" %} active{% endif %}">Connectors</a>
+  <a href="/settings?tab=policies" class="tab{% if tab == "policies" %} active{% endif %}">Policies</a>
+  <a href="/settings?tab=notifications" class="tab{% if tab == "notifications" %} active{% endif %}">Notifications</a>
+</div>
+
+{% if tab == "general" %}
+<!-- General Settings -->
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">General Settings</h3>
+  </div>
+  <div class="card-body">
+    <form hx-post="/api/settings/general" hx-swap="none"
+          hx-on::after-request="if(event.detail.successful) showToast('success', 'Settings Saved', 'General settings have been updated.')">
+      <div class="grid grid-2 gap-4">
+        <div class="form-group">
+          <label class="form-label">Organization Name</label>
+          <input type="text" name="org_name" class="form-input" value="{{ settings.org_name }}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Default Timezone</label>
+          <select name="timezone" class="form-input form-select">
+            <option value="UTC" {% if settings.timezone == "UTC" %}selected{% endif %}>UTC</option>
+            <option value="America/New_York" {% if settings.timezone == "America/New_York" %}selected{% endif %}>Eastern Time</option>
+            <option value="America/Los_Angeles" {% if settings.timezone == "America/Los_Angeles" %}selected{% endif %}>Pacific Time</option>
+            <option value="Europe/London" {% if settings.timezone == "Europe/London" %}selected{% endif %}>London</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-group mt-4">
+        <label class="form-label">Operation Mode</label>
+        <div class="flex gap-4">
+          <label class="flex items-center gap-2">
+            <input type="radio" name="mode" value="assisted" {% if settings.mode == "assisted" %}checked{% endif %}>
+            <span>Assisted</span>
+            <span class="text-xs text-muted">(AI observes and suggests only)</span>
+          </label>
+          <label class="flex items-center gap-2">
+            <input type="radio" name="mode" value="supervised" {% if settings.mode == "supervised" %}checked{% endif %}>
+            <span>Supervised</span>
+            <span class="text-xs text-muted">(Low-risk auto, high-risk needs approval)</span>
+          </label>
+          <label class="flex items-center gap-2">
+            <input type="radio" name="mode" value="autonomous" {% if settings.mode == "autonomous" %}checked{% endif %}>
+            <span>Autonomous</span>
+            <span class="text-xs text-muted">(Full automation for configured types)</span>
+          </label>
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary mt-4">Save Changes</button>
+    </form>
+  </div>
+</div>
+
+{% else if tab == "connectors" %}
+<!-- Connectors -->
+<div class="grid grid-2 gap-4">
+  {% for connector in connectors %}
+  <div class="card">
+    <div class="card-body">
+      <div class="flex justify-between items-start mb-3">
+        <div>
+          <h3 class="font-semibold">{{ connector.name }}</h3>
+          <p class="text-sm text-muted">{{ connector.connector_type }}</p>
+        </div>
+        <span class="badge badge-{% if connector.status == "connected" %}success{% else if connector.status == "error" %}critical{% else %}info{% endif %}">
+          {{ connector.status }}
+        </span>
+      </div>
+      {% if let Some(last_check) = connector.last_check %}
+      <p class="text-xs text-muted mb-3">Last checked: {{ last_check }}</p>
+      {% endif %}
+      <div class="flex gap-2">
+        <button class="btn btn-secondary btn-sm"
+                hx-get="/settings/connectors/{{ connector.id }}"
+                hx-target="#connector-modal">Configure</button>
+        <button class="btn btn-ghost btn-sm"
+                hx-post="/api/connectors/{{ connector.id }}/test"
+                hx-swap="none">Test Connection</button>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+
+  <div class="card" style="border-style: dashed;">
+    <div class="card-body flex flex-col items-center justify-center" style="min-height: 150px;">
+      <button class="btn btn-primary"
+              hx-get="/web/modals/add-connector"
+              hx-target="#modal-container"
+              hx-swap="innerHTML">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 5v14m-7-7h14"/>
+        </svg>
+        Add Connector
+      </button>
+    </div>
+  </div>
+</div>
+
+{% else if tab == "policies" %}
+<!-- Policies -->
+<div class="card mb-4">
+  <div class="card-header">
+    <h3 class="card-title">Approval Policies</h3>
+    <button class="btn btn-secondary btn-sm"
+            hx-get="/web/modals/add-policy"
+            hx-target="#modal-container"
+            hx-swap="innerHTML">Add Policy</button>
+  </div>
+  <div class="card-body no-padding">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Condition</th>
+          <th>Requires</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for policy in policies %}
+        <tr>
+          <td class="font-semibold">{{ policy.name }}</td>
+          <td class="text-sm text-muted">{{ policy.condition }}</td>
+          <td>
+            <span class="badge badge-info">{{ policy.requires }}</span>
+          </td>
+          <td>
+            <span class="badge badge-{% if policy.enabled %}success{% else %}info{% endif %}">
+              {% if policy.enabled %}Active{% else %}Disabled{% endif %}
+            </span>
+          </td>
+          <td>
+            <button class="btn btn-ghost btn-sm">Edit</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">Rate Limits</h3>
+  </div>
+  <div class="card-body">
+    <form hx-post="/api/settings/rate-limits" hx-swap="none"
+          hx-on::after-request="if(event.detail.successful) showToast('success', 'Rate Limits Saved', 'Rate limit settings have been updated.')">
+      <div class="grid grid-3 gap-4">
+        <div class="form-group">
+          <label class="form-label">Isolate Host (per hour)</label>
+          <input type="number" name="isolate_host_hour" class="form-input" value="{{ rate_limits.isolate_host_hour }}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Disable User (per hour)</label>
+          <input type="number" name="disable_user_hour" class="form-input" value="{{ rate_limits.disable_user_hour }}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Block IP (per hour)</label>
+          <input type="number" name="block_ip_hour" class="form-input" value="{{ rate_limits.block_ip_hour }}">
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary mt-4">Save Rate Limits</button>
+    </form>
+  </div>
+</div>
+
+{% else if tab == "notifications" %}
+<!-- Notifications -->
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">Notification Channels</h3>
+    <button class="btn btn-secondary btn-sm"
+            hx-get="/web/modals/add-notification"
+            hx-target="#modal-container"
+            hx-swap="innerHTML">Add Channel</button>
+  </div>
+  <div class="card-body no-padding">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Channel</th>
+          <th>Type</th>
+          <th>Events</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for channel in notification_channels %}
+        <tr>
+          <td class="font-semibold">{{ channel.name }}</td>
+          <td>{{ channel.channel_type }}</td>
+          <td>
+            {% for event in channel.events %}
+            <span class="badge badge-info mr-1">{{ event }}</span>
+            {% endfor %}
+          </td>
+          <td>
+            <span class="badge badge-{% if channel.enabled %}success{% else %}info{% endif %}">
+              {% if channel.enabled %}Active{% else %}Disabled{% endif %}
+            </span>
+          </td>
+          <td>
+            <div class="flex gap-2">
+              <button class="btn btn-ghost btn-sm">Edit</button>
+              <button class="btn btn-ghost btn-sm"
+                      hx-post="/api/notifications/{{ channel.id }}/test"
+                      hx-swap="none">Test</button>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<div id="connector-modal"></div>
+{% endblock %}

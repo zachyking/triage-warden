@@ -2,10 +2,12 @@
 
 use axum::{middleware, Router};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::signal;
 use tower_http::catch_panic::CatchPanicLayer;
+use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 use utoipa::OpenApi;
@@ -17,6 +19,7 @@ use crate::error::ErrorResponse;
 use crate::middleware::{cors_layer, request_id, request_logging, security_headers};
 use crate::routes;
 use crate::state::AppState;
+use crate::web;
 
 /// API server configuration.
 #[derive(Debug, Clone)]
@@ -121,8 +124,11 @@ impl ApiServer {
         // Initialize start time for uptime calculation
         routes::health::init_start_time();
 
-        // Build the main router
+        // Build the main router with API routes
         let mut app = routes::create_router(self.state.clone());
+
+        // Merge web dashboard routes
+        app = app.merge(web::create_web_router(self.state.clone()));
 
         // Add Swagger UI if enabled
         if self.config.enable_swagger {
@@ -130,6 +136,12 @@ impl ApiServer {
                 SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()),
             );
         }
+
+        // Add static file serving
+        let static_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static");
+
+        // Serve static files (CSS, JS, images)
+        app = app.nest_service("/static", ServeDir::new(static_path));
 
         // Apply middleware (order matters: innermost first)
         app

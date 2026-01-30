@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+
+{% block title %}Incidents - Triage Warden{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Incidents</h1>
+    <p class="page-subtitle">{{ total_count }} total incidents, {{ open_count }} open</p>
+  </div>
+</div>
+
+<!-- Toolbar -->
+<div class="toolbar">
+  <div class="search-box">
+    <svg class="search-box-icon" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+    </svg>
+    <input type="text"
+           name="q"
+           value="{{ query }}"
+           placeholder="Search incidents, IPs, users..."
+           hx-get="/incidents"
+           hx-trigger="input changed delay:300ms, search"
+           hx-target="#incident-list"
+           hx-select="#incident-list"
+           hx-push-url="true"
+           hx-include="[name='severity'],[name='status']">
+  </div>
+  <div class="filter-group">
+    <button class="filter-btn{% if severity_filter == "" %} active{% endif %}"
+            name="severity"
+            value=""
+            hx-get="/incidents"
+            hx-target="#incident-list"
+            hx-select="#incident-list"
+            hx-push-url="true"
+            hx-include="[name='q'],[name='status']">All</button>
+    <button class="filter-btn{% if severity_filter == "critical" %} active{% endif %}"
+            name="severity"
+            value="critical"
+            hx-get="/incidents"
+            hx-target="#incident-list"
+            hx-select="#incident-list"
+            hx-push-url="true"
+            hx-include="[name='q'],[name='status']">Critical</button>
+    <button class="filter-btn{% if severity_filter == "high" %} active{% endif %}"
+            name="severity"
+            value="high"
+            hx-get="/incidents"
+            hx-target="#incident-list"
+            hx-select="#incident-list"
+            hx-push-url="true"
+            hx-include="[name='q'],[name='status']">High</button>
+    <button class="filter-btn{% if severity_filter == "medium" %} active{% endif %}"
+            name="severity"
+            value="medium"
+            hx-get="/incidents"
+            hx-target="#incident-list"
+            hx-select="#incident-list"
+            hx-push-url="true"
+            hx-include="[name='q'],[name='status']">Medium</button>
+    <button class="filter-btn{% if severity_filter == "low" %} active{% endif %}"
+            name="severity"
+            value="low"
+            hx-get="/incidents"
+            hx-target="#incident-list"
+            hx-select="#incident-list"
+            hx-push-url="true"
+            hx-include="[name='q'],[name='status']">Low</button>
+  </div>
+</div>
+
+<!-- Status Tabs -->
+<div class="tabs">
+  <a href="/incidents?status=open" class="tab{% if status_filter == "open" || status_filter == "" %} active{% endif %}"
+     hx-get="/incidents?status=open"
+     hx-target="#incident-list"
+     hx-select="#incident-list"
+     hx-push-url="true">Open</a>
+  <a href="/incidents?status=investigating" class="tab{% if status_filter == "investigating" %} active{% endif %}"
+     hx-get="/incidents?status=investigating"
+     hx-target="#incident-list"
+     hx-select="#incident-list"
+     hx-push-url="true">Investigating</a>
+  <a href="/incidents?status=resolved" class="tab{% if status_filter == "resolved" %} active{% endif %}"
+     hx-get="/incidents?status=resolved"
+     hx-target="#incident-list"
+     hx-select="#incident-list"
+     hx-push-url="true">Resolved</a>
+  <a href="/incidents?status=all" class="tab{% if status_filter == "all" %} active{% endif %}"
+     hx-get="/incidents?status=all"
+     hx-target="#incident-list"
+     hx-select="#incident-list"
+     hx-push-url="true">All</a>
+</div>
+
+<!-- Incidents List -->
+<div class="card">
+  <div class="card-body no-padding">
+    <ul class="incident-list" id="incident-list">
+      {% for incident in incidents %}
+      {% include "partials/incident_row.html" %}
+      {% endfor %}
+      {% if incidents.is_empty() %}
+      <li class="empty-state">
+        <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <div class="empty-state-title">No incidents found</div>
+        <div class="empty-state-text">Try adjusting your filters or search query.</div>
+      </li>
+      {% endif %}
+    </ul>
+  </div>
+</div>
+
+<!-- Pagination -->
+{% if total_pages > 1 %}
+<div class="flex justify-between items-center mt-4">
+  <span class="text-muted text-sm">Page {{ page }} of {{ total_pages }}</span>
+  <div class="flex gap-2">
+    {% if page > 1 %}
+    <a href="/incidents?page={{ page - 1 }}&severity={{ severity_filter }}&status={{ status_filter }}&q={{ query }}"
+       class="btn btn-secondary"
+       hx-get="/incidents?page={{ page - 1 }}&severity={{ severity_filter }}&status={{ status_filter }}&q={{ query }}"
+       hx-target="#incident-list"
+       hx-select="#incident-list"
+       hx-push-url="true">Previous</a>
+    {% endif %}
+    {% if page < total_pages %}
+    <a href="/incidents?page={{ page + 1 }}&severity={{ severity_filter }}&status={{ status_filter }}&q={{ query }}"
+       class="btn btn-secondary"
+       hx-get="/incidents?page={{ page + 1 }}&severity={{ severity_filter }}&status={{ status_filter }}&q={{ query }}"
+       hx-target="#incident-list"
+       hx-select="#incident-list"
+       hx-push-url="true">Next</a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Update active states after HTMX swaps content
+  document.body.addEventListener('htmx:afterSwap', function(e) {
+    // Update tab active state based on URL
+    const url = new URL(window.location.href);
+    const status = url.searchParams.get('status') || 'open';
+    document.querySelectorAll('.tabs .tab').forEach(tab => {
+      const tabUrl = new URL(tab.href);
+      const tabStatus = tabUrl.searchParams.get('status') || 'open';
+      tab.classList.toggle('active', tabStatus === status);
+    });
+
+    // Update severity filter active state
+    const severity = url.searchParams.get('severity') || '';
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+      const btnValue = btn.getAttribute('value') || '';
+      btn.classList.toggle('active', btnValue === severity);
+    });
+  });
+
+  // Also handle direct clicks (for immediate feedback)
+  document.querySelectorAll('.tabs .tab').forEach(tab => {
+    tab.addEventListener('click', function() {
+      document.querySelectorAll('.tabs .tab').forEach(t => t.classList.remove('active'));
+      this.classList.add('active');
+    });
+  });
+
+  document.querySelectorAll('.filter-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+      this.classList.add('active');
+    });
+  });
+</script>
+{% endblock %}

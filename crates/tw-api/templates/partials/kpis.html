@@ -1,0 +1,24 @@
+<div class="kpi-card{% if metrics.critical_count > 0 %} critical{% endif %}">
+  <div class="kpi-label">Critical</div>
+  <div class="kpi-value">{{ metrics.critical_count }}</div>
+  <div class="kpi-trend">Require immediate action</div>
+</div>
+<div class="kpi-card">
+  <div class="kpi-label">Open Incidents</div>
+  <div class="kpi-value">{{ metrics.open_count }}</div>
+  <div class="kpi-trend">{{ metrics.high_count }} high, {{ metrics.medium_count }} medium, {{ metrics.low_count }} low</div>
+</div>
+<div class="kpi-card">
+  <div class="kpi-label">Avg Response Time</div>
+  <div class="kpi-value accent">{{ metrics.avg_response_time }}</div>
+  <div class="kpi-trend{% if metrics.response_time_trend < 0 %} positive{% else if metrics.response_time_trend > 0 %} negative{% endif %}">
+    {% if metrics.response_time_trend < 0 %}{{ metrics.response_time_trend }}%{% else if metrics.response_time_trend > 0 %}+{{ metrics.response_time_trend }}%{% else %}--{% endif %} from last week
+  </div>
+</div>
+<div class="kpi-card">
+  <div class="kpi-label">Auto-Resolved</div>
+  <div class="kpi-value">{{ metrics.auto_resolved_pct }}%</div>
+  <div class="kpi-trend{% if metrics.auto_resolved_trend > 0 %} positive{% else if metrics.auto_resolved_trend < 0 %} negative{% endif %}">
+    {% if metrics.auto_resolved_trend > 0 %}+{{ metrics.auto_resolved_trend }}%{% else if metrics.auto_resolved_trend < 0 %}{{ metrics.auto_resolved_trend }}%{% else %}--{% endif %} from last week
+  </div>
+</div>

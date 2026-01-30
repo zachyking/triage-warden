@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Triage Warden{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/main.css">
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
+  {% block head %}{% endblock %}
+</head>
+<body hx-ext="sse">
+  <!-- Top Navigation -->
+  <nav class="top-nav">
+    <a href="/" class="logo">TRIAGE_WARDEN</a>
+    <div class="nav-links">
+      <a href="/" class="nav-link{% if active_nav == "dashboard" %} active{% endif %}">Dashboard</a>
+      <a href="/incidents" class="nav-link{% if active_nav == "incidents" %} active{% endif %}">
+        Incidents
+        {% if open_count > 0 %}<span class="nav-badge">{{ open_count }}</span>{% endif %}
+      </a>
+      <a href="/approvals" class="nav-link{% if active_nav == "approvals" %} active{% endif %}">
+        Approvals
+        {% if approval_count > 0 %}<span class="nav-badge">{{ approval_count }}</span>{% endif %}
+      </a>
+      <a href="/playbooks" class="nav-link{% if active_nav == "playbooks" %} active{% endif %}">Playbooks</a>
+      <a href="/settings" class="nav-link{% if active_nav == "settings" %} active{% endif %}">Settings</a>
+    </div>
+    <div class="nav-right">
+      <div class="system-status">
+        <span class="status-dot{% if system_healthy %} healthy{% else %} unhealthy{% endif %}"></span>
+        <span class="status-text">{% if system_healthy %}Healthy{% else %}Degraded{% endif %}</span>
+      </div>
+    </div>
+  </nav>
+
+  {% if critical_count > 0 %}
+  <div class="alert-banner">
+    <svg class="alert-banner-icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+    </svg>
+    <span class="alert-banner-text"><strong>{{ critical_count }} critical incident{% if critical_count != 1 %}s{% endif %}</strong> require{% if critical_count == 1 %}s{% endif %} immediate attention</span>
+    <a href="/incidents?severity=critical" class="alert-banner-link">View Critical &rarr;</a>
+  </div>
+  {% endif %}
+
+  <div class="container">
+    {% block content %}{% endblock %}
+  </div>
+
+  <!-- Modal Container (HTMX will inject modals here) -->
+  <div id="modal-container"></div>
+
+  <!-- Toast Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Toast & Modal Scripts -->
+  <script>
+    // Toast management
+    window.showToast = function(type, title, message, duration = 5000) {
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      toast.className = 'toast';
+      toast.innerHTML = `
+        <svg class="toast-icon ${type}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          ${type === 'success' ? '<path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>' : ''}
+          ${type === 'error' ? '<path d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/>' : ''}
+          ${type === 'warning' ? '<path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>' : ''}
+          ${type === 'info' ? '<path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>' : ''}
+        </svg>
+        <div class="toast-content">
+          <div class="toast-title">${title}</div>
+          ${message ? `<div class="toast-message">${message}</div>` : ''}
+        </div>
+        <button class="toast-close" onclick="this.parentElement.classList.add('removing'); setTimeout(() => this.parentElement.remove(), 200);">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+        <div class="toast-progress"></div>
+      `;
+      container.appendChild(toast);
+
+      // Auto-remove
+      setTimeout(() => {
+        toast.classList.add('removing');
+        setTimeout(() => toast.remove(), 200);
+      }, duration);
+    };
+
+    // Close modal on backdrop click or escape
+    document.addEventListener('click', function(e) {
+      if (e.target.classList.contains('modal-backdrop')) {
+        e.target.remove();
+      }
+    });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') {
+        document.querySelector('.modal-backdrop')?.remove();
+      }
+    });
+
+    // HTMX event handlers for toast notifications
+    document.body.addEventListener('showToast', function(e) {
+      const { type, title, message } = e.detail;
+      showToast(type, title, message);
+    });
+
+    // Handle HTMX response headers for toasts
+    document.body.addEventListener('htmx:afterRequest', function(e) {
+      const xhr = e.detail.xhr;
+      if (xhr) {
+        const toastHeader = xhr.getResponseHeader('HX-Trigger');
+        if (toastHeader) {
+          try {
+            const triggers = JSON.parse(toastHeader);
+            if (triggers.showToast) {
+              const { type, title, message } = triggers.showToast;
+              showToast(type, title, message);
+            }
+          } catch {}
+        }
+      }
+    });
+  </script>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>

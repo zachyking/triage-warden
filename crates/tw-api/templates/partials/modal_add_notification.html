@@ -1,0 +1,168 @@
+<div class="modal-backdrop" id="add-notification-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 class="modal-title">Add Notification Channel</h2>
+      <button class="modal-close" onclick="this.closest('.modal-backdrop').remove()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <form hx-post="/api/notifications" hx-swap="none" hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); htmx.trigger(document.body, 'showToast', {detail: {type: 'success', title: 'Channel Added', message: 'Notification channel has been configured.'}}); location.reload(); }">
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Channel Type</label>
+          <select name="channel_type" class="form-input form-select" required onchange="updateNotificationFields(this.value)">
+            <option value="">Select channel type...</option>
+            <option value="slack">Slack</option>
+            <option value="teams">Microsoft Teams</option>
+            <option value="email">Email</option>
+            <option value="pagerduty">PagerDuty</option>
+            <option value="webhook">Generic Webhook</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Channel Name</label>
+          <input type="text" name="name" class="form-input" placeholder="e.g., SOC Alerts Slack" required>
+        </div>
+
+        <div id="notification-fields">
+          <div class="form-group">
+            <label class="form-label">Webhook URL</label>
+            <input type="url" name="webhook_url" class="form-input" placeholder="https://hooks.example.com/...">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Trigger Events</label>
+          <div class="grid grid-2 gap-2 mt-2">
+            <label class="flex items-center gap-2">
+              <input type="checkbox" name="events[]" value="critical_incident" checked>
+              <span class="text-sm">Critical Incidents</span>
+            </label>
+            <label class="flex items-center gap-2">
+              <input type="checkbox" name="events[]" value="approval_needed" checked>
+              <span class="text-sm">Approval Needed</span>
+            </label>
+            <label class="flex items-center gap-2">
+              <input type="checkbox" name="events[]" value="action_executed">
+              <span class="text-sm">Action Executed</span>
+            </label>
+            <label class="flex items-center gap-2">
+              <input type="checkbox" name="events[]" value="playbook_failed">
+              <span class="text-sm">Playbook Failed</span>
+            </label>
+            <label class="flex items-center gap-2">
+              <input type="checkbox" name="events[]" value="connector_error">
+              <span class="text-sm">Connector Error</span>
+            </label>
+            <label class="flex items-center gap-2">
+              <input type="checkbox" name="events[]" value="system_health">
+              <span class="text-sm">System Health</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group mt-4">
+          <div class="flex items-center gap-3">
+            <label class="switch">
+              <input type="checkbox" name="enabled" checked>
+              <span class="switch-track"></span>
+              <span class="switch-thumb"></span>
+            </label>
+            <span class="text-sm">Enable notifications</span>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-ghost" onclick="this.closest('.modal-backdrop').remove()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Add Channel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+function updateNotificationFields(type) {
+  const container = document.getElementById('notification-fields');
+  let fields = '';
+
+  switch(type) {
+    case 'slack':
+      fields = `
+        <div class="form-group">
+          <label class="form-label">Slack Webhook URL</label>
+          <input type="url" name="webhook_url" class="form-input" placeholder="https://hooks.slack.com/services/..." required>
+          <p class="text-xs text-muted mt-1">Create an incoming webhook in your Slack workspace</p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Channel (optional)</label>
+          <input type="text" name="channel" class="form-input" placeholder="#security-alerts">
+        </div>
+      `;
+      break;
+
+    case 'teams':
+      fields = `
+        <div class="form-group">
+          <label class="form-label">Teams Webhook URL</label>
+          <input type="url" name="webhook_url" class="form-input" placeholder="https://outlook.office.com/webhook/..." required>
+          <p class="text-xs text-muted mt-1">Configure an incoming webhook connector in your Teams channel</p>
+        </div>
+      `;
+      break;
+
+    case 'email':
+      fields = `
+        <div class="form-group">
+          <label class="form-label">Recipients</label>
+          <input type="text" name="recipients" class="form-input" placeholder="soc@company.com, alerts@company.com" required>
+          <p class="text-xs text-muted mt-1">Comma-separated email addresses</p>
+        </div>
+        <div class="grid grid-2 gap-4">
+          <div class="form-group">
+            <label class="form-label">SMTP Host</label>
+            <input type="text" name="smtp_host" class="form-input" placeholder="smtp.company.com">
+          </div>
+          <div class="form-group">
+            <label class="form-label">SMTP Port</label>
+            <input type="number" name="smtp_port" class="form-input" value="587">
+          </div>
+        </div>
+      `;
+      break;
+
+    case 'pagerduty':
+      fields = `
+        <div class="form-group">
+          <label class="form-label">PagerDuty Integration Key</label>
+          <input type="password" name="integration_key" class="form-input" placeholder="Events API v2 Integration Key" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Severity Mapping</label>
+          <select name="pd_severity" class="form-input form-select">
+            <option value="critical">Critical incidents -> PD Critical</option>
+            <option value="warning">Critical incidents -> PD Warning</option>
+          </select>
+        </div>
+      `;
+      break;
+
+    case 'webhook':
+    default:
+      fields = `
+        <div class="form-group">
+          <label class="form-label">Webhook URL</label>
+          <input type="url" name="webhook_url" class="form-input" placeholder="https://api.example.com/webhook" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Authentication Header (optional)</label>
+          <input type="password" name="auth_header" class="form-input" placeholder="Bearer token or API key">
+        </div>
+      `;
+  }
+
+  container.innerHTML = fields;
+}
+</script>

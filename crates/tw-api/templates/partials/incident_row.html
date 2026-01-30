@@ -1,0 +1,27 @@
+<li class="incident-item{% if incident.severity == "critical" %} critical{% endif %}"
+    hx-get="/incidents/{{ incident.id }}"
+    hx-push-url="true"
+    hx-target="body">
+  <div class="severity-dot {{ incident.severity }}"></div>
+  <div class="incident-info">
+    <div class="incident-title">{{ incident.title }}</div>
+    <div class="incident-meta">
+      {% if let Some(hostname) = incident.hostname %}{{ hostname }} &bull; {% endif %}
+      {% if let Some(username) = incident.username %}{{ username }} &bull; {% endif %}
+      {{ incident.source }}
+    </div>
+  </div>
+  <div class="incident-time">{{ incident.time_ago }}</div>
+  <div class="incident-actions">
+    <button class="btn btn-primary"
+            hx-get="/incidents/{{ incident.id }}"
+            hx-push-url="true"
+            hx-target="body"
+            onclick="event.stopPropagation()">Investigate</button>
+    <button class="btn btn-ghost"
+            hx-post="/api/incidents/{{ incident.id }}/dismiss"
+            hx-swap="outerHTML"
+            hx-target="closest .incident-item"
+            onclick="event.stopPropagation()">Dismiss</button>
+  </div>
+</li>
