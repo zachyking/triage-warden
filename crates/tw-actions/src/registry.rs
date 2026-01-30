@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, info, instrument};
 use uuid::Uuid;
 
 /// Errors that can occur during action execution.
@@ -207,7 +207,7 @@ pub trait Action: Send + Sync {
     /// Rolls back the action (if supported).
     async fn rollback(
         &self,
-        rollback_data: serde_json::Value,
+        _rollback_data: serde_json::Value,
     ) -> Result<ActionResult, ActionError> {
         Err(ActionError::NotSupported(format!(
             "Rollback not supported for action: {}",

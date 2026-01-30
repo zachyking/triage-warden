@@ -11,10 +11,10 @@ use uuid::Uuid;
 use validator::Validate;
 
 use crate::dto::{
-    ActionExecutionResponse, ActionResponse, ActionTargetDto, AnalysisResponse,
-    ApproveActionRequest, AuditEntryResponse, EnrichmentResponse, ExecuteActionRequest,
-    IncidentDetailResponse, IncidentResponse, IoCResponse, ListIncidentsQuery,
-    MitreTechniqueResponse, PaginatedResponse, PaginationInfo,
+    ActionExecutionResponse, ActionResponse, AnalysisResponse, ApproveActionRequest,
+    AuditEntryResponse, EnrichmentResponse, ExecuteActionRequest, IncidentDetailResponse,
+    IncidentResponse, IoCResponse, ListIncidentsQuery, MitreTechniqueResponse, PaginatedResponse,
+    PaginationInfo,
 };
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -172,7 +172,7 @@ async fn execute_action(
     let parameters = request
         .parameters
         .and_then(|p| p.as_object().cloned())
-        .map(|obj| obj.into_iter().map(|(k, v)| (k, v)).collect())
+        .map(|obj| obj.into_iter().collect())
         .unwrap_or_default();
 
     // TODO: Evaluate policy engine

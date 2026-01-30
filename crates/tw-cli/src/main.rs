@@ -2,7 +2,7 @@
 //!
 //! Command-line interface for the Triage Warden SOC automation system.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use std::path::PathBuf;
@@ -523,7 +523,7 @@ async fn cmd_incident(action: IncidentCommands, format: OutputFormat, api_url: &
 async fn cmd_connector(
     action: ConnectorCommands,
     config: AppConfig,
-    format: OutputFormat,
+    _format: OutputFormat,
 ) -> Result<()> {
     match action {
         ConnectorCommands::List => {
@@ -569,7 +569,11 @@ async fn cmd_connector(
     Ok(())
 }
 
-async fn cmd_action(action: ActionCommands, config: AppConfig, format: OutputFormat) -> Result<()> {
+async fn cmd_action(
+    action: ActionCommands,
+    _config: AppConfig,
+    _format: OutputFormat,
+) -> Result<()> {
     match action {
         ActionCommands::List => {
             println!("{}", "Available Actions".bold());
@@ -670,7 +674,7 @@ async fn cmd_metrics(format: OutputFormat, api_url: &str) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_test(config: AppConfig, alert_type: &str, dry_run: bool) -> Result<()> {
+async fn cmd_test(_config: AppConfig, alert_type: &str, dry_run: bool) -> Result<()> {
     println!("{}", "Running Test".bold());
     println!("────────────");
     println!("Alert Type: {}", alert_type.cyan());

@@ -118,7 +118,7 @@ impl IncidentRepository for SqliteIncidentRepository {
         let analysis = incident
             .analysis
             .as_ref()
-            .map(|a| serde_json::to_string(a))
+            .map(serde_json::to_string)
             .transpose()?;
         let proposed_actions = serde_json::to_string(&incident.proposed_actions)?;
         let tags = serde_json::to_string(&incident.tags)?;
@@ -343,7 +343,7 @@ impl IncidentRepository for SqliteIncidentRepository {
         let analysis = incident
             .analysis
             .as_ref()
-            .map(|a| serde_json::to_string(a))
+            .map(serde_json::to_string)
             .transpose()?;
         let proposed_actions = serde_json::to_string(&incident.proposed_actions)?;
         let tags = serde_json::to_string(&incident.tags)?;
@@ -422,7 +422,7 @@ impl IncidentRepository for PgIncidentRepository {
         .bind(&status)
         .bind(&incident.alert_data)
         .bind(serde_json::to_value(&incident.enrichments)?)
-        .bind(incident.analysis.as_ref().map(|a| serde_json::to_value(a)).transpose()?)
+        .bind(incident.analysis.as_ref().map(serde_json::to_value).transpose()?)
         .bind(serde_json::to_value(&incident.proposed_actions)?)
         .bind(&incident.ticket_id)
         .bind(serde_json::to_value(&incident.tags)?)
@@ -547,8 +547,7 @@ impl IncidentRepository for PgIncidentRepository {
             update
                 .tags
                 .as_ref()
-                .map(|t| serde_json::to_value(t).ok())
-                .flatten(),
+                .and_then(|t| serde_json::to_value(t).ok()),
         )
         .execute(&self.pool)
         .await?;
@@ -583,7 +582,7 @@ impl IncidentRepository for PgIncidentRepository {
             incident
                 .analysis
                 .as_ref()
-                .map(|a| serde_json::to_value(a))
+                .map(serde_json::to_value)
                 .transpose()?,
         )
         .bind(serde_json::to_value(&incident.proposed_actions)?)
@@ -640,9 +639,6 @@ impl TryFrom<IncidentRow> for Incident {
     type Error = DbError;
 
     fn try_from(row: IncidentRow) -> Result<Self, Self::Error> {
-        use crate::incident::{AlertSource, AuditEntry};
-        use std::collections::HashMap;
-
         Ok(Incident {
             id: Uuid::parse_str(&row.id).map_err(|e| DbError::Serialization(e.to_string()))?,
             source: serde_json::from_str(&row.source)?,
@@ -689,8 +685,6 @@ impl TryFrom<PgIncidentRow> for Incident {
     type Error = DbError;
 
     fn try_from(row: PgIncidentRow) -> Result<Self, Self::Error> {
-        use std::collections::HashMap;
-
         // Parse severity from string
         let severity = match row.severity.as_str() {
             "info" => Severity::Info,
@@ -733,10 +727,7 @@ impl TryFrom<PgIncidentRow> for Incident {
             status,
             alert_data: row.alert_data,
             enrichments: serde_json::from_value(row.enrichments)?,
-            analysis: row
-                .analysis
-                .map(|a| serde_json::from_value(a))
-                .transpose()?,
+            analysis: row.analysis.map(serde_json::from_value).transpose()?,
             proposed_actions: serde_json::from_value(row.proposed_actions)?,
             audit_log: Vec::new(),
             created_at: row.created_at,

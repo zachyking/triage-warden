@@ -18,9 +18,10 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 
 /// Behavior configuration for failure injection.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum MockBehavior {
     /// Return results normally.
+    #[default]
     Normal,
     /// Fail with a specific error after N calls.
     FailAfter { calls: u64, error: ConnectorError },
@@ -35,12 +36,6 @@ pub enum MockBehavior {
     AlwaysFail(ConnectorError),
     /// Simulate being unhealthy.
     Unhealthy(String),
-}
-
-impl Default for MockBehavior {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 /// Mock threat intelligence connector for testing.

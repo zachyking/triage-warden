@@ -42,20 +42,15 @@ pub enum OrchestratorError {
 }
 
 /// Operation mode for the orchestrator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OperationMode {
     /// AI observes and suggests only - no automated actions.
     Assisted,
     /// Low-risk actions are automated, high-risk requires approval.
+    #[default]
     Supervised,
     /// Full automation for configured incident types.
     Autonomous,
-}
-
-impl Default for OperationMode {
-    fn default() -> Self {
-        Self::Supervised
-    }
 }
 
 /// Configuration for the orchestrator.

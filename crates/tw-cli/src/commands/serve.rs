@@ -4,7 +4,6 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use std::net::SocketAddr;
 use std::time::Duration;
-use tracing::info;
 
 use tw_api::{ApiServer, ApiServerConfig, AppState};
 use tw_core::db::{create_pool, run_migrations};

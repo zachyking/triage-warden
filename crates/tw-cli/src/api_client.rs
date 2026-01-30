@@ -13,6 +13,7 @@ pub struct ApiClient {
     base_url: String,
 }
 
+#[allow(dead_code)]
 impl ApiClient {
     /// Creates a new API client.
     pub fn new(base_url: &str) -> Result<Self> {
@@ -159,6 +160,7 @@ pub struct ListIncidentsParams {
     pub per_page: Option<u32>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HealthResponse {
     pub status: String,
@@ -167,6 +169,7 @@ pub struct HealthResponse {
     pub uptime_seconds: u64,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DatabaseHealth {
     pub connected: bool,
@@ -237,6 +240,7 @@ pub struct AuditEntry {
     pub timestamp: DateTime<Utc>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExecuteActionRequest {
     pub action_type: String,
@@ -248,6 +252,7 @@ pub struct ExecuteActionRequest {
     pub skip_policy_check: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ApproveActionRequest {
     pub action_id: Uuid,
@@ -256,6 +261,7 @@ pub struct ApproveActionRequest {
     pub reason: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ActionExecutionResponse {
     pub action_id: Uuid,

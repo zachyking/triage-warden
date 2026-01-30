@@ -370,7 +370,7 @@ impl EDRConnector for CrowdStrikeConnector {
         });
 
         let path = "/devices/entities/devices-actions/v2?action_name=contain";
-        let response = self.client.post(&path, &body).await?;
+        let response = self.client.post(path, &body).await?;
 
         if !response.status().is_success() {
             let error = response.text().await.unwrap_or_default();
@@ -399,7 +399,7 @@ impl EDRConnector for CrowdStrikeConnector {
         });
 
         let path = "/devices/entities/devices-actions/v2?action_name=lift_containment";
-        let response = self.client.post(&path, &body).await?;
+        let response = self.client.post(path, &body).await?;
 
         if !response.status().is_success() {
             let error = response.text().await.unwrap_or_default();

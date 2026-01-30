@@ -7,8 +7,6 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use chrono::Utc;
-use uuid::Uuid;
 use validator::Validate;
 
 use crate::dto::{WebhookAcceptedResponse, WebhookAlertPayload};

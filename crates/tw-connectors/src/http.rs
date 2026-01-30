@@ -420,7 +420,7 @@ fn rand_jitter() -> Duration {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     std::time::Instant::now().hash(&mut hasher);
-    let jitter_ms = (hasher.finish() % 100) as u64;
+    let jitter_ms = hasher.finish() % 100;
     Duration::from_millis(jitter_ms)
 }
 

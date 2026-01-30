@@ -32,6 +32,7 @@ pub async fn run_migrations(_pool: &DbPool) -> Result<(), DbError> {
 }
 
 /// SQL statements for creating the schema (used for documentation and manual setup).
+#[allow(dead_code)]
 pub mod sql {
     /// SQL to create the incidents table.
     pub const CREATE_INCIDENTS_TABLE: &str = r#"

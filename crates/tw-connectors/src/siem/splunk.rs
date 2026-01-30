@@ -277,7 +277,7 @@ impl SplunkConnector {
                 let timestamp = r
                     .get("_time")
                     .and_then(|v| v.as_str())
-                    .and_then(|s| parse_splunk_time(s))
+                    .and_then(parse_splunk_time)
                     .unwrap_or_else(Utc::now);
 
                 let raw = r

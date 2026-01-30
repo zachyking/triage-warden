@@ -1,9 +1,8 @@
 //! HTTP middleware for the API server.
 
 use axum::{
-    body::Body,
     extract::Request,
-    http::{header, HeaderValue, StatusCode},
+    http::{header, HeaderValue},
     middleware::Next,
     response::Response,
 };

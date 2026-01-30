@@ -344,9 +344,8 @@ impl VirusTotalConnector {
 
         if ratio > 0.5 {
             ThreatVerdict::Malicious
-        } else if ratio > 0.1 {
-            ThreatVerdict::Suspicious
-        } else if malicious > 0 {
+        } else if ratio > 0.1 || malicious > 0 {
+            // Suspicious if more than 10% flagged it, or any vendor flagged it as malicious
             ThreatVerdict::Suspicious
         } else {
             ThreatVerdict::Clean

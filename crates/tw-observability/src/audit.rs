@@ -187,6 +187,7 @@ impl AuditLog {
     }
 
     /// Logs an action event.
+    #[allow(clippy::too_many_arguments)]
     pub async fn log_action_event(
         &self,
         event_type: AuditEventType,

@@ -1,7 +1,7 @@
 //! Audit log repository for database operations.
 
 use super::{DbError, DbPool};
-use crate::incident::{AuditAction, AuditEntry};
+use crate::incident::AuditEntry;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -52,7 +52,7 @@ impl AuditRepository for SqliteAuditRepository {
         let details = entry
             .details
             .as_ref()
-            .map(|d| serde_json::to_string(d))
+            .map(serde_json::to_string)
             .transpose()?;
         let created_at = entry.timestamp.to_rfc3339();
 
@@ -84,7 +84,7 @@ impl AuditRepository for SqliteAuditRepository {
             let details = entry
                 .details
                 .as_ref()
-                .map(|d| serde_json::to_string(d))
+                .map(serde_json::to_string)
                 .transpose()?;
             let created_at = entry.timestamp.to_rfc3339();
 

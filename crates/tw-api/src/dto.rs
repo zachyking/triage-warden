@@ -6,9 +6,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 use validator::Validate;
 
-use tw_core::incident::{
-    ActionTarget, ActionType, ApprovalStatus, IncidentStatus, Severity, TriageVerdict,
-};
+use tw_core::incident::ActionTarget;
 
 // ============================================================================
 // Incident DTOs

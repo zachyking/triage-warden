@@ -109,6 +109,7 @@ pub struct ApprovalRequest {
 
 impl ApprovalRequest {
     /// Creates a new approval request.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         incident_id: Uuid,
         action_id: Uuid,
@@ -222,6 +223,7 @@ impl ApprovalWorkflow {
     }
 
     /// Creates a new approval request.
+    #[allow(clippy::too_many_arguments)]
     #[instrument(skip(self))]
     pub async fn create_request(
         &self,
@@ -472,13 +474,14 @@ impl ApprovalWorkflow {
         let mut expired = Vec::new();
 
         for request in requests.values_mut() {
-            if request.status == ApprovalStatus::Pending && request.is_expired() {
-                if self.config.auto_deny_on_expiration {
-                    request.status = ApprovalStatus::Expired;
-                    request.approver_comment = Some("Auto-expired".to_string());
-                    expired.push(request.clone());
-                    warn!("Request {} auto-expired", request.id);
-                }
+            if request.status == ApprovalStatus::Pending
+                && request.is_expired()
+                && self.config.auto_deny_on_expiration
+            {
+                request.status = ApprovalStatus::Expired;
+                request.approver_comment = Some("Auto-expired".to_string());
+                expired.push(request.clone());
+                warn!("Request {} auto-expired", request.id);
             }
         }
 

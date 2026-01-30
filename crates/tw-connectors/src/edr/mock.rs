@@ -16,9 +16,10 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Behavior configuration for failure injection.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum MockBehavior {
     /// Normal operation.
+    #[default]
     Normal,
     /// Fail isolation operations.
     FailIsolation(ConnectorError),
@@ -28,12 +29,6 @@ pub enum MockBehavior {
     AlwaysFail(ConnectorError),
     /// Unhealthy status.
     Unhealthy(String),
-}
-
-impl Default for MockBehavior {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 /// Record of an action for test verification.

@@ -77,6 +77,7 @@ impl AppConfig {
     }
 
     /// Saves configuration to a file.
+    #[allow(dead_code)]
     pub fn save(&self, path: &Path) -> Result<()> {
         let contents = serde_yaml::to_string(self)?;
         std::fs::write(path, contents)?;

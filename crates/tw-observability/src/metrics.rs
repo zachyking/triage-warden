@@ -39,12 +39,16 @@ struct IncidentTiming {
     responded_at: Option<DateTime<Utc>>,
 }
 
+/// Historical KPI record type.
+type KpiHistory = Vec<(DateTime<Utc>, KPIs)>;
+
 /// Metrics collector for the triage system.
 pub struct MetricsCollector {
     /// Incident timing data for KPI calculation.
     incident_timings: Arc<RwLock<HashMap<uuid::Uuid, IncidentTiming>>>,
-    /// Historical KPI data.
-    kpi_history: Arc<RwLock<Vec<(DateTime<Utc>, KPIs)>>>,
+    /// Historical KPI data (for future trend analysis).
+    #[allow(dead_code)]
+    kpi_history: Arc<RwLock<KpiHistory>>,
     /// Auto-resolved count.
     auto_resolved: Arc<RwLock<u64>>,
     /// Override count.
