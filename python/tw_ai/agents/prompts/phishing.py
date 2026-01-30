@@ -240,25 +240,21 @@ def get_phishing_triage_prompt(
     prompt_parts = [PHISHING_PROMPT]
 
     if organization_context:
-        prompt_parts.append(
-            f"""## Organization Context
+        prompt_parts.append(f"""## Organization Context
 
-{organization_context}"""
-        )
+{organization_context}""")
 
     if not include_examples:
         # Remove examples section if not wanted (already in PHISHING_PROMPT)
         # For production, examples are usually helpful, so default is True
         pass
 
-    prompt_parts.append(
-        f"""## Alert to Analyze
+    prompt_parts.append(f"""## Alert to Analyze
 
 {alert_context}
 
 Analyze this alert following the methodology above. Gather additional evidence using the available \
-tools as needed, then provide your structured assessment."""
-    )
+tools as needed, then provide your structured assessment.""")
 
     return "\n\n".join(prompt_parts)
 

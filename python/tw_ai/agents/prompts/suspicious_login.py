@@ -362,21 +362,17 @@ def get_suspicious_login_triage_prompt(
     prompt_parts = [SUSPICIOUS_LOGIN_PROMPT]
 
     if organization_context:
-        prompt_parts.append(
-            f"""## Organization Context
+        prompt_parts.append(f"""## Organization Context
 
-{organization_context}"""
-        )
+{organization_context}""")
 
-    prompt_parts.append(
-        f"""## Alert to Analyze
+    prompt_parts.append(f"""## Alert to Analyze
 
 {alert_context}
 
 Analyze this authentication alert following the methodology above. Gather additional evidence using \
 the available tools as needed (SIEM correlation for related events, user context), then provide your \
-structured assessment."""
-    )
+structured assessment.""")
 
     return "\n\n".join(prompt_parts)
 

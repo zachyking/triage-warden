@@ -287,8 +287,7 @@ def get_base_system_prompt(
         sections.append(CONFIDENCE_SCORING_CRITERIA)
 
     # Always include output schema
-    sections.append(
-        f"""## Required Output Format
+    sections.append(f"""## Required Output Format
 
 You MUST respond with a JSON object matching this schema:
 
@@ -301,8 +300,7 @@ Important:
 - Confidence must be an integer between 0 and 100
 - Include at least one recommended action
 - Your reasoning should explain your thought process step by step
-- Map to MITRE ATT&CK techniques when applicable"""
-    )
+- Map to MITRE ATT&CK techniques when applicable""")
 
     if custom_context:
         sections.append(f"## Additional Context\n\n{custom_context}")
