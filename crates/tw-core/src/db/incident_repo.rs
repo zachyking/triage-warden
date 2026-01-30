@@ -133,10 +133,10 @@ impl IncidentRepository for SqliteIncidentRepository {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
-        .bind(&id)
-        .bind(&source)
-        .bind(&severity)
-        .bind(&status)
+        .bind(id)
+        .bind(source)
+        .bind(severity)
+        .bind(status)
         .bind(&alert_data)
         .bind(&enrichments)
         .bind(&analysis)
@@ -353,9 +353,9 @@ impl IncidentRepository for SqliteIncidentRepository {
             WHERE id = ?
             "#,
         )
-        .bind(&source)
-        .bind(&severity)
-        .bind(&status)
+        .bind(source)
+        .bind(severity)
+        .bind(status)
         .bind(&alert_data)
         .bind(&enrichments)
         .bind(&analysis)

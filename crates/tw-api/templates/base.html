@@ -108,22 +108,6 @@
       showToast(type, title, message);
     });
 
-    // Handle HTMX response headers for toasts
-    document.body.addEventListener('htmx:afterRequest', function(e) {
-      const xhr = e.detail.xhr;
-      if (xhr) {
-        const toastHeader = xhr.getResponseHeader('HX-Trigger');
-        if (toastHeader) {
-          try {
-            const triggers = JSON.parse(toastHeader);
-            if (triggers.showToast) {
-              const { type, title, message } = triggers.showToast;
-              showToast(type, title, message);
-            }
-          } catch {}
-        }
-      }
-    });
   </script>
 
   {% block scripts %}{% endblock %}

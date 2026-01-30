@@ -63,8 +63,7 @@
                       hx-post="/api/incidents/{{ action.incident_id }}/approve"
                       hx-vals='{"action_id": "{{ action.id }}", "approved": true}'
                       hx-target="#action-{{ action.id }}"
-                      hx-swap="outerHTML"
-                      hx-on::after-request="if(event.detail.successful) showToast('success', 'Action Approved', 'The action has been approved and will execute shortly.')">
+                      hx-swap="outerHTML">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M5 13l4 4L19 7"/>
                 </svg>
@@ -74,8 +73,7 @@
                       hx-post="/api/incidents/{{ action.incident_id }}/approve"
                       hx-vals='{"action_id": "{{ action.id }}", "approved": false}'
                       hx-target="#action-{{ action.id }}"
-                      hx-swap="outerHTML"
-                      hx-on::after-request="if(event.detail.successful) showToast('info', 'Action Rejected', 'The action has been rejected.')">
+                      hx-swap="outerHTML">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M6 18L18 6M6 6l12 12"/>
                 </svg>

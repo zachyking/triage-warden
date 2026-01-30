@@ -181,10 +181,7 @@ async fn incidents_list(
 }
 
 /// Incident detail page.
-async fn incident_detail(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> impl IntoResponse {
+async fn incident_detail(State(state): State<AppState>, Path(id): Path<Uuid>) -> impl IntoResponse {
     let repo = create_incident_repository(&state.db);
     let audit_repo = create_audit_repository(&state.db);
 

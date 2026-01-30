@@ -233,31 +233,61 @@ async fn execute_action(
 async fn approve_action(
     State(state): State<AppState>,
     Path(incident_id): Path<Uuid>,
-    Json(request): Json<ApproveActionRequest>,
-) -> Result<Json<ActionExecutionResponse>, ApiError> {
+    axum::Form(request): axum::Form<ApproveActionRequest>,
+) -> Result<axum::response::Response, ApiError> {
+    use axum::response::IntoResponse;
+
     request.validate()?;
 
     let incident_repo: Box<dyn IncidentRepository> = create_incident_repository(&state.db);
 
     // Verify incident exists
-    let incident: Incident = incident_repo
+    let mut incident: Incident = incident_repo
         .get(incident_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Incident {} not found", incident_id)))?;
 
-    // Find the action
-    let action = incident
+    // Find and update the action
+    let action_idx = incident
         .proposed_actions
         .iter()
-        .find(|a| a.id == request.action_id)
+        .position(|a| a.id == request.action_id)
         .ok_or_else(|| ApiError::NotFound(format!("Action {} not found", request.action_id)))?;
 
-    if action.approval_status != ApprovalStatus::Pending {
+    if incident.proposed_actions[action_idx].approval_status != ApprovalStatus::Pending {
         return Err(ApiError::BadRequest(format!(
             "Action is not pending approval (current status: {:?})",
-            action.approval_status
+            incident.proposed_actions[action_idx].approval_status
         )));
     }
+
+    // Update the action's approval status
+    let new_status = if request.approved {
+        ApprovalStatus::Approved
+    } else {
+        ApprovalStatus::Denied
+    };
+
+    incident.proposed_actions[action_idx].approval_status = new_status;
+    incident.proposed_actions[action_idx].approved_by = Some("api_user".to_string());
+    incident.proposed_actions[action_idx].approval_timestamp = Some(Utc::now());
+
+    // If no more pending actions, update incident status
+    let has_pending = incident
+        .proposed_actions
+        .iter()
+        .any(|a| a.approval_status == ApprovalStatus::Pending);
+
+    if !has_pending {
+        incident.status = if request.approved {
+            tw_core::incident::IncidentStatus::Executing
+        } else {
+            tw_core::incident::IncidentStatus::PendingReview
+        };
+    }
+
+    // Save to database
+    incident_repo.save(&incident).await?;
 
     // Publish approval event
     if request.approved {
@@ -266,7 +296,7 @@ async fn approve_action(
             .publish(tw_core::TriageEvent::ActionApproved {
                 incident_id,
                 action_id: request.action_id,
-                approved_by: "api_user".to_string(), // TODO: Get from auth
+                approved_by: "api_user".to_string(),
             })
             .await;
     } else {
@@ -283,21 +313,35 @@ async fn approve_action(
             .await;
     }
 
-    let status = if request.approved {
-        "approved"
+    // Return empty response with HX-Trigger for toast
+    let toast_type = if request.approved { "success" } else { "info" };
+    let toast_title = if request.approved {
+        "Action Approved"
     } else {
-        "denied"
+        "Action Rejected"
+    };
+    let toast_message = if request.approved {
+        "The action has been approved and will execute shortly."
+    } else {
+        "The action has been rejected."
     };
 
-    Ok(Json(ActionExecutionResponse {
-        action_id: request.action_id,
-        incident_id,
-        action_type: format!("{}", action.action_type),
-        status: status.to_string(),
-        message: format!("Action {}", status),
-        result: None,
-        executed_at: Utc::now(),
-    }))
+    let trigger_json = serde_json::json!({
+        "showToast": {
+            "type": toast_type,
+            "title": toast_title,
+            "message": toast_message
+        }
+    });
+
+    Ok((
+        [(
+            axum::http::header::HeaderName::from_static("hx-trigger"),
+            trigger_json.to_string(),
+        )],
+        "",
+    )
+        .into_response())
 }
 
 // Helper functions

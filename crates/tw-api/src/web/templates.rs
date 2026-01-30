@@ -235,6 +235,7 @@ pub struct ConnectorData {
     pub last_check: Option<String>,
 }
 
+#[allow(dead_code)]
 pub struct PolicyData {
     pub id: Uuid,
     pub name: String,
@@ -269,7 +270,8 @@ pub struct KpisPartialTemplate {
 
 /// Template for rendering a list of incidents (used by HTMX partials).
 #[derive(Template)]
-#[template(source = r#"{% for incident in incidents %}
+#[template(
+    source = r#"{% for incident in incidents %}
 <li class="incident-item{% if incident.severity == "critical" %} critical{% endif %}"
     hx-get="/incidents/{{ incident.id }}"
     hx-push-url="true"
@@ -306,7 +308,9 @@ pub struct KpisPartialTemplate {
   <div class="empty-state-title">No incidents found</div>
   <div class="empty-state-text">Try adjusting your filters.</div>
 </li>
-{% endif %}"#, ext = "html")]
+{% endif %}"#,
+    ext = "html"
+)]
 pub struct IncidentsPartialTemplate {
     pub incidents: Vec<IncidentRow>,
 }
