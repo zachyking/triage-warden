@@ -1,0 +1,39 @@
+{% for policy in policies %}
+<tr id="policy-row-{{ policy.id }}">
+  <td class="font-semibold">{{ policy.name }}</td>
+  <td class="text-sm text-muted">{{ policy.condition }}</td>
+  <td>
+    <span class="badge badge-info">{{ policy.requires }}</span>
+  </td>
+  <td>
+    <label class="switch" title="Toggle policy status">
+      <input type="checkbox" {% if policy.enabled %}checked{% endif %}
+             hx-post="/api/policies/{{ policy.id }}/toggle"
+             hx-swap="none"
+             hx-on::after-request="if(event.detail.successful) { showToast('success', 'Policy Updated', 'Policy status has been toggled.'); htmx.ajax('GET', '/web/partials/policies', {target: '#policies-table-body', swap: 'innerHTML'}); }">
+      <span class="switch-track"></span>
+      <span class="switch-thumb"></span>
+    </label>
+  </td>
+  <td>
+    <div class="flex gap-2">
+      <button class="btn btn-ghost btn-sm"
+              hx-get="/web/modals/edit-policy/{{ policy.id }}"
+              hx-target="#modal-container"
+              hx-swap="innerHTML">Edit</button>
+      <button class="btn btn-ghost btn-sm text-critical"
+              hx-delete="/api/policies/{{ policy.id }}"
+              hx-swap="none"
+              hx-confirm="Are you sure you want to delete this policy?"
+              hx-on::after-request="if(event.detail.successful) { showToast('success', 'Policy Deleted', 'The policy has been removed.'); htmx.ajax('GET', '/web/partials/policies', {target: '#policies-table-body', swap: 'innerHTML'}); }">Delete</button>
+    </div>
+  </td>
+</tr>
+{% endfor %}
+{% if policies.is_empty() %}
+<tr>
+  <td colspan="5" class="text-center text-muted py-8">
+    No policies configured. Click "Add Policy" to create one.
+  </td>
+</tr>
+{% endif %}

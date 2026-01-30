@@ -1,0 +1,41 @@
+<div class="modal-backdrop" id="edit-connector-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 class="modal-title">Edit Connector</h2>
+      <button class="modal-close" aria-label="Close" onclick="this.closest('.modal-backdrop').remove()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <form hx-put="/api/connectors/{{ connector.id }}" hx-swap="none"
+          hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); htmx.ajax('GET', '/web/partials/connectors', {target: '#connectors-grid', swap: 'innerHTML'}); }">
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Connector Name</label>
+          <input type="text" name="name" class="form-input" value="{{ connector.name }}" required>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Type</label>
+          <input type="text" name="connector_type" class="form-input" value="{{ connector.connector_type }}" readonly>
+        </div>
+
+        <div class="form-group">
+          <div class="flex items-center gap-3">
+            <label class="switch">
+              <input type="checkbox" name="enabled" {% if connector.enabled %}checked{% endif %}>
+              <span class="switch-track"></span>
+              <span class="switch-thumb"></span>
+            </label>
+            <span class="text-sm">Enable connector</span>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-ghost" onclick="this.closest('.modal-backdrop').remove()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save Changes</button>
+      </div>
+    </form>
+  </div>
+</div>

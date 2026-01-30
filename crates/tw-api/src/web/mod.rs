@@ -13,8 +13,9 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use tw_core::db::{
-    create_audit_repository, create_incident_repository, IncidentFilter, IncidentRepository,
-    Pagination,
+    create_audit_repository, create_connector_repository, create_incident_repository,
+    create_notification_repository, create_playbook_repository, create_policy_repository,
+    IncidentFilter, IncidentRepository, Pagination, PlaybookFilter, PolicyRepository,
 };
 use tw_core::incident::{ApprovalStatus, IncidentStatus, Severity};
 
@@ -30,6 +31,7 @@ pub fn create_web_router(state: AppState) -> Router {
         .route("/incidents/{id}", get(incident_detail))
         .route("/approvals", get(approvals))
         .route("/playbooks", get(playbooks))
+        .route("/playbooks/{id}", get(playbook_detail))
         .route("/settings", get(settings))
         // Partials for HTMX
         .route("/web/partials/kpis", get(partials_kpis))
@@ -37,8 +39,19 @@ pub fn create_web_router(state: AppState) -> Router {
         // Modal partials
         .route("/web/modals/add-playbook", get(modal_add_playbook))
         .route("/web/modals/add-connector", get(modal_add_connector))
+        .route("/web/modals/edit-connector/{id}", get(modal_edit_connector))
+        .route("/web/partials/connectors", get(partials_connectors))
         .route("/web/modals/add-policy", get(modal_add_policy))
+        .route("/web/modals/edit-policy/{id}", get(modal_edit_policy))
         .route("/web/modals/add-notification", get(modal_add_notification))
+        .route(
+            "/web/modals/edit-notification/{id}",
+            get(modal_edit_notification),
+        )
+        // Policy partials for HTMX refresh
+        .route("/web/partials/policies", get(partials_policies))
+        // Notification partials for HTMX refresh
+        .route("/web/partials/notifications", get(partials_notifications))
         .with_state(state)
 }
 
@@ -146,6 +159,10 @@ async fn incidents_list(
     let per_page = 20u32;
 
     // Build filter
+    // TODO: IncidentFilter does not currently support text search (query.q).
+    // To enable search, add a `query: Option<String>` field to IncidentFilter
+    // and implement full-text search in the repository layer (e.g., search
+    // alert_data JSON, title, hostname, username, IP addresses, etc.)
     let filter = IncidentFilter {
         severity: severity_filter.clone(),
         status: status_filter.clone(),
@@ -279,30 +296,34 @@ async fn approvals(State(state): State<AppState>) -> impl IntoResponse {
 
 /// Playbooks page.
 async fn playbooks(State(state): State<AppState>) -> impl IntoResponse {
-    let repo = create_incident_repository(&state.db);
-    let nav = fetch_nav_counts(repo.as_ref()).await;
+    let incident_repo = create_incident_repository(&state.db);
+    let nav = fetch_nav_counts(incident_repo.as_ref()).await;
 
-    // TODO: Implement playbook repository
-    let playbooks_list = vec![
-        PlaybookData {
-            id: Uuid::new_v4(),
-            name: "Phishing Triage".to_string(),
-            description: "Automated triage workflow for reported phishing emails".to_string(),
-            enabled: true,
-            trigger_count: 3,
-            step_count: 5,
-            execution_count: 0,
-        },
-        PlaybookData {
-            id: Uuid::new_v4(),
-            name: "Malware Detection".to_string(),
-            description: "Response workflow for EDR malware detections".to_string(),
-            enabled: true,
-            trigger_count: 2,
-            step_count: 7,
-            execution_count: 0,
-        },
-    ];
+    // Fetch playbooks from repository
+    let playbook_repo = create_playbook_repository(&state.db);
+    let filter = PlaybookFilter::default();
+    let db_playbooks = playbook_repo.list(&filter).await.unwrap_or_default();
+
+    // Convert to template data
+    let playbooks_list: Vec<PlaybookData> = db_playbooks
+        .into_iter()
+        .map(|p| {
+            // Count triggers (from trigger_condition if set)
+            let trigger_count = if p.trigger_condition.is_some() { 1 } else { 0 };
+            // Count total steps across all stages
+            let step_count: u32 = p.stages.iter().map(|s| s.steps.len() as u32).sum();
+
+            PlaybookData {
+                id: p.id,
+                name: p.name,
+                description: p.description.unwrap_or_default(),
+                enabled: p.enabled,
+                trigger_count,
+                step_count,
+                execution_count: p.execution_count,
+            }
+        })
+        .collect();
 
     let template = PlaybooksTemplate {
         active_nav: "playbooks".to_string(),
@@ -314,6 +335,76 @@ async fn playbooks(State(state): State<AppState>) -> impl IntoResponse {
     };
 
     HtmlTemplate(template)
+}
+
+/// Playbook detail page.
+async fn playbook_detail(State(state): State<AppState>, Path(id): Path<Uuid>) -> impl IntoResponse {
+    let incident_repo = create_incident_repository(&state.db);
+    let nav = fetch_nav_counts(incident_repo.as_ref()).await;
+
+    let playbook_repo = create_playbook_repository(&state.db);
+
+    match playbook_repo.get(id).await {
+        Ok(Some(playbook)) => {
+            // Count triggers and steps
+            let trigger_count = if playbook.trigger_condition.is_some() {
+                1
+            } else {
+                0
+            };
+            let step_count: u32 = playbook.stages.iter().map(|s| s.steps.len() as u32).sum();
+
+            let detail = PlaybookDetailData {
+                id: playbook.id,
+                name: playbook.name,
+                description: playbook.description,
+                trigger_type: playbook.trigger_type,
+                trigger_condition: playbook.trigger_condition,
+                enabled: playbook.enabled,
+                trigger_count,
+                step_count,
+                execution_count: playbook.execution_count,
+                stages: playbook
+                    .stages
+                    .into_iter()
+                    .map(|s| PlaybookStageData {
+                        name: s.name,
+                        description: s.description,
+                        parallel: s.parallel,
+                        steps: s
+                            .steps
+                            .into_iter()
+                            .map(|step| PlaybookStepData {
+                                action: step.action,
+                                parameters: step.parameters.map(|p| p.to_string()),
+                                requires_approval: step.requires_approval,
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+                created_at: playbook
+                    .created_at
+                    .format("%Y-%m-%d %H:%M:%S UTC")
+                    .to_string(),
+                updated_at: playbook
+                    .updated_at
+                    .format("%Y-%m-%d %H:%M:%S UTC")
+                    .to_string(),
+            };
+
+            let template = PlaybookDetailTemplate {
+                active_nav: "playbooks".to_string(),
+                critical_count: nav.critical_count,
+                open_count: nav.open_count,
+                approval_count: nav.approval_count,
+                system_healthy: true,
+                playbook: detail,
+            };
+
+            HtmlTemplate(template).into_response()
+        }
+        _ => Redirect::to("/playbooks").into_response(),
+    }
 }
 
 /// Settings page.
@@ -340,30 +431,25 @@ async fn settings(
         mode: "supervised".to_string(),
     };
 
-    let connectors = vec![
-        ConnectorData {
-            id: Uuid::new_v4(),
-            name: "VirusTotal".to_string(),
-            connector_type: "Threat Intel".to_string(),
-            status: "connected".to_string(),
-            last_check: Some("Active".to_string()),
-        },
-        ConnectorData {
-            id: Uuid::new_v4(),
-            name: "Jira Cloud".to_string(),
-            connector_type: "Ticketing".to_string(),
-            status: "connected".to_string(),
-            last_check: Some("Active".to_string()),
-        },
-    ];
+    // Load connectors from repository
+    let connector_repo = create_connector_repository(&state.db);
+    let connectors: Vec<ConnectorData> = connector_repo
+        .list()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| ConnectorData {
+            id: c.id,
+            name: c.name,
+            connector_type: c.connector_type.to_string(),
+            status: c.status.as_db_str().to_string(),
+            last_check: c.last_health_check.map(format_time_ago),
+        })
+        .collect();
 
-    let policies = vec![PolicyData {
-        id: Uuid::new_v4(),
-        name: "Critical Asset Protection".to_string(),
-        condition: "target_criticality IN (critical, high)".to_string(),
-        requires: "manual_approval".to_string(),
-        enabled: true,
-    }];
+    // Load policies from repository
+    let policy_repo = create_policy_repository(&state.db);
+    let policies = fetch_policies(policy_repo.as_ref()).await;
 
     let rate_limits = RateLimitsData {
         isolate_host_hour: 5,
@@ -371,7 +457,21 @@ async fn settings(
         block_ip_hour: 20,
     };
 
-    let notification_channels = vec![];
+    // Load notification channels from repository
+    let notification_repo = create_notification_repository(&state.db);
+    let notification_channels: Vec<NotificationChannel> = notification_repo
+        .list()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|channel| NotificationChannel {
+            id: channel.id,
+            name: channel.name,
+            channel_type: channel.channel_type.as_db_str().to_string(),
+            events: channel.events,
+            enabled: channel.enabled,
+        })
+        .collect();
 
     let template = SettingsTemplate {
         active_nav: "settings".to_string(),
@@ -456,6 +556,146 @@ async fn modal_add_policy() -> impl IntoResponse {
 
 async fn modal_add_notification() -> impl IntoResponse {
     HtmlTemplate(AddNotificationModalTemplate)
+}
+
+async fn modal_edit_notification(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    let notification_repo = create_notification_repository(&state.db);
+
+    match notification_repo.get(id).await {
+        Ok(Some(channel)) => {
+            let template = EditNotificationModalTemplate {
+                channel: EditNotificationChannel::from_channel(
+                    channel.id,
+                    channel.name,
+                    channel.channel_type.as_db_str().to_string(),
+                    channel.config,
+                    channel.events,
+                    channel.enabled,
+                ),
+            };
+            HtmlTemplate(template).into_response()
+        }
+        _ => {
+            // Return empty response if not found
+            "".into_response()
+        }
+    }
+}
+
+/// Partial for notifications table (used by HTMX refresh).
+async fn partials_notifications(State(state): State<AppState>) -> impl IntoResponse {
+    let notification_repo = create_notification_repository(&state.db);
+    let notification_channels: Vec<NotificationChannel> = notification_repo
+        .list()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|channel| NotificationChannel {
+            id: channel.id,
+            name: channel.name,
+            channel_type: channel.channel_type.as_db_str().to_string(),
+            events: channel.events,
+            enabled: channel.enabled,
+        })
+        .collect();
+
+    let template = NotificationsPartialTemplate {
+        notification_channels,
+    };
+    HtmlTemplate(template)
+}
+
+/// Edit policy modal handler.
+async fn modal_edit_policy(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    let policy_repo = create_policy_repository(&state.db);
+
+    match policy_repo.get(id).await {
+        Ok(Some(policy)) => {
+            // Map approval level to the requires format used in the form
+            let requires = match (&policy.action, &policy.approval_level) {
+                (tw_core::policy::PolicyAction::AutoApprove, _) => "auto".to_string(),
+                (tw_core::policy::PolicyAction::RequireApproval, Some(level)) => match level {
+                    tw_core::policy::ApprovalLevel::Analyst => "single".to_string(),
+                    tw_core::policy::ApprovalLevel::Senior => "dual".to_string(),
+                    tw_core::policy::ApprovalLevel::Manager
+                    | tw_core::policy::ApprovalLevel::Executive => "manager".to_string(),
+                },
+                _ => "single".to_string(),
+            };
+
+            let template = EditPolicyModalTemplate {
+                policy: EditPolicyData {
+                    id: policy.id,
+                    name: policy.name,
+                    condition: policy.condition,
+                    requires,
+                    enabled: policy.enabled,
+                },
+            };
+            HtmlTemplate(template).into_response()
+        }
+        _ => "".into_response(),
+    }
+}
+
+/// Partial for policies table (used by HTMX refresh).
+async fn partials_policies(State(state): State<AppState>) -> impl IntoResponse {
+    let policy_repo = create_policy_repository(&state.db);
+    let policies = fetch_policies(policy_repo.as_ref()).await;
+
+    let template = PoliciesPartialTemplate { policies };
+    HtmlTemplate(template)
+}
+
+/// Edit connector modal handler.
+async fn modal_edit_connector(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    let connector_repo = create_connector_repository(&state.db);
+
+    match connector_repo.get(id).await {
+        Ok(Some(connector)) => {
+            let template = EditConnectorModalTemplate {
+                connector: EditConnectorData {
+                    id: connector.id,
+                    name: connector.name,
+                    connector_type: connector.connector_type.to_string(),
+                    config: connector.config,
+                    enabled: connector.enabled,
+                },
+            };
+            HtmlTemplate(template).into_response()
+        }
+        _ => "".into_response(),
+    }
+}
+
+/// Partial for connectors grid (used by HTMX refresh).
+async fn partials_connectors(State(state): State<AppState>) -> impl IntoResponse {
+    let connector_repo = create_connector_repository(&state.db);
+    let connectors: Vec<ConnectorData> = connector_repo
+        .list()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| ConnectorData {
+            id: c.id,
+            name: c.name,
+            connector_type: c.connector_type.to_string(),
+            status: c.status.as_db_str().to_string(),
+            last_check: c.last_health_check.map(format_time_ago),
+        })
+        .collect();
+
+    let template = ConnectorsPartialTemplate { connectors };
+    HtmlTemplate(template)
 }
 
 // ============================================
@@ -633,6 +873,37 @@ async fn fetch_incidents_with_filter(
                 hostname,
                 username,
                 time_ago: format_time_ago(incident.created_at),
+            }
+        })
+        .collect()
+}
+
+/// Fetches policies from the repository and converts them to template data.
+async fn fetch_policies(repo: &dyn PolicyRepository) -> Vec<PolicyData> {
+    let policies = repo.list().await.unwrap_or_default();
+
+    policies
+        .into_iter()
+        .map(|policy| {
+            // Map approval level to the requires format used in the template
+            let requires = match (&policy.action, &policy.approval_level) {
+                (tw_core::policy::PolicyAction::AutoApprove, _) => "auto_approve".to_string(),
+                (tw_core::policy::PolicyAction::RequireApproval, Some(level)) => match level {
+                    tw_core::policy::ApprovalLevel::Analyst => "single_approval".to_string(),
+                    tw_core::policy::ApprovalLevel::Senior => "dual_approval".to_string(),
+                    tw_core::policy::ApprovalLevel::Manager
+                    | tw_core::policy::ApprovalLevel::Executive => "manager_approval".to_string(),
+                },
+                (tw_core::policy::PolicyAction::Deny, _) => "deny".to_string(),
+                _ => "manual_approval".to_string(),
+            };
+
+            PolicyData {
+                id: policy.id,
+                name: policy.name,
+                condition: policy.condition,
+                requires,
+                enabled: policy.enabled,
             }
         })
         .collect()

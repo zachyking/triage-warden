@@ -201,6 +201,45 @@ pub struct PlaybookData {
     pub execution_count: u32,
 }
 
+#[derive(Template)]
+#[template(path = "playbooks/detail.html")]
+pub struct PlaybookDetailTemplate {
+    pub active_nav: String,
+    pub critical_count: u32,
+    pub open_count: u32,
+    pub approval_count: u32,
+    pub system_healthy: bool,
+    pub playbook: PlaybookDetailData,
+}
+
+pub struct PlaybookDetailData {
+    pub id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+    pub trigger_type: String,
+    pub trigger_condition: Option<String>,
+    pub enabled: bool,
+    pub trigger_count: u32,
+    pub step_count: u32,
+    pub execution_count: u32,
+    pub stages: Vec<PlaybookStageData>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+pub struct PlaybookStageData {
+    pub name: String,
+    pub description: Option<String>,
+    pub parallel: bool,
+    pub steps: Vec<PlaybookStepData>,
+}
+
+pub struct PlaybookStepData {
+    pub action: String,
+    pub parameters: Option<String>,
+    pub requires_approval: bool,
+}
+
 // ============================================
 // Settings
 // ============================================
@@ -328,9 +367,134 @@ pub struct AddPlaybookModalTemplate;
 pub struct AddConnectorModalTemplate;
 
 #[derive(Template)]
+#[template(path = "partials/modal_edit_connector.html")]
+pub struct EditConnectorModalTemplate {
+    pub connector: EditConnectorData,
+}
+
+#[allow(dead_code)]
+pub struct EditConnectorData {
+    pub id: Uuid,
+    pub name: String,
+    pub connector_type: String,
+    pub config: serde_json::Value,
+    pub enabled: bool,
+}
+
+/// Partial template for connectors grid.
+#[derive(Template)]
+#[template(path = "partials/connectors_grid.html")]
+pub struct ConnectorsPartialTemplate {
+    pub connectors: Vec<ConnectorData>,
+}
+
+#[derive(Template)]
 #[template(path = "partials/modal_add_policy.html")]
 pub struct AddPolicyModalTemplate;
 
 #[derive(Template)]
+#[template(path = "partials/modal_edit_policy.html")]
+pub struct EditPolicyModalTemplate {
+    pub policy: EditPolicyData,
+}
+
+pub struct EditPolicyData {
+    pub id: Uuid,
+    pub name: String,
+    pub condition: String,
+    pub requires: String,
+    pub enabled: bool,
+}
+
+/// Partial template for policies table.
+#[derive(Template)]
+#[template(path = "partials/policies_table.html")]
+pub struct PoliciesPartialTemplate {
+    pub policies: Vec<PolicyData>,
+}
+
+#[derive(Template)]
 #[template(path = "partials/modal_add_notification.html")]
 pub struct AddNotificationModalTemplate;
+
+#[derive(Template)]
+#[template(path = "partials/modal_edit_notification.html")]
+pub struct EditNotificationModalTemplate {
+    pub channel: EditNotificationChannel,
+}
+
+#[allow(dead_code)]
+pub struct EditNotificationChannel {
+    pub id: Uuid,
+    pub name: String,
+    pub channel_type: String,
+    pub config: serde_json::Value,
+    pub events: Vec<String>,
+    pub enabled: bool,
+    // Pre-computed event flags for template use
+    pub has_critical_incident: bool,
+    pub has_approval_needed: bool,
+    pub has_action_executed: bool,
+    pub has_playbook_failed: bool,
+    pub has_connector_error: bool,
+    pub has_system_health: bool,
+    // Pre-computed config values for template use
+    pub webhook_url: String,
+    pub channel_name: String,
+    pub recipients: String,
+    pub smtp_host: String,
+    pub smtp_port: String,
+    pub integration_key: String,
+    pub pd_severity: String,
+    pub auth_header: String,
+}
+
+impl EditNotificationChannel {
+    /// Creates an EditNotificationChannel from a notification channel.
+    pub fn from_channel(
+        id: Uuid,
+        name: String,
+        channel_type: String,
+        config: serde_json::Value,
+        events: Vec<String>,
+        enabled: bool,
+    ) -> Self {
+        let get_config = |key: &str| -> String {
+            config
+                .get(key)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
+
+        Self {
+            id,
+            name,
+            channel_type,
+            enabled,
+            has_critical_incident: events.iter().any(|e| e == "critical_incident"),
+            has_approval_needed: events.iter().any(|e| e == "approval_needed"),
+            has_action_executed: events.iter().any(|e| e == "action_executed"),
+            has_playbook_failed: events.iter().any(|e| e == "playbook_failed"),
+            has_connector_error: events.iter().any(|e| e == "connector_error"),
+            has_system_health: events.iter().any(|e| e == "system_health"),
+            webhook_url: get_config("webhook_url"),
+            channel_name: get_config("channel"),
+            recipients: get_config("recipients"),
+            smtp_host: get_config("smtp_host"),
+            smtp_port: get_config("smtp_port"),
+            integration_key: get_config("integration_key"),
+            pd_severity: get_config("severity"),
+            auth_header: get_config("auth_header"),
+            config,
+            events,
+        }
+    }
+}
+
+/// Partial template for notifications table.
+#[derive(Template)]
+#[template(path = "partials/notifications_table.html")]
+pub struct NotificationsPartialTemplate {
+    pub notification_channels: Vec<NotificationChannel>,
+}

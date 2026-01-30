@@ -6,7 +6,7 @@
 <div class="page-header">
   <div>
     <h1 class="page-title">Incidents</h1>
-    <p class="page-subtitle">{{ total_count }} total incidents, {{ open_count }} open</p>
+    <p class="page-subtitle">{{ total_count }} matching{% if open_count > 0 %} &bull; {{ open_count }} open overall{% endif %}</p>
   </div>
 </div>
 

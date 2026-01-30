@@ -203,7 +203,7 @@
             {% endif %}
           </div>
           <div class="flex gap-2">
-            {% if action.status == "pending_approval" %}
+            {% if action.status == "pending" %}
             <button class="btn btn-success btn-sm"
                     hx-post="/api/incidents/{{ incident.id }}/approve"
                     hx-vals='{"action_id": "{{ action.id }}", "approved": true}'

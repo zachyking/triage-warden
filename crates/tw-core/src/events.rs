@@ -110,6 +110,9 @@ pub enum TriageEvent {
         resolution: Resolution,
     },
 
+    /// Enrichment has been requested (re-enrichment).
+    EnrichmentRequested { incident_id: Uuid },
+
     /// System error occurred.
     SystemError {
         incident_id: Option<Uuid>,
@@ -311,6 +314,7 @@ impl TriageEvent {
             TriageEvent::TicketCreated { incident_id, .. } => Some(*incident_id),
             TriageEvent::IncidentEscalated { incident_id, .. } => Some(*incident_id),
             TriageEvent::IncidentResolved { incident_id, .. } => Some(*incident_id),
+            TriageEvent::EnrichmentRequested { incident_id } => Some(*incident_id),
             TriageEvent::SystemError { incident_id, .. } => *incident_id,
             TriageEvent::KillSwitchActivated { .. } => None,
         }
@@ -332,6 +336,7 @@ impl TriageEvent {
             TriageEvent::TicketCreated { .. } => "ticket_created",
             TriageEvent::IncidentEscalated { .. } => "incident_escalated",
             TriageEvent::IncidentResolved { .. } => "incident_resolved",
+            TriageEvent::EnrichmentRequested { .. } => "enrichment_requested",
             TriageEvent::SystemError { .. } => "system_error",
             TriageEvent::KillSwitchActivated { .. } => "kill_switch_activated",
         }

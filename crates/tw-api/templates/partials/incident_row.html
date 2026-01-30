@@ -2,7 +2,8 @@
     hx-get="/incidents/{{ incident.id }}"
     hx-push-url="true"
     hx-target="body">
-  <div class="severity-dot {{ incident.severity }}"></div>
+  <div class="severity-dot {{ incident.severity }}" aria-hidden="true"></div>
+  <span class="sr-only">Severity: {{ incident.severity }}</span>
   <div class="incident-info">
     <div class="incident-title">{{ incident.title }}</div>
     <div class="incident-meta">
@@ -22,6 +23,7 @@
             hx-post="/api/incidents/{{ incident.id }}/dismiss"
             hx-swap="outerHTML"
             hx-target="closest .incident-item"
+            hx-confirm="Are you sure you want to dismiss this incident?"
             onclick="event.stopPropagation()">Dismiss</button>
   </div>
 </li>

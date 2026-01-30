@@ -215,6 +215,22 @@ pub struct ApproveActionRequest {
     pub reason: Option<String>,
 }
 
+/// Request to dismiss an incident.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+pub struct DismissRequest {
+    /// Optional reason for dismissing the incident.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// Request to resolve an incident.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+pub struct ResolveRequest {
+    /// Optional reason for resolving the incident.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
 /// Response after action execution.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct ActionExecutionResponse {
@@ -322,4 +338,84 @@ pub struct PerformanceMetrics {
     pub mean_time_to_triage_seconds: Option<f64>,
     pub mean_time_to_respond_seconds: Option<f64>,
     pub auto_resolution_rate: Option<f64>,
+}
+
+// ============================================================================
+// Playbook DTOs
+// ============================================================================
+
+/// Response for a single playbook.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct PlaybookResponse {
+    pub id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+    pub trigger_type: String,
+    pub trigger_condition: Option<String>,
+    pub stages: Vec<PlaybookStageDto>,
+    pub enabled: bool,
+    pub execution_count: u32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Playbook stage DTO.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct PlaybookStageDto {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub parallel: bool,
+    pub steps: Vec<PlaybookStepDto>,
+}
+
+/// Playbook step DTO.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct PlaybookStepDto {
+    pub action: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<Vec<String>>,
+    #[serde(default)]
+    pub requires_approval: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<serde_json::Value>,
+}
+
+/// Request to create a new playbook.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreatePlaybookRequest {
+    /// Name of the playbook.
+    pub name: String,
+    /// Optional description.
+    pub description: Option<String>,
+    /// Type of trigger (e.g., "alert", "scheduled").
+    pub trigger_type: String,
+    /// Optional trigger condition expression.
+    pub trigger_condition: Option<String>,
+    /// Whether the playbook is enabled (defaults to true).
+    pub enabled: Option<bool>,
+    /// Stages as JSON string.
+    pub stages: Option<String>,
+}
+
+/// Request to update an existing playbook.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdatePlaybookRequest {
+    /// New name for the playbook.
+    pub name: Option<String>,
+    /// New description (empty string clears it).
+    pub description: Option<String>,
+    /// New trigger type.
+    pub trigger_type: Option<String>,
+    /// New trigger condition (empty string clears it).
+    pub trigger_condition: Option<String>,
+    /// New enabled status.
+    pub enabled: Option<bool>,
+    /// Stages as JSON string.
+    pub stages: Option<String>,
 }

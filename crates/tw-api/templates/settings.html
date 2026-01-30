@@ -88,11 +88,13 @@
       {% endif %}
       <div class="flex gap-2">
         <button class="btn btn-secondary btn-sm"
-                hx-get="/settings/connectors/{{ connector.id }}"
-                hx-target="#connector-modal">Configure</button>
+                hx-get="/web/modals/edit-connector/{{ connector.id }}"
+                hx-target="#modal-container"
+                hx-swap="innerHTML">Configure</button>
         <button class="btn btn-ghost btn-sm"
                 hx-post="/api/connectors/{{ connector.id }}/test"
-                hx-swap="none">Test Connection</button>
+                hx-swap="none"
+                hx-on::after-request="if(event.detail.successful) { showToast('success', 'Connection Successful', 'The connector is responding correctly.'); } else { showToast('error', 'Connection Failed', 'Could not connect to the service. Check your configuration.'); }">Test Connection</button>
       </div>
     </div>
   </div>
@@ -104,7 +106,7 @@
               hx-get="/web/modals/add-connector"
               hx-target="#modal-container"
               hx-swap="innerHTML">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <path d="M12 5v14m-7-7h14"/>
         </svg>
         Add Connector
@@ -134,24 +136,48 @@
           <th></th>
         </tr>
       </thead>
-      <tbody>
+      <tbody id="policies-table-body">
         {% for policy in policies %}
-        <tr>
+        <tr id="policy-row-{{ policy.id }}">
           <td class="font-semibold">{{ policy.name }}</td>
           <td class="text-sm text-muted">{{ policy.condition }}</td>
           <td>
             <span class="badge badge-info">{{ policy.requires }}</span>
           </td>
           <td>
-            <span class="badge badge-{% if policy.enabled %}success{% else %}info{% endif %}">
-              {% if policy.enabled %}Active{% else %}Disabled{% endif %}
-            </span>
+            <label class="switch" title="Toggle policy status">
+              <input type="checkbox" {% if policy.enabled %}checked{% endif %}
+                     role="switch"
+                     aria-pressed="{% if policy.enabled %}true{% else %}false{% endif %}"
+                     hx-post="/api/policies/{{ policy.id }}/toggle"
+                     hx-swap="none"
+                     hx-on::after-request="if(event.detail.successful) { showToast('success', 'Policy Updated', 'Policy status has been toggled.'); htmx.ajax('GET', '/web/partials/policies', {target: '#policies-table-body', swap: 'innerHTML'}); }">
+              <span class="switch-track" aria-hidden="true"></span>
+              <span class="switch-thumb" aria-hidden="true"></span>
+            </label>
           </td>
           <td>
-            <button class="btn btn-ghost btn-sm">Edit</button>
+            <div class="flex gap-2">
+              <button class="btn btn-ghost btn-sm"
+                      hx-get="/web/modals/edit-policy/{{ policy.id }}"
+                      hx-target="#modal-container"
+                      hx-swap="innerHTML">Edit</button>
+              <button class="btn btn-ghost btn-sm text-critical"
+                      hx-delete="/api/policies/{{ policy.id }}"
+                      hx-swap="none"
+                      hx-confirm="Are you sure you want to delete this policy?"
+                      hx-on::after-request="if(event.detail.successful) { showToast('success', 'Policy Deleted', 'The policy has been removed.'); htmx.ajax('GET', '/web/partials/policies', {target: '#policies-table-body', swap: 'innerHTML'}); }">Delete</button>
+            </div>
           </td>
         </tr>
         {% endfor %}
+        {% if policies.is_empty() %}
+        <tr>
+          <td colspan="5" class="text-center text-muted py-8">
+            No policies configured. Click "Add Policy" to create one.
+          </td>
+        </tr>
+        {% endif %}
       </tbody>
     </table>
   </div>
@@ -193,7 +219,7 @@
             hx-target="#modal-container"
             hx-swap="innerHTML">Add Channel</button>
   </div>
-  <div class="card-body no-padding">
+  <div class="card-body no-padding" id="notifications-table">
     <table class="table">
       <thead>
         <tr>
@@ -206,7 +232,7 @@
       </thead>
       <tbody>
         {% for channel in notification_channels %}
-        <tr>
+        <tr id="notification-row-{{ channel.id }}">
           <td class="font-semibold">{{ channel.name }}</td>
           <td>{{ channel.channel_type }}</td>
           <td>
@@ -215,25 +241,45 @@
             {% endfor %}
           </td>
           <td>
-            <span class="badge badge-{% if channel.enabled %}success{% else %}info{% endif %}">
-              {% if channel.enabled %}Active{% else %}Disabled{% endif %}
-            </span>
+            <button class="btn btn-ghost btn-sm"
+                    aria-pressed="{% if channel.enabled %}true{% else %}false{% endif %}"
+                    hx-post="/api/notifications/{{ channel.id }}/toggle"
+                    hx-swap="none"
+                    hx-on::after-request="if(event.detail.successful) { showToast('success', 'Channel Updated', 'Notification channel status has been toggled.'); location.reload(); }">
+              <span class="badge badge-{% if channel.enabled %}success{% else %}info{% endif %}">
+                {% if channel.enabled %}Active{% else %}Disabled{% endif %}
+              </span>
+            </button>
           </td>
           <td>
             <div class="flex gap-2">
-              <button class="btn btn-ghost btn-sm">Edit</button>
+              <button class="btn btn-ghost btn-sm"
+                      hx-get="/web/modals/edit-notification/{{ channel.id }}"
+                      hx-target="#modal-container"
+                      hx-swap="innerHTML">Edit</button>
               <button class="btn btn-ghost btn-sm"
                       hx-post="/api/notifications/{{ channel.id }}/test"
-                      hx-swap="none">Test</button>
+                      hx-swap="none"
+                      hx-on::after-request="if(event.detail.successful) { showToast('success', 'Test Sent', 'A test notification has been sent to this channel.'); } else { showToast('error', 'Test Failed', 'Could not send test notification. Check your configuration.'); }">Test</button>
+              <button class="btn btn-ghost btn-sm text-danger"
+                      hx-delete="/api/notifications/{{ channel.id }}"
+                      hx-confirm="Are you sure you want to delete this notification channel?"
+                      hx-swap="none"
+                      hx-on::after-request="if(event.detail.successful) { showToast('success', 'Channel Deleted', 'Notification channel has been removed.'); location.reload(); }">Delete</button>
             </div>
           </td>
         </tr>
         {% endfor %}
+        {% if notification_channels.is_empty() %}
+        <tr>
+          <td colspan="5" class="text-center text-muted py-4">
+            No notification channels configured. Click "Add Channel" to create one.
+          </td>
+        </tr>
+        {% endif %}
       </tbody>
     </table>
   </div>
 </div>
 {% endif %}
-
-<div id="connector-modal"></div>
 {% endblock %}

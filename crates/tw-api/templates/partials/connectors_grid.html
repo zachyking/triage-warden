@@ -1,0 +1,41 @@
+{% for connector in connectors %}
+<div class="card" id="connector-{{ connector.id }}">
+  <div class="card-body">
+    <div class="flex justify-between items-start mb-3">
+      <div>
+        <h3 class="font-semibold">{{ connector.name }}</h3>
+        <p class="text-sm text-muted">{{ connector.connector_type }}</p>
+      </div>
+      <span class="badge badge-{% if connector.status == "connected" %}success{% else if connector.status == "error" %}critical{% else %}info{% endif %}">
+        {{ connector.status }}
+      </span>
+    </div>
+    {% if let Some(last_check) = connector.last_check %}
+    <p class="text-xs text-muted mb-3">Last checked: {{ last_check }}</p>
+    {% endif %}
+    <div class="flex gap-2">
+      <button class="btn btn-secondary btn-sm"
+              hx-get="/web/modals/edit-connector/{{ connector.id }}"
+              hx-target="#modal-container"
+              hx-swap="innerHTML">Configure</button>
+      <button class="btn btn-ghost btn-sm"
+              hx-post="/api/connectors/{{ connector.id }}/test"
+              hx-swap="none">Test Connection</button>
+    </div>
+  </div>
+</div>
+{% endfor %}
+
+<div class="card" style="border-style: dashed;">
+  <div class="card-body flex flex-col items-center justify-center" style="min-height: 150px;">
+    <button class="btn btn-primary"
+            hx-get="/web/modals/add-connector"
+            hx-target="#modal-container"
+            hx-swap="innerHTML">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M12 5v14m-7-7h14"/>
+      </svg>
+      Add Connector
+    </button>
+  </div>
+</div>

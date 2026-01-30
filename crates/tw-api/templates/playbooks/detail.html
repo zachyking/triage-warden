@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+
+{% block title %}{{ playbook.name }} - Triage Warden{% endblock %}
+
+{% block content %}
+<!-- Breadcrumb -->
+<div class="flex items-center gap-2 mb-4 text-sm">
+  <a href="/playbooks" class="text-muted" hx-get="/playbooks" hx-push-url="true" hx-target="body">Playbooks</a>
+  <span class="text-muted">/</span>
+  <span class="text-secondary">{{ playbook.name }}</span>
+</div>
+
+<!-- Header -->
+<div class="page-header">
+  <div class="flex items-center gap-3">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-accent">
+      <path d="M4 19.5A2.5 2.5 0 016.5 17H20"/>
+      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/>
+    </svg>
+    <div>
+      <h1 class="page-title">{{ playbook.name }}</h1>
+      <p class="page-subtitle">
+        <span class="badge badge-{% if playbook.enabled %}success{% else %}info{% endif %}">
+          {% if playbook.enabled %}Active{% else %}Disabled{% endif %}
+        </span>
+        &bull; {{ playbook.trigger_type }}
+        &bull; {{ playbook.execution_count }} executions
+      </p>
+    </div>
+  </div>
+  <div class="flex gap-2">
+    <button class="btn btn-secondary btn-lg"
+            hx-post="/api/playbooks/{{ playbook.id }}/toggle"
+            hx-swap="none"
+            hx-on::after-request="if(event.detail.successful) { showToast('success', 'Playbook Updated', 'Playbook status has been toggled.'); location.reload(); }">
+      {% if playbook.enabled %}Disable{% else %}Enable{% endif %}
+    </button>
+    <button class="btn btn-danger btn-lg"
+            hx-delete="/api/playbooks/{{ playbook.id }}"
+            hx-confirm="Are you sure you want to delete this playbook? This action cannot be undone."
+            hx-swap="none"
+            hx-on::after-request="if(event.detail.successful) { showToast('success', 'Playbook Deleted', 'The playbook has been removed.'); window.location.href='/playbooks'; }">
+      Delete
+    </button>
+  </div>
+</div>
+
+<div class="grid grid-2 gap-4">
+  <!-- Left Column: Overview -->
+  <div>
+    <!-- Description -->
+    <div class="card mb-4">
+      <div class="card-header">
+        <h3 class="card-title">Overview</h3>
+      </div>
+      <div class="card-body">
+        {% if let Some(description) = playbook.description %}
+        <p class="text-sm text-secondary mb-4">{{ description }}</p>
+        {% else %}
+        <p class="text-sm text-muted mb-4">No description provided.</p>
+        {% endif %}
+
+        <div class="grid grid-3 gap-4">
+          <div>
+            <div class="text-xs text-muted mb-1">Trigger Type</div>
+            <div class="font-semibold">{{ playbook.trigger_type }}</div>
+          </div>
+          <div>
+            <div class="text-xs text-muted mb-1">Triggers</div>
+            <div class="font-semibold">{{ playbook.trigger_count }}</div>
+          </div>
+          <div>
+            <div class="text-xs text-muted mb-1">Total Steps</div>
+            <div class="font-semibold">{{ playbook.step_count }}</div>
+          </div>
+        </div>
+
+        {% if let Some(condition) = playbook.trigger_condition %}
+        <div class="mt-4">
+          <div class="text-xs text-muted mb-1">Trigger Condition</div>
+          <code class="code-block">{{ condition }}</code>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Metadata -->
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Metadata</h3>
+      </div>
+      <div class="card-body">
+        <div class="grid grid-2 gap-4">
+          <div>
+            <div class="text-xs text-muted mb-1">Playbook ID</div>
+            <code class="text-xs">{{ playbook.id }}</code>
+          </div>
+          <div>
+            <div class="text-xs text-muted mb-1">Execution Count</div>
+            <div class="font-semibold">{{ playbook.execution_count }}</div>
+          </div>
+          <div>
+            <div class="text-xs text-muted mb-1">Created</div>
+            <div class="text-sm">{{ playbook.created_at }}</div>
+          </div>
+          <div>
+            <div class="text-xs text-muted mb-1">Last Updated</div>
+            <div class="text-sm">{{ playbook.updated_at }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right Column: Stages & Steps -->
+  <div>
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Workflow Stages</h3>
+        <span class="badge badge-info">{{ playbook.stages.len() }} stages</span>
+      </div>
+      <div class="card-body">
+        {% if !playbook.stages.is_empty() %}
+        {% for stage in playbook.stages %}
+        <div class="mb-4 p-3 bg-tertiary rounded-md">
+          <div class="flex justify-between items-center mb-2">
+            <div class="font-semibold text-sm">{{ stage.name }}</div>
+            <div class="flex gap-2">
+              {% if stage.parallel %}
+              <span class="badge badge-info">Parallel</span>
+              {% endif %}
+              <span class="badge badge-secondary">{{ stage.steps.len() }} steps</span>
+            </div>
+          </div>
+          {% if let Some(desc) = stage.description %}
+          <p class="text-xs text-muted mb-2">{{ desc }}</p>
+          {% endif %}
+
+          {% if !stage.steps.is_empty() %}
+          <div class="pl-4 border-l-2 border-accent">
+            {% for step in stage.steps %}
+            <div class="mb-2 last:mb-0">
+              <div class="flex items-center gap-2">
+                <code class="text-xs bg-secondary px-2 py-1 rounded">{{ step.action }}</code>
+                {% if step.requires_approval %}
+                <span class="badge badge-high text-xs">Requires Approval</span>
+                {% endif %}
+              </div>
+              {% if let Some(params) = step.parameters %}
+              <div class="text-xs text-muted mt-1">
+                <code>{{ params }}</code>
+              </div>
+              {% endif %}
+            </div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="text-xs text-muted">No steps configured.</div>
+          {% endif %}
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="empty-state">
+          <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M4 19.5A2.5 2.5 0 016.5 17H20"/>
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/>
+          </svg>
+          <div class="empty-state-title">No stages configured</div>
+          <div class="empty-state-text">Add stages and steps to define the workflow.</div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

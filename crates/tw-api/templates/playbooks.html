@@ -48,10 +48,12 @@
         </div>
       </div>
       <div class="flex gap-2">
-        <a href="/playbooks/{{ playbook.id }}" class="btn btn-secondary btn-sm">Configure</a>
+        <a href="/playbooks/{{ playbook.id }}" class="btn btn-secondary btn-sm"
+           hx-get="/playbooks/{{ playbook.id }}" hx-push-url="true" hx-target="body">Configure</a>
         <button class="btn btn-ghost btn-sm"
                 hx-post="/api/playbooks/{{ playbook.id }}/toggle"
-                hx-swap="none">
+                hx-swap="none"
+                hx-on::after-request="if(event.detail.successful) { showToast('success', 'Playbook Updated', 'Playbook status has been toggled.'); location.reload(); }">
           {% if playbook.enabled %}Disable{% else %}Enable{% endif %}
         </button>
       </div>
@@ -60,7 +62,7 @@
   {% endfor %}
 
   {% if playbooks.is_empty() %}
-  <div class="card" style="grid-column: span 3;">
+  <div class="card col-span-full">
     <div class="empty-state">
       <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
         <path d="M4 19.5A2.5 2.5 0 016.5 17H20"/>

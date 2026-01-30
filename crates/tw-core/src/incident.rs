@@ -225,6 +225,8 @@ pub enum IncidentStatus {
     Resolved,
     /// Confirmed as false positive
     FalsePositive,
+    /// Dismissed by analyst (not requiring action)
+    Dismissed,
     /// Escalated to higher tier
     Escalated,
     /// Closed without action
@@ -243,6 +245,7 @@ impl IncidentStatus {
             IncidentStatus::Executing => "executing",
             IncidentStatus::Resolved => "resolved",
             IncidentStatus::FalsePositive => "false_positive",
+            IncidentStatus::Dismissed => "dismissed",
             IncidentStatus::Escalated => "escalated",
             IncidentStatus::Closed => "closed",
         }
@@ -260,6 +263,7 @@ impl std::fmt::Display for IncidentStatus {
             IncidentStatus::Executing => write!(f, "Executing"),
             IncidentStatus::Resolved => write!(f, "Resolved"),
             IncidentStatus::FalsePositive => write!(f, "False Positive"),
+            IncidentStatus::Dismissed => write!(f, "Dismissed"),
             IncidentStatus::Escalated => write!(f, "Escalated"),
             IncidentStatus::Closed => write!(f, "Closed"),
         }

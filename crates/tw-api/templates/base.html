@@ -38,7 +38,7 @@
 
   {% if critical_count > 0 %}
   <div class="alert-banner">
-    <svg class="alert-banner-icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <svg class="alert-banner-icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
     </svg>
     <span class="alert-banner-text"><strong>{{ critical_count }} critical incident{% if critical_count != 1 %}s{% endif %}</strong> require{% if critical_count == 1 %}s{% endif %} immediate attention</span>
@@ -64,7 +64,7 @@
       const toast = document.createElement('div');
       toast.className = 'toast';
       toast.innerHTML = `
-        <svg class="toast-icon ${type}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <svg class="toast-icon ${type}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           ${type === 'success' ? '<path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>' : ''}
           ${type === 'error' ? '<path d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/>' : ''}
           ${type === 'warning' ? '<path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>' : ''}
@@ -74,8 +74,8 @@
           <div class="toast-title">${title}</div>
           ${message ? `<div class="toast-message">${message}</div>` : ''}
         </div>
-        <button class="toast-close" onclick="this.parentElement.classList.add('removing'); setTimeout(() => this.parentElement.remove(), 200);">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <button class="toast-close" aria-label="Close" onclick="this.parentElement.classList.add('removing'); setTimeout(() => this.parentElement.remove(), 200);">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
             <path d="M6 18L18 6M6 6l12 12"/>
           </svg>
         </button>
@@ -106,6 +106,43 @@
     document.body.addEventListener('showToast', function(e) {
       const { type, title, message } = e.detail;
       showToast(type, title, message);
+    });
+
+    // Global HTMX error handlers
+    document.body.addEventListener('htmx:responseError', function(e) {
+      const xhr = e.detail.xhr;
+      let errorMessage = 'An unexpected error occurred.';
+
+      try {
+        const response = JSON.parse(xhr.responseText);
+        if (response.error) {
+          errorMessage = response.error;
+        } else if (response.message) {
+          errorMessage = response.message;
+        }
+      } catch {
+        if (xhr.status === 400) {
+          errorMessage = 'Invalid request. Please check your input.';
+        } else if (xhr.status === 401) {
+          errorMessage = 'Authentication required. Please log in.';
+        } else if (xhr.status === 403) {
+          errorMessage = 'You do not have permission to perform this action.';
+        } else if (xhr.status === 404) {
+          errorMessage = 'The requested resource was not found.';
+        } else if (xhr.status === 422) {
+          errorMessage = 'Validation failed. Please check your input.';
+        } else if (xhr.status === 500) {
+          errorMessage = 'Server error. Please try again later.';
+        } else if (xhr.status >= 500) {
+          errorMessage = 'Service unavailable. Please try again later.';
+        }
+      }
+
+      showToast('error', 'Error', errorMessage);
+    });
+
+    document.body.addEventListener('htmx:sendError', function(e) {
+      showToast('error', 'Network Error', 'Unable to connect to the server. Please check your connection and try again.');
     });
 
   </script>

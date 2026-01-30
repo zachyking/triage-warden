@@ -2,13 +2,13 @@
   <div class="modal">
     <div class="modal-header">
       <h2 class="modal-title">Add Connector</h2>
-      <button class="modal-close" onclick="this.closest('.modal-backdrop').remove()">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <button class="modal-close" aria-label="Close" onclick="this.closest('.modal-backdrop').remove()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <path d="M6 18L18 6M6 6l12 12"/>
         </svg>
       </button>
     </div>
-    <form hx-post="/api/connectors" hx-swap="none" hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); htmx.trigger(document.body, 'showToast', {detail: {type: 'success', title: 'Connector Added', message: 'New connector has been configured.'}}); location.reload(); }">
+    <form hx-post="/api/connectors" hx-swap="none" hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); showToast('success', 'Connector Added', 'New connector has been configured.'); location.reload(); } else { showToast('error', 'Failed to Add Connector', 'Please check your configuration and try again.'); }">
       <div class="modal-body">
         <div class="form-group">
           <label class="form-label">Connector Type</label>

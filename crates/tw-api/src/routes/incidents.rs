@@ -12,9 +12,9 @@ use validator::Validate;
 
 use crate::dto::{
     ActionExecutionResponse, ActionResponse, AnalysisResponse, ApproveActionRequest,
-    AuditEntryResponse, EnrichmentResponse, ExecuteActionRequest, IncidentDetailResponse,
-    IncidentResponse, IoCResponse, ListIncidentsQuery, MitreTechniqueResponse, PaginatedResponse,
-    PaginationInfo,
+    AuditEntryResponse, DismissRequest, EnrichmentResponse, ExecuteActionRequest,
+    IncidentDetailResponse, IncidentResponse, IoCResponse, ListIncidentsQuery,
+    MitreTechniqueResponse, PaginatedResponse, PaginationInfo, ResolveRequest,
 };
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -22,7 +22,9 @@ use tw_core::db::{
     create_audit_repository, create_incident_repository, AuditRepository, IncidentFilter,
     IncidentRepository, Pagination,
 };
-use tw_core::incident::{ApprovalStatus, Incident, IncidentStatus, ProposedAction, Severity};
+use tw_core::incident::{
+    ApprovalStatus, AuditAction, AuditEntry, Incident, IncidentStatus, ProposedAction, Severity,
+};
 
 /// Creates incident routes.
 pub fn routes() -> Router<AppState> {
@@ -31,6 +33,9 @@ pub fn routes() -> Router<AppState> {
         .route("/:id", get(get_incident))
         .route("/:id/actions", post(execute_action))
         .route("/:id/approve", post(approve_action))
+        .route("/:id/dismiss", post(dismiss_incident))
+        .route("/:id/resolve", post(resolve_incident))
+        .route("/:id/enrich", post(enrich_incident))
 }
 
 /// List incidents with filtering and pagination.
@@ -344,6 +349,246 @@ async fn approve_action(
         .into_response())
 }
 
+/// Dismiss an incident.
+#[utoipa::path(
+    post,
+    path = "/api/incidents/{id}/dismiss",
+    params(
+        ("id" = Uuid, Path, description = "Incident ID")
+    ),
+    request_body = DismissRequest,
+    responses(
+        (status = 200, description = "Incident dismissed"),
+        (status = 404, description = "Incident not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "Incidents"
+)]
+async fn dismiss_incident(
+    State(state): State<AppState>,
+    Path(incident_id): Path<Uuid>,
+    axum::Form(request): axum::Form<DismissRequest>,
+) -> Result<axum::response::Response, ApiError> {
+    use axum::response::IntoResponse;
+
+    let incident_repo: Box<dyn IncidentRepository> = create_incident_repository(&state.db);
+    let audit_repo: Box<dyn AuditRepository> = create_audit_repository(&state.db);
+
+    // Get the incident
+    let mut incident: Incident = incident_repo
+        .get(incident_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Incident {} not found", incident_id)))?;
+
+    // Update status to Dismissed
+    incident.status = IncidentStatus::Dismissed;
+    incident.updated_at = Utc::now();
+
+    // Save to database
+    incident_repo.save(&incident).await?;
+
+    // Create audit log entry
+    let details = request
+        .reason
+        .as_ref()
+        .map(|r| serde_json::json!({ "reason": r }));
+    let audit_entry = AuditEntry::new(
+        AuditAction::StatusChanged(IncidentStatus::Dismissed),
+        "api_user".to_string(),
+        details,
+    );
+    audit_repo.log(incident_id, &audit_entry).await?;
+
+    // Publish status change event
+    let _ = state
+        .event_bus
+        .publish(tw_core::TriageEvent::StatusChanged {
+            incident_id,
+            old_status: incident.status.clone(),
+            new_status: IncidentStatus::Dismissed,
+        })
+        .await;
+
+    // Return empty response with HX-Trigger for toast
+    let trigger_json = serde_json::json!({
+        "showToast": {
+            "type": "success",
+            "title": "Incident Dismissed",
+            "message": "The incident has been dismissed."
+        }
+    });
+
+    Ok((
+        [(
+            axum::http::header::HeaderName::from_static("hx-trigger"),
+            trigger_json.to_string(),
+        )],
+        "",
+    )
+        .into_response())
+}
+
+/// Resolve an incident.
+#[utoipa::path(
+    post,
+    path = "/api/incidents/{id}/resolve",
+    params(
+        ("id" = Uuid, Path, description = "Incident ID")
+    ),
+    request_body = ResolveRequest,
+    responses(
+        (status = 200, description = "Incident resolved"),
+        (status = 404, description = "Incident not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "Incidents"
+)]
+async fn resolve_incident(
+    State(state): State<AppState>,
+    Path(incident_id): Path<Uuid>,
+    axum::Form(request): axum::Form<ResolveRequest>,
+) -> Result<axum::response::Response, ApiError> {
+    use axum::response::IntoResponse;
+
+    let incident_repo: Box<dyn IncidentRepository> = create_incident_repository(&state.db);
+    let audit_repo: Box<dyn AuditRepository> = create_audit_repository(&state.db);
+
+    // Get the incident
+    let mut incident: Incident = incident_repo
+        .get(incident_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Incident {} not found", incident_id)))?;
+
+    let old_status = incident.status.clone();
+
+    // Update status to Resolved
+    incident.status = IncidentStatus::Resolved;
+    incident.updated_at = Utc::now();
+
+    // Save to database
+    incident_repo.save(&incident).await?;
+
+    // Create audit log entry
+    let details = request
+        .reason
+        .as_ref()
+        .map(|r| serde_json::json!({ "reason": r }));
+    let audit_entry = AuditEntry::new(
+        AuditAction::StatusChanged(IncidentStatus::Resolved),
+        "api_user".to_string(),
+        details,
+    );
+    audit_repo.log(incident_id, &audit_entry).await?;
+
+    // Publish status change event
+    let _ = state
+        .event_bus
+        .publish(tw_core::TriageEvent::StatusChanged {
+            incident_id,
+            old_status,
+            new_status: IncidentStatus::Resolved,
+        })
+        .await;
+
+    // Return empty response with HX-Trigger for toast
+    let trigger_json = serde_json::json!({
+        "showToast": {
+            "type": "success",
+            "title": "Incident Resolved",
+            "message": "The incident has been marked as resolved."
+        }
+    });
+
+    Ok((
+        [(
+            axum::http::header::HeaderName::from_static("hx-trigger"),
+            trigger_json.to_string(),
+        )],
+        "",
+    )
+        .into_response())
+}
+
+/// Trigger re-enrichment for an incident.
+#[utoipa::path(
+    post,
+    path = "/api/incidents/{id}/enrich",
+    params(
+        ("id" = Uuid, Path, description = "Incident ID")
+    ),
+    responses(
+        (status = 200, description = "Enrichment requested"),
+        (status = 404, description = "Incident not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "Incidents"
+)]
+async fn enrich_incident(
+    State(state): State<AppState>,
+    Path(incident_id): Path<Uuid>,
+) -> Result<axum::response::Response, ApiError> {
+    use axum::response::IntoResponse;
+
+    let incident_repo: Box<dyn IncidentRepository> = create_incident_repository(&state.db);
+    let audit_repo: Box<dyn AuditRepository> = create_audit_repository(&state.db);
+
+    // Verify incident exists
+    let mut incident: Incident = incident_repo
+        .get(incident_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Incident {} not found", incident_id)))?;
+
+    // Update status to Enriching
+    let old_status = incident.status.clone();
+    incident.status = IncidentStatus::Enriching;
+    incident.updated_at = Utc::now();
+
+    // Save to database
+    incident_repo.save(&incident).await?;
+
+    // Create audit log entry
+    let audit_entry = AuditEntry::new(
+        AuditAction::EnrichmentAdded,
+        "api_user".to_string(),
+        Some(serde_json::json!({ "action": "re-enrichment requested" })),
+    );
+    audit_repo.log(incident_id, &audit_entry).await?;
+
+    // Publish enrichment requested event
+    let _ = state
+        .event_bus
+        .publish(tw_core::TriageEvent::EnrichmentRequested { incident_id })
+        .await;
+
+    // Also publish status change event
+    let _ = state
+        .event_bus
+        .publish(tw_core::TriageEvent::StatusChanged {
+            incident_id,
+            old_status,
+            new_status: IncidentStatus::Enriching,
+        })
+        .await;
+
+    // Return empty response with HX-Trigger for toast
+    let trigger_json = serde_json::json!({
+        "showToast": {
+            "type": "info",
+            "title": "Enrichment Started",
+            "message": "Re-enrichment has been triggered for this incident."
+        }
+    });
+
+    Ok((
+        [(
+            axum::http::header::HeaderName::from_static("hx-trigger"),
+            trigger_json.to_string(),
+        )],
+        "",
+    )
+        .into_response())
+}
+
 // Helper functions
 
 fn incident_to_response(incident: Incident) -> IncidentResponse {
@@ -483,6 +728,7 @@ fn parse_statuses(s: &str) -> Vec<IncidentStatus> {
             "executing" => Some(IncidentStatus::Executing),
             "resolved" => Some(IncidentStatus::Resolved),
             "false_positive" => Some(IncidentStatus::FalsePositive),
+            "dismissed" => Some(IncidentStatus::Dismissed),
             "escalated" => Some(IncidentStatus::Escalated),
             "closed" => Some(IncidentStatus::Closed),
             _ => None,
