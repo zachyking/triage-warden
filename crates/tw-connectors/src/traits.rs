@@ -592,6 +592,136 @@ pub struct NetworkConnection {
     pub timestamp: DateTime<Utc>,
 }
 
+/// Email gateway connector (M365, Google Workspace, etc.).
+#[async_trait]
+pub trait EmailGatewayConnector: Connector {
+    /// Searches for emails matching criteria.
+    async fn search_emails(&self, query: EmailSearchQuery) -> ConnectorResult<Vec<EmailMessage>>;
+
+    /// Gets a specific email by ID.
+    async fn get_email(&self, message_id: &str) -> ConnectorResult<EmailMessage>;
+
+    /// Quarantines/removes an email.
+    async fn quarantine_email(&self, message_id: &str) -> ConnectorResult<ActionResult>;
+
+    /// Releases an email from quarantine.
+    async fn release_email(&self, message_id: &str) -> ConnectorResult<ActionResult>;
+
+    /// Blocks a sender.
+    async fn block_sender(&self, sender: &str) -> ConnectorResult<ActionResult>;
+
+    /// Unblocks a sender.
+    async fn unblock_sender(&self, sender: &str) -> ConnectorResult<ActionResult>;
+
+    /// Gets threat explorer data for an email.
+    async fn get_threat_data(&self, message_id: &str) -> ConnectorResult<EmailThreatData>;
+}
+
+/// Email search query parameters.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmailSearchQuery {
+    /// Sender email address or pattern.
+    pub sender: Option<String>,
+    /// Recipient email address or pattern.
+    pub recipient: Option<String>,
+    /// Subject contains text.
+    pub subject_contains: Option<String>,
+    /// Time range for the search.
+    pub timerange: TimeRange,
+    /// Filter by has attachments.
+    pub has_attachments: Option<bool>,
+    /// Filter by threat type.
+    pub threat_type: Option<String>,
+    /// Maximum results to return.
+    #[serde(default = "default_email_limit")]
+    pub limit: usize,
+}
+
+fn default_email_limit() -> usize {
+    100
+}
+
+/// An email message from the gateway.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmailMessage {
+    /// Message ID.
+    pub id: String,
+    /// Internet message ID (from headers).
+    pub internet_message_id: String,
+    /// Sender email address.
+    pub sender: String,
+    /// Recipient email addresses.
+    pub recipients: Vec<String>,
+    /// Email subject.
+    pub subject: String,
+    /// Received timestamp.
+    pub received_at: DateTime<Utc>,
+    /// Whether email has attachments.
+    pub has_attachments: bool,
+    /// Attachment metadata.
+    pub attachments: Vec<EmailAttachment>,
+    /// URLs found in the email.
+    pub urls: Vec<String>,
+    /// Email headers.
+    pub headers: HashMap<String, String>,
+    /// Threat assessment if available.
+    pub threat_assessment: Option<ThreatAssessment>,
+}
+
+/// Email attachment metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmailAttachment {
+    /// Attachment ID.
+    pub id: String,
+    /// File name.
+    pub name: String,
+    /// Content type (MIME).
+    pub content_type: String,
+    /// File size in bytes.
+    pub size: u64,
+    /// SHA256 hash if available.
+    pub sha256: Option<String>,
+}
+
+/// Threat assessment for an email.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreatAssessment {
+    /// Phishing verdict.
+    pub phish_verdict: String,
+    /// Spam verdict.
+    pub spam_verdict: String,
+    /// Malware verdict.
+    pub malware_verdict: String,
+    /// Spoof verdict.
+    pub spoof_verdict: String,
+}
+
+/// Extended threat data for an email.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmailThreatData {
+    /// Delivery action taken.
+    pub delivery_action: String,
+    /// Threat types identified.
+    pub threat_types: Vec<String>,
+    /// Detection methods used.
+    pub detection_methods: Vec<String>,
+    /// URLs clicked by recipients.
+    pub urls_clicked: Vec<UrlClick>,
+}
+
+/// URL click tracking data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UrlClick {
+    /// The URL that was clicked.
+    pub url: String,
+    /// User who clicked.
+    pub user: String,
+    /// Click timestamp.
+    pub clicked_at: DateTime<Utc>,
+    /// Verdict at time of click.
+    pub verdict: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

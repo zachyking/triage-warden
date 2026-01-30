@@ -1,9 +1,11 @@
 //! Mock ticketing connector for testing.
 
 use crate::traits::{
-    ConnectorHealth, ConnectorResult, CreateTicketRequest, Ticket, TicketPriority, TicketStatus,
+    ConnectorHealth, ConnectorResult, CreateTicketRequest, Ticket, TicketStatus,
     TicketingConnector, UpdateTicketRequest,
 };
+#[cfg(test)]
+use crate::traits::TicketPriority;
 use async_trait::async_trait;
 use chrono::Utc;
 use std::collections::HashMap;

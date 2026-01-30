@@ -26,6 +26,7 @@ moka = { version = "0.12", features = ["future"] }
 # Encoding
 base64 = "0.22"
 regex = "1.10"
+urlencoding = "2.1"
 
 [dev-dependencies]
 mockall.workspace = true

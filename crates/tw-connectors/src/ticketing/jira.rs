@@ -458,7 +458,7 @@ impl TicketingConnector for JiraConnector {
             .await
             .map_err(|e| ConnectorError::InvalidResponse(e.to_string()))?;
 
-        info!("Created Jira issue: {}", created.key);
+        info!("Created Jira issue: {} (id: {})", created.key, created.id);
 
         // Fetch the full issue details
         self.get_ticket(&created.key).await
