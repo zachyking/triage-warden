@@ -92,7 +92,10 @@ pub enum RuleCondition {
     /// Proposer must be in the given list.
     ProposerIn(Vec<String>),
     /// Custom metadata field must equal value.
-    MetadataEquals { key: String, value: serde_json::Value },
+    MetadataEquals {
+        key: String,
+        value: serde_json::Value,
+    },
     /// All sub-conditions must match.
     And(Vec<RuleCondition>),
     /// Any sub-condition must match.
@@ -127,9 +130,9 @@ impl RuleCondition {
 
             RuleCondition::TargetTypeIs(expected) => context.target.target_type == *expected,
 
-            RuleCondition::TargetHasTags(required_tags) => {
-                required_tags.iter().all(|t| context.target.tags.contains(t))
-            }
+            RuleCondition::TargetHasTags(required_tags) => required_tags
+                .iter()
+                .all(|t| context.target.tags.contains(t)),
 
             RuleCondition::TargetMatchesPattern(pattern) => {
                 if let Ok(re) = regex::Regex::new(pattern) {
@@ -384,7 +387,9 @@ mod tests {
     fn test_rule_builder() {
         let rule = PolicyRuleBuilder::new("test_rule")
             .description("Test rule for unit tests")
-            .when(RuleCondition::ActionTypeIn(vec!["isolate_host".to_string()]))
+            .when(RuleCondition::ActionTypeIn(
+                vec!["isolate_host".to_string()],
+            ))
             .when(RuleCondition::ConfidenceAbove(0.9))
             .then_require_approval(ApprovalLevel::Senior)
             .priority(50)

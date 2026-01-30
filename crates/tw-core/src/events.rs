@@ -37,10 +37,7 @@ pub enum TriageEvent {
     AlertReceived(Alert),
 
     /// An incident has been created from an alert.
-    IncidentCreated {
-        incident_id: Uuid,
-        alert_id: String,
-    },
+    IncidentCreated { incident_id: Uuid, alert_id: String },
 
     /// Enrichment has been completed for an incident.
     EnrichmentComplete {
@@ -49,9 +46,7 @@ pub enum TriageEvent {
     },
 
     /// All enrichments are complete, ready for analysis.
-    EnrichmentPhaseComplete {
-        incident_id: Uuid,
-    },
+    EnrichmentPhaseComplete { incident_id: Uuid },
 
     /// AI analysis has been completed.
     AnalysisComplete {
@@ -409,7 +404,9 @@ mod tests {
         for i in 0..5 {
             let mut alert = create_test_alert();
             alert.id = format!("alert-{}", i);
-            bus.publish(TriageEvent::AlertReceived(alert)).await.unwrap();
+            bus.publish(TriageEvent::AlertReceived(alert))
+                .await
+                .unwrap();
         }
 
         let history = bus.get_history(None).await;

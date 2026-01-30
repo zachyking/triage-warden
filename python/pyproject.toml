@@ -74,6 +74,10 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
 
+[tool.ruff.lint.per-file-ignores]
+# Prompt files contain JSON examples that are naturally long
+"tw_ai/agents/prompts/*.py" = ["E501"]
+
 [tool.black]
 line-length = 100
 target-version = ["py310"]

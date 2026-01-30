@@ -11,4 +11,4 @@ pub mod metrics;
 
 pub use audit::{AuditLog, AuditLogEntry};
 pub use logging::init_logging;
-pub use metrics::{MetricsCollector, KPIs};
+pub use metrics::{KPIs, MetricsCollector};

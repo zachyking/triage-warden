@@ -27,22 +27,22 @@ class Message:
     tool_call_id: str | None = None
 
     @classmethod
-    def system(cls, content: str) -> "Message":
+    def system(cls, content: str) -> Message:
         """Create a system message."""
         return cls(role=Role.SYSTEM, content=content)
 
     @classmethod
-    def user(cls, content: str) -> "Message":
+    def user(cls, content: str) -> Message:
         """Create a user message."""
         return cls(role=Role.USER, content=content)
 
     @classmethod
-    def assistant(cls, content: str) -> "Message":
+    def assistant(cls, content: str) -> Message:
         """Create an assistant message."""
         return cls(role=Role.ASSISTANT, content=content)
 
     @classmethod
-    def tool_result(cls, content: str, tool_call_id: str) -> "Message":
+    def tool_result(cls, content: str, tool_call_id: str) -> Message:
         """Create a tool result message."""
         return cls(role=Role.TOOL, content=content, tool_call_id=tool_call_id)
 

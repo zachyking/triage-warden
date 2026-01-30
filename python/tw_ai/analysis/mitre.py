@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Optional
 
 from tw_ai.agents.models import MITRETechnique
-
 
 # ============================================================================
 # MITRE ATT&CK Mappings
 # ============================================================================
+
 
 @dataclass
 class TechniqueInfo:
@@ -37,8 +36,13 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="Spearphishing Attachment",
         tactic="Initial Access",
         keywords=[
-            "spearphishing", "malicious attachment", "email attachment",
-            "weaponized document", "macro", "office document", "pdf attachment",
+            "spearphishing",
+            "malicious attachment",
+            "email attachment",
+            "weaponized document",
+            "macro",
+            "office document",
+            "pdf attachment",
         ],
     ),
     "T1566.002": TechniqueInfo(
@@ -46,8 +50,12 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="Spearphishing Link",
         tactic="Initial Access",
         keywords=[
-            "spearphishing link", "malicious link", "phishing url",
-            "credential harvesting", "fake login", "phishing page",
+            "spearphishing link",
+            "malicious link",
+            "phishing url",
+            "credential harvesting",
+            "fake login",
+            "phishing page",
         ],
     ),
     "T1566.003": TechniqueInfo(
@@ -55,8 +63,11 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="Spearphishing via Service",
         tactic="Initial Access",
         keywords=[
-            "social media phishing", "messaging phishing", "teams phishing",
-            "slack phishing", "discord phishing",
+            "social media phishing",
+            "messaging phishing",
+            "teams phishing",
+            "slack phishing",
+            "discord phishing",
         ],
     ),
     "T1190": TechniqueInfo(
@@ -64,8 +75,15 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="Exploit Public-Facing Application",
         tactic="Initial Access",
         keywords=[
-            "web exploit", "application exploit", "rce", "remote code execution",
-            "sql injection", "sqli", "xss", "web shell", "vulnerability exploit",
+            "web exploit",
+            "application exploit",
+            "rce",
+            "remote code execution",
+            "sql injection",
+            "sqli",
+            "xss",
+            "web shell",
+            "vulnerability exploit",
         ],
     ),
     "T1133": TechniqueInfo(
@@ -73,11 +91,14 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="External Remote Services",
         tactic="Initial Access",
         keywords=[
-            "vpn compromise", "rdp brute force", "ssh brute force",
-            "remote access", "citrix", "pulse secure",
+            "vpn compromise",
+            "rdp brute force",
+            "ssh brute force",
+            "remote access",
+            "citrix",
+            "pulse secure",
         ],
     ),
-
     # Execution
     "T1059": TechniqueInfo(
         id="T1059",
@@ -90,9 +111,16 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="PowerShell",
         tactic="Execution",
         keywords=[
-            "powershell", "pwsh", "encoded command", "base64 powershell",
-            "bypass execution policy", "iex", "invoke-expression",
-            "downloadstring", "encoded powershell", "obfuscated powershell",
+            "powershell",
+            "pwsh",
+            "encoded command",
+            "base64 powershell",
+            "bypass execution policy",
+            "iex",
+            "invoke-expression",
+            "downloadstring",
+            "encoded powershell",
+            "obfuscated powershell",
         ],
     ),
     "T1059.003": TechniqueInfo(
@@ -100,8 +128,13 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="Windows Command Shell",
         tactic="Execution",
         keywords=[
-            "cmd", "cmd.exe", "command prompt", "batch file", "bat file",
-            "windows shell", "cmd execution",
+            "cmd",
+            "cmd.exe",
+            "command prompt",
+            "batch file",
+            "bat file",
+            "windows shell",
+            "cmd execution",
         ],
     ),
     "T1059.005": TechniqueInfo(
@@ -109,8 +142,13 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="Visual Basic",
         tactic="Execution",
         keywords=[
-            "vbscript", "vbs", "visual basic", "wscript", "cscript",
-            "macro execution", "office macro",
+            "vbscript",
+            "vbs",
+            "visual basic",
+            "wscript",
+            "cscript",
+            "macro execution",
+            "office macro",
         ],
     ),
     "T1059.006": TechniqueInfo(
@@ -130,8 +168,12 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="User Execution",
         tactic="Execution",
         keywords=[
-            "user execution", "user opened", "user clicked", "user ran",
-            "clicked link", "opened attachment",
+            "user execution",
+            "user opened",
+            "user clicked",
+            "user ran",
+            "clicked link",
+            "opened attachment",
         ],
     ),
     "T1204.001": TechniqueInfo(
@@ -146,7 +188,6 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         tactic="Execution",
         keywords=["opened malicious file", "user opened attachment", "executed file"],
     ),
-
     # Persistence
     "T1547": TechniqueInfo(
         id="T1547",
@@ -159,7 +200,9 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="Registry Run Keys / Startup Folder",
         tactic="Persistence",
         keywords=[
-            "run key", "registry persistence", "startup folder",
+            "run key",
+            "registry persistence",
+            "startup folder",
             "hklm\\software\\microsoft\\windows\\currentversion\\run",
             "hkcu\\software\\microsoft\\windows\\currentversion\\run",
         ],
@@ -169,8 +212,12 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="Scheduled Task/Job",
         tactic="Persistence",
         keywords=[
-            "scheduled task", "schtasks", "cron", "at job",
-            "task scheduler", "scheduled job",
+            "scheduled task",
+            "schtasks",
+            "cron",
+            "at job",
+            "task scheduler",
+            "scheduled job",
         ],
     ),
     "T1053.005": TechniqueInfo(
@@ -184,8 +231,11 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="Valid Accounts",
         tactic="Persistence",
         keywords=[
-            "valid account", "compromised account", "stolen credentials",
-            "legitimate account", "account compromise",
+            "valid account",
+            "compromised account",
+            "stolen credentials",
+            "legitimate account",
+            "account compromise",
         ],
     ),
     "T1543": TechniqueInfo(
@@ -200,15 +250,17 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         tactic="Persistence",
         keywords=["windows service", "service install", "sc create", "service persistence"],
     ),
-
     # Privilege Escalation
     "T1068": TechniqueInfo(
         id="T1068",
         name="Exploitation for Privilege Escalation",
         tactic="Privilege Escalation",
         keywords=[
-            "privilege escalation exploit", "local privilege escalation",
-            "lpe", "kernel exploit", "elevation of privilege",
+            "privilege escalation exploit",
+            "local privilege escalation",
+            "lpe",
+            "kernel exploit",
+            "elevation of privilege",
         ],
     ),
     "T1055": TechniqueInfo(
@@ -216,19 +268,28 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="Process Injection",
         tactic="Privilege Escalation",
         keywords=[
-            "process injection", "dll injection", "code injection",
-            "thread injection", "hollowing",
+            "process injection",
+            "dll injection",
+            "code injection",
+            "thread injection",
+            "hollowing",
         ],
     ),
-
     # Defense Evasion
     "T1027": TechniqueInfo(
         id="T1027",
         name="Obfuscated Files or Information",
         tactic="Defense Evasion",
         keywords=[
-            "obfuscation", "obfuscated", "encoded", "base64", "encryption",
-            "packed", "packer", "crypter", "string encoding",
+            "obfuscation",
+            "obfuscated",
+            "encoded",
+            "base64",
+            "encryption",
+            "packed",
+            "packer",
+            "crypter",
+            "string encoding",
         ],
     ),
     "T1027.001": TechniqueInfo(
@@ -248,8 +309,12 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="Indicator Removal",
         tactic="Defense Evasion",
         keywords=[
-            "log deletion", "clear logs", "indicator removal", "evidence removal",
-            "timestomping", "file deletion",
+            "log deletion",
+            "clear logs",
+            "indicator removal",
+            "evidence removal",
+            "timestomping",
+            "file deletion",
         ],
     ),
     "T1070.001": TechniqueInfo(
@@ -269,8 +334,12 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="Impair Defenses",
         tactic="Defense Evasion",
         keywords=[
-            "disable security", "disable antivirus", "disable defender",
-            "disable edr", "impair defenses", "disable firewall",
+            "disable security",
+            "disable antivirus",
+            "disable defender",
+            "disable edr",
+            "impair defenses",
+            "disable firewall",
         ],
     ),
     "T1036": TechniqueInfo(
@@ -278,19 +347,27 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="Masquerading",
         tactic="Defense Evasion",
         keywords=[
-            "masquerading", "file rename", "legitimate process name",
-            "disguise", "fake process",
+            "masquerading",
+            "file rename",
+            "legitimate process name",
+            "disguise",
+            "fake process",
         ],
     ),
-
     # Credential Access
     "T1003": TechniqueInfo(
         id="T1003",
         name="OS Credential Dumping",
         tactic="Credential Access",
         keywords=[
-            "credential dump", "password dump", "hash dump", "mimikatz",
-            "lsass dump", "sam dump", "credential theft", "credential extraction",
+            "credential dump",
+            "password dump",
+            "hash dump",
+            "mimikatz",
+            "lsass dump",
+            "sam dump",
+            "credential theft",
+            "credential extraction",
         ],
     ),
     "T1003.001": TechniqueInfo(
@@ -298,8 +375,12 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="LSASS Memory",
         tactic="Credential Access",
         keywords=[
-            "lsass", "lsass.exe", "lsass memory", "procdump lsass",
-            "comsvcs.dll", "minidump",
+            "lsass",
+            "lsass.exe",
+            "lsass memory",
+            "procdump lsass",
+            "comsvcs.dll",
+            "minidump",
         ],
     ),
     "T1003.002": TechniqueInfo(
@@ -319,8 +400,12 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="Brute Force",
         tactic="Credential Access",
         keywords=[
-            "brute force", "password spray", "credential stuffing",
-            "password guessing", "failed login", "authentication failure",
+            "brute force",
+            "password spray",
+            "credential stuffing",
+            "password guessing",
+            "failed login",
+            "authentication failure",
         ],
     ),
     "T1110.001": TechniqueInfo(
@@ -340,8 +425,11 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="Credentials from Password Stores",
         tactic="Credential Access",
         keywords=[
-            "password store", "credential vault", "browser credentials",
-            "keychain", "saved passwords",
+            "password store",
+            "credential vault",
+            "browser credentials",
+            "keychain",
+            "saved passwords",
         ],
     ),
     "T1558": TechniqueInfo(
@@ -349,19 +437,25 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="Steal or Forge Kerberos Tickets",
         tactic="Credential Access",
         keywords=[
-            "kerberos", "golden ticket", "silver ticket", "kerberoasting",
-            "ticket forging", "pass the ticket",
+            "kerberos",
+            "golden ticket",
+            "silver ticket",
+            "kerberoasting",
+            "ticket forging",
+            "pass the ticket",
         ],
     ),
-
     # Discovery
     "T1087": TechniqueInfo(
         id="T1087",
         name="Account Discovery",
         tactic="Discovery",
         keywords=[
-            "account discovery", "user enumeration", "net user",
-            "whoami", "account enumeration",
+            "account discovery",
+            "user enumeration",
+            "net user",
+            "whoami",
+            "account enumeration",
         ],
     ),
     "T1083": TechniqueInfo(
@@ -381,19 +475,24 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="Remote System Discovery",
         tactic="Discovery",
         keywords=[
-            "network scan", "host discovery", "ping sweep",
-            "arp scan", "remote system discovery",
+            "network scan",
+            "host discovery",
+            "ping sweep",
+            "arp scan",
+            "remote system discovery",
         ],
     ),
-
     # Lateral Movement
     "T1021": TechniqueInfo(
         id="T1021",
         name="Remote Services",
         tactic="Lateral Movement",
         keywords=[
-            "lateral movement", "remote service", "remote access",
-            "network propagation", "remote execution",
+            "lateral movement",
+            "remote service",
+            "remote access",
+            "network propagation",
+            "remote execution",
         ],
     ),
     "T1021.001": TechniqueInfo(
@@ -407,8 +506,13 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="SMB/Windows Admin Shares",
         tactic="Lateral Movement",
         keywords=[
-            "smb", "admin share", "c$", "admin$", "psexec",
-            "windows admin shares", "file share",
+            "smb",
+            "admin share",
+            "c$",
+            "admin$",
+            "psexec",
+            "windows admin shares",
+            "file share",
         ],
     ),
     "T1021.004": TechniqueInfo(
@@ -428,19 +532,23 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="Lateral Tool Transfer",
         tactic="Lateral Movement",
         keywords=[
-            "tool transfer", "copy malware", "transfer payload",
+            "tool transfer",
+            "copy malware",
+            "transfer payload",
             "distribute malware",
         ],
     ),
-
     # Collection
     "T1005": TechniqueInfo(
         id="T1005",
         name="Data from Local System",
         tactic="Collection",
         keywords=[
-            "data collection", "local data", "file collection",
-            "data staging", "sensitive files",
+            "data collection",
+            "local data",
+            "file collection",
+            "data staging",
+            "sensitive files",
         ],
     ),
     "T1114": TechniqueInfo(
@@ -448,8 +556,12 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="Email Collection",
         tactic="Collection",
         keywords=[
-            "email collection", "mailbox access", "email theft",
-            "outlook", "exchange", "pst files",
+            "email collection",
+            "mailbox access",
+            "email theft",
+            "outlook",
+            "exchange",
+            "pst files",
         ],
     ),
     "T1113": TechniqueInfo(
@@ -458,15 +570,19 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         tactic="Collection",
         keywords=["screen capture", "screenshot", "screen recording"],
     ),
-
     # Command and Control
     "T1071": TechniqueInfo(
         id="T1071",
         name="Application Layer Protocol",
         tactic="Command and Control",
         keywords=[
-            "c2", "c&c", "command and control", "beacon",
-            "http c2", "dns c2", "covert channel",
+            "c2",
+            "c&c",
+            "command and control",
+            "beacon",
+            "http c2",
+            "dns c2",
+            "covert channel",
         ],
     ),
     "T1071.001": TechniqueInfo(
@@ -486,8 +602,12 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="Ingress Tool Transfer",
         tactic="Command and Control",
         keywords=[
-            "tool download", "malware download", "payload download",
-            "download and execute", "certutil download", "bitsadmin download",
+            "tool download",
+            "malware download",
+            "payload download",
+            "download and execute",
+            "certutil download",
+            "bitsadmin download",
         ],
     ),
     "T1572": TechniqueInfo(
@@ -496,14 +616,16 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         tactic="Command and Control",
         keywords=["tunneling", "ssh tunnel", "proxy", "socks", "port forwarding"],
     ),
-
     # Exfiltration
     "T1041": TechniqueInfo(
         id="T1041",
         name="Exfiltration Over C2 Channel",
         tactic="Exfiltration",
         keywords=[
-            "data exfiltration", "exfil", "data theft", "data upload",
+            "data exfiltration",
+            "exfil",
+            "data theft",
+            "data upload",
             "exfiltration over c2",
         ],
     ),
@@ -512,7 +634,9 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="Exfiltration Over Alternative Protocol",
         tactic="Exfiltration",
         keywords=[
-            "dns exfiltration", "ftp exfiltration", "alternative protocol",
+            "dns exfiltration",
+            "ftp exfiltration",
+            "alternative protocol",
             "exfil over dns",
         ],
     ),
@@ -521,19 +645,25 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="Exfiltration Over Web Service",
         tactic="Exfiltration",
         keywords=[
-            "cloud exfil", "dropbox exfil", "google drive exfil",
-            "pastebin", "web service exfiltration",
+            "cloud exfil",
+            "dropbox exfil",
+            "google drive exfil",
+            "pastebin",
+            "web service exfiltration",
         ],
     ),
-
     # Impact
     "T1486": TechniqueInfo(
         id="T1486",
         name="Data Encrypted for Impact",
         tactic="Impact",
         keywords=[
-            "ransomware", "encryption", "file encryption", "crypto locker",
-            "ransom", "data encrypted",
+            "ransomware",
+            "encryption",
+            "file encryption",
+            "crypto locker",
+            "ransom",
+            "data encrypted",
         ],
     ),
     "T1490": TechniqueInfo(
@@ -541,8 +671,11 @@ MITRE_MAPPINGS: dict[str, TechniqueInfo] = {
         name="Inhibit System Recovery",
         tactic="Impact",
         keywords=[
-            "delete backups", "vssadmin delete", "shadow copy deletion",
-            "disable recovery", "inhibit recovery",
+            "delete backups",
+            "vssadmin delete",
+            "shadow copy deletion",
+            "disable recovery",
+            "inhibit recovery",
         ],
     ),
     "T1489": TechniqueInfo(
@@ -587,16 +720,12 @@ def map_to_mitre(description: str) -> list[MITRETechnique]:
 
     for score, info in matches:
         # Skip if we already have this technique (prefer subtechnique)
-        parent_id = info.id.split(".")[0]
         if info.id in seen_ids:
             continue
 
         # If this is a parent technique, check if we already have a subtechnique
         if "." not in info.id:
-            has_subtechnique = any(
-                tid.startswith(f"{info.id}.")
-                for tid in seen_ids
-            )
+            has_subtechnique = any(tid.startswith(f"{info.id}.") for tid in seen_ids)
             if has_subtechnique:
                 continue
 
@@ -669,7 +798,7 @@ def _generate_relevance(description: str, info: TechniqueInfo) -> str:
         return f"Related to {info.tactic} techniques"
 
 
-def get_technique_info(technique_id: str) -> Optional[TechniqueInfo]:
+def get_technique_info(technique_id: str) -> TechniqueInfo | None:
     """Get information about a specific MITRE technique.
 
     Args:
@@ -691,7 +820,4 @@ def get_techniques_by_tactic(tactic: str) -> list[TechniqueInfo]:
         List of TechniqueInfo objects for techniques in that tactic.
     """
     tactic_lower = tactic.lower()
-    return [
-        info for info in MITRE_MAPPINGS.values()
-        if info.tactic.lower() == tactic_lower
-    ]
+    return [info for info in MITRE_MAPPINGS.values() if info.tactic.lower() == tactic_lower]

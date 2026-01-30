@@ -25,7 +25,9 @@ pub async fn request_id(mut request: Request, next: Next) -> Response {
         .unwrap_or_else(|| Uuid::new_v4().to_string());
 
     // Add to request extensions
-    request.extensions_mut().insert(RequestId(request_id.clone()));
+    request
+        .extensions_mut()
+        .insert(RequestId(request_id.clone()));
 
     // Add to current span
     Span::current().record("request_id", &request_id);
@@ -124,18 +126,12 @@ pub async fn security_headers(request: Request, next: Next) -> Response {
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
-    headers.insert(
-        header::X_FRAME_OPTIONS,
-        HeaderValue::from_static("DENY"),
-    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     headers.insert(
         "X-XSS-Protection",
         HeaderValue::from_static("1; mode=block"),
     );
-    headers.insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-store"),
-    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
 
     response
 }

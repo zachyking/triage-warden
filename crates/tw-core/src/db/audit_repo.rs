@@ -22,8 +22,11 @@ pub trait AuditRepository: Send + Sync {
     async fn get_recent(&self, limit: u32) -> Result<Vec<(Uuid, AuditEntry)>, DbError>;
 
     /// Gets audit entries by actor.
-    async fn get_by_actor(&self, actor: &str, limit: u32)
-        -> Result<Vec<(Uuid, AuditEntry)>, DbError>;
+    async fn get_by_actor(
+        &self,
+        actor: &str,
+        limit: u32,
+    ) -> Result<Vec<(Uuid, AuditEntry)>, DbError>;
 }
 
 /// SQLite implementation of AuditRepository.

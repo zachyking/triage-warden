@@ -85,10 +85,7 @@ mod tests {
 
     #[test]
     fn test_parse_source() {
-        assert!(matches!(
-            parse_source("splunk-cloud"),
-            AlertSource::Siem(_)
-        ));
+        assert!(matches!(parse_source("splunk-cloud"), AlertSource::Siem(_)));
         assert!(matches!(
             parse_source("crowdstrike-falcon"),
             AlertSource::Edr(_)

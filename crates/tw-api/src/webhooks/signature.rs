@@ -51,8 +51,16 @@ mod tests {
         let signature = hex::encode(result.into_bytes());
 
         assert!(validate_signature(body, &signature, secret));
-        assert!(validate_signature(body, &format!("sha256={}", signature), secret));
-        assert!(validate_signature(body, &format!("SHA256={}", signature), secret));
+        assert!(validate_signature(
+            body,
+            &format!("sha256={}", signature),
+            secret
+        ));
+        assert!(validate_signature(
+            body,
+            &format!("SHA256={}", signature),
+            secret
+        ));
 
         // Invalid signature
         assert!(!validate_signature(body, "invalid", secret));

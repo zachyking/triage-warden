@@ -2,7 +2,9 @@
 //!
 //! This action creates a ticket in the configured ticketing system.
 
-use crate::registry::{Action, ActionContext, ActionError, ActionResult, ParameterDef, ParameterType};
+use crate::registry::{
+    Action, ActionContext, ActionError, ActionResult, ParameterDef, ParameterType,
+};
 use async_trait::async_trait;
 use chrono::Utc;
 use std::collections::HashMap;
@@ -163,7 +165,10 @@ mod tests {
         let action = CreateTicketAction::new(ticketing);
 
         let context = ActionContext::new(Uuid::new_v4())
-            .with_param("title", serde_json::json!("Security Incident - Malware Detected"))
+            .with_param(
+                "title",
+                serde_json::json!("Security Incident - Malware Detected"),
+            )
             .with_param(
                 "description",
                 serde_json::json!("Malware was detected on workstation-001"),
@@ -183,7 +188,10 @@ mod tests {
 
         let context = ActionContext::new(Uuid::new_v4())
             .with_param("title", serde_json::json!("Phishing Alert"))
-            .with_param("description", serde_json::json!("User reported phishing email"))
+            .with_param(
+                "description",
+                serde_json::json!("User reported phishing email"),
+            )
             .with_param(
                 "labels",
                 serde_json::json!(["phishing", "email", "user-reported"]),

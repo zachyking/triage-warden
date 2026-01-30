@@ -320,7 +320,9 @@ impl ApprovalWorkflow {
 
         // Check approval level
         if approver_level < request.required_level {
-            return Err(ApprovalError::InsufficientPrivileges(request.required_level));
+            return Err(ApprovalError::InsufficientPrivileges(
+                request.required_level,
+            ));
         }
 
         // Approve
@@ -369,7 +371,9 @@ impl ApprovalWorkflow {
 
         // Any approver at or above the required level can deny
         if approver_level < request.required_level {
-            return Err(ApprovalError::InsufficientPrivileges(request.required_level));
+            return Err(ApprovalError::InsufficientPrivileges(
+                request.required_level,
+            ));
         }
 
         // Deny
@@ -415,7 +419,9 @@ impl ApprovalWorkflow {
         reason: &str,
     ) -> Result<ApprovalRequest, ApprovalError> {
         if !self.config.allow_escalation {
-            return Err(ApprovalError::InsufficientPrivileges(ApprovalLevel::Executive));
+            return Err(ApprovalError::InsufficientPrivileges(
+                ApprovalLevel::Executive,
+            ));
         }
 
         let mut requests = self.requests.write().await;
@@ -439,10 +445,9 @@ impl ApprovalWorkflow {
         request
             .context
             .insert("escalation_reason".to_string(), serde_json::json!(reason));
-        request.context.insert(
-            "escalated_by".to_string(),
-            serde_json::json!(escalated_by),
-        );
+        request
+            .context
+            .insert("escalated_by".to_string(), serde_json::json!(escalated_by));
 
         // Update TTL
         let new_ttl = self

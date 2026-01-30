@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, Optional
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -14,7 +14,7 @@ from tw_ai.agents.models import TriageAnalysis
 class ParseError(Exception):
     """Raised when parsing LLM output fails."""
 
-    def __init__(self, message: str, raw_text: Optional[str] = None, cause: Optional[Exception] = None):
+    def __init__(self, message: str, raw_text: str | None = None, cause: Exception | None = None):
         """
         Initialize ParseError with context.
 
@@ -63,7 +63,7 @@ def _fix_json_common_issues(text: str) -> str:
     return text
 
 
-def _extract_json_block(text: str) -> Optional[str]:
+def _extract_json_block(text: str) -> str | None:
     """
     Extract JSON from markdown code blocks.
 
@@ -93,7 +93,7 @@ def _extract_json_block(text: str) -> Optional[str]:
     return None
 
 
-def _find_json_object(text: str) -> Optional[str]:
+def _find_json_object(text: str) -> str | None:
     """
     Find a JSON object or array in text without code blocks.
 
@@ -144,7 +144,7 @@ def _find_json_object(text: str) -> Optional[str]:
     return None
 
 
-def parse_json_from_response(text: str) -> Dict[str, Any]:
+def parse_json_from_response(text: str) -> dict[str, Any]:
     """
     Extract and parse JSON from an LLM response.
 

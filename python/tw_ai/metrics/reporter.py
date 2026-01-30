@@ -155,20 +155,20 @@ class MetricsReporter:
         if summary["verdicts"]:
             lines.append("Verdict Breakdown:")
             for verdict, data in sorted(summary["verdicts"].items()):
-                lines.append(
-                    f"  {verdict:15} {data['count']:6d} ({data['percentage']:5.1f}%)"
-                )
+                lines.append(f"  {verdict:15} {data['count']:6d} ({data['percentage']:5.1f}%)")
             lines.append("")
 
         # Triage time stats
         triage_time = summary["triage_time"]
-        lines.extend([
-            "Triage Time (ms):",
-            f"  Mean:   {triage_time['mean_ms']:8.1f}",
-            f"  Median: {triage_time['median_ms']:8.1f}",
-            f"  P95:    {triage_time['p95_ms']:8.1f}",
-            "",
-        ])
+        lines.extend(
+            [
+                "Triage Time (ms):",
+                f"  Mean:   {triage_time['mean_ms']:8.1f}",
+                f"  Median: {triage_time['median_ms']:8.1f}",
+                f"  P95:    {triage_time['p95_ms']:8.1f}",
+                "",
+            ]
+        )
 
         # Action success rates
         if summary["action_success_rates"]:

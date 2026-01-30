@@ -61,10 +61,7 @@ impl SlackNotifier {
 
         let header = format!(
             "{} {} | {} {}",
-            type_emoji,
-            notification.notification_type,
-            priority_emoji,
-            notification.priority
+            type_emoji, notification.notification_type, priority_emoji, notification.priority
         );
 
         let mut fields = vec![
@@ -75,7 +72,10 @@ impl SlackNotifier {
             },
             SlackField {
                 title: "Created".to_string(),
-                value: notification.created_at.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+                value: notification
+                    .created_at
+                    .format("%Y-%m-%d %H:%M:%S UTC")
+                    .to_string(),
                 short: true,
             },
         ];

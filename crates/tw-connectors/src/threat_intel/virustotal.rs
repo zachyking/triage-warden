@@ -407,13 +407,7 @@ impl crate::traits::Connector for VirusTotalConnector {
                         .user
                         .allowed
                         .saturating_sub(
-                            quota
-                                .data
-                                .attributes
-                                .quotas
-                                .api_requests_monthly
-                                .user
-                                .used,
+                            quota.data.attributes.quotas.api_requests_monthly.user.used,
                         );
 
                     if remaining < 100 {
@@ -832,8 +826,14 @@ mod tests {
 
         assert_eq!(connector.calculate_verdict(0, 0), ThreatVerdict::Unknown);
         assert_eq!(connector.calculate_verdict(0, 70), ThreatVerdict::Clean);
-        assert_eq!(connector.calculate_verdict(5, 70), ThreatVerdict::Suspicious);
-        assert_eq!(connector.calculate_verdict(40, 70), ThreatVerdict::Malicious);
+        assert_eq!(
+            connector.calculate_verdict(5, 70),
+            ThreatVerdict::Suspicious
+        );
+        assert_eq!(
+            connector.calculate_verdict(40, 70),
+            ThreatVerdict::Malicious
+        );
     }
 
     #[test]

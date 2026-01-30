@@ -61,7 +61,9 @@ impl CrowdStrikeConnector {
 
         // Update base URL based on region if not explicitly set
         let mut connector_config = config.connector.clone();
-        if connector_config.base_url.is_empty() || connector_config.base_url == "https://api.crowdstrike.com" {
+        if connector_config.base_url.is_empty()
+            || connector_config.base_url == "https://api.crowdstrike.com"
+        {
             connector_config.base_url = get_region_url(&config.region).to_string();
         }
 
@@ -78,10 +80,7 @@ impl CrowdStrikeConnector {
     /// Builds a FQL filter for host search.
     pub fn build_host_filter(query: &str) -> String {
         let escaped = query.replace('\'', "\\'");
-        format!(
-            "hostname:*'{}*'+status:'normal'",
-            escaped
-        )
+        format!("hostname:*'{}*'+status:'normal'", escaped)
     }
 
     /// Builds a FQL filter for detection search.
@@ -94,7 +93,10 @@ impl CrowdStrikeConnector {
     #[instrument(skip(self))]
     async fn find_host_id(&self, hostname: &str) -> ConnectorResult<String> {
         let filter = format!("hostname:'{}'", hostname.replace('\'', "\\'"));
-        let path = format!("/devices/queries/devices/v1?filter={}", urlencoding::encode(&filter));
+        let path = format!(
+            "/devices/queries/devices/v1?filter={}",
+            urlencoding::encode(&filter)
+        );
 
         let response = self.client.get(&path).await?;
 
@@ -106,10 +108,9 @@ impl CrowdStrikeConnector {
             )));
         }
 
-        let result: CSQueryResponse = response
-            .json()
-            .await
-            .map_err(|e| ConnectorError::InvalidResponse(format!("Failed to parse response: {}", e)))?;
+        let result: CSQueryResponse = response.json().await.map_err(|e| {
+            ConnectorError::InvalidResponse(format!("Failed to parse response: {}", e))
+        })?;
 
         result
             .resources
@@ -133,10 +134,9 @@ impl CrowdStrikeConnector {
             )));
         }
 
-        let result: CSDevicesResponse = response
-            .json()
-            .await
-            .map_err(|e| ConnectorError::InvalidResponse(format!("Failed to parse response: {}", e)))?;
+        let result: CSDevicesResponse = response.json().await.map_err(|e| {
+            ConnectorError::InvalidResponse(format!("Failed to parse response: {}", e))
+        })?;
 
         result
             .resources
@@ -164,8 +164,16 @@ impl CrowdStrikeConnector {
         HostInfo {
             hostname: device.hostname.clone().unwrap_or_default(),
             host_id: device.device_id.clone(),
-            ip_addresses: device.local_ip.clone().map(|ip| vec![ip]).unwrap_or_default(),
-            mac_addresses: device.mac_address.clone().map(|mac| vec![mac]).unwrap_or_default(),
+            ip_addresses: device
+                .local_ip
+                .clone()
+                .map(|ip| vec![ip])
+                .unwrap_or_default(),
+            mac_addresses: device
+                .mac_address
+                .clone()
+                .map(|mac| vec![mac])
+                .unwrap_or_default(),
             os: device.platform_name.clone().unwrap_or_default(),
             os_version: device.os_version.clone().unwrap_or_default(),
             agent_version: device.agent_version.clone().unwrap_or_default(),
@@ -201,38 +209,47 @@ impl CrowdStrikeConnector {
 
         Detection {
             id: det.detection_id.clone(),
-            name: det.behaviors
+            name: det
+                .behaviors
                 .as_ref()
                 .and_then(|b| b.first())
                 .and_then(|b| b.display_name.clone())
                 .unwrap_or_else(|| "Unknown Detection".to_string()),
             severity,
             timestamp,
-            description: det.behaviors
+            description: det
+                .behaviors
                 .as_ref()
                 .and_then(|b| b.first())
                 .and_then(|b| b.description.clone())
                 .unwrap_or_default(),
-            tactic: det.behaviors
+            tactic: det
+                .behaviors
                 .as_ref()
                 .and_then(|b| b.first())
                 .and_then(|b| b.tactic.clone()),
-            technique: det.behaviors
+            technique: det
+                .behaviors
                 .as_ref()
                 .and_then(|b| b.first())
                 .and_then(|b| b.technique.clone()),
-            file_hash: det.behaviors
+            file_hash: det
+                .behaviors
                 .as_ref()
                 .and_then(|b| b.first())
                 .and_then(|b| b.sha256.clone()),
-            process_name: det.behaviors
+            process_name: det
+                .behaviors
                 .as_ref()
                 .and_then(|b| b.first())
                 .and_then(|b| b.filename.clone()),
             details: {
                 let mut m = HashMap::new();
                 if let Some(behaviors) = &det.behaviors {
-                    m.insert("behaviors".to_string(), serde_json::to_value(behaviors).unwrap_or_default());
+                    m.insert(
+                        "behaviors".to_string(),
+                        serde_json::to_value(behaviors).unwrap_or_default(),
+                    );
                 }
                 if let Some(cid) = &det.cid {
                     m.insert("cid".to_string(), serde_json::json!(cid));
@@ -258,19 +275,20 @@ impl crate::traits::Connector for CrowdStrikeConnector {
         let path = "/policy/combined/reveal-uninstall-token/v1?device_id=health_check";
         match self.client.get(path).await {
             Ok(response) if response.status().is_success() => Ok(ConnectorHealth::Healthy),
-            Ok(response) if response.status().as_u16() == 401 => {
-                Ok(ConnectorHealth::Unhealthy("Authentication failed".to_string()))
-            }
-            Ok(response) if response.status().as_u16() == 403 => {
-                Ok(ConnectorHealth::Unhealthy("Authorization denied".to_string()))
-            }
+            Ok(response) if response.status().as_u16() == 401 => Ok(ConnectorHealth::Unhealthy(
+                "Authentication failed".to_string(),
+            )),
+            Ok(response) if response.status().as_u16() == 403 => Ok(ConnectorHealth::Unhealthy(
+                "Authorization denied".to_string(),
+            )),
             Ok(response) if response.status().as_u16() == 429 => {
                 Ok(ConnectorHealth::Degraded("Rate limited".to_string()))
             }
             Ok(_) => Ok(ConnectorHealth::Healthy), // 404 is fine for health check
-            Err(ConnectorError::ConnectionFailed(e)) => {
-                Ok(ConnectorHealth::Unhealthy(format!("Connection failed: {}", e)))
-            }
+            Err(ConnectorError::ConnectionFailed(e)) => Ok(ConnectorHealth::Unhealthy(format!(
+                "Connection failed: {}",
+                e
+            ))),
             Err(e) => Ok(ConnectorHealth::Unhealthy(e.to_string())),
         }
     }
@@ -310,10 +328,9 @@ impl EDRConnector for CrowdStrikeConnector {
             )));
         }
 
-        let query_result: CSQueryResponse = response
-            .json()
-            .await
-            .map_err(|e| ConnectorError::InvalidResponse(format!("Failed to parse response: {}", e)))?;
+        let query_result: CSQueryResponse = response.json().await.map_err(|e| {
+            ConnectorError::InvalidResponse(format!("Failed to parse response: {}", e))
+        })?;
 
         if query_result.resources.is_empty() {
             return Ok(Vec::new());
@@ -333,10 +350,9 @@ impl EDRConnector for CrowdStrikeConnector {
             )));
         }
 
-        let devices_result: CSDevicesResponse = response
-            .json()
-            .await
-            .map_err(|e| ConnectorError::InvalidResponse(format!("Failed to parse response: {}", e)))?;
+        let devices_result: CSDevicesResponse = response.json().await.map_err(|e| {
+            ConnectorError::InvalidResponse(format!("Failed to parse response: {}", e))
+        })?;
 
         Ok(devices_result
             .resources
@@ -421,10 +437,9 @@ impl EDRConnector for CrowdStrikeConnector {
             )));
         }
 
-        let query_result: CSQueryResponse = response
-            .json()
-            .await
-            .map_err(|e| ConnectorError::InvalidResponse(format!("Failed to parse response: {}", e)))?;
+        let query_result: CSQueryResponse = response.json().await.map_err(|e| {
+            ConnectorError::InvalidResponse(format!("Failed to parse response: {}", e))
+        })?;
 
         if query_result.resources.is_empty() {
             return Ok(Vec::new());
@@ -435,7 +450,10 @@ impl EDRConnector for CrowdStrikeConnector {
             "ids": query_result.resources
         });
 
-        let response = self.client.post("/detects/entities/summaries/GET/v1", &body).await?;
+        let response = self
+            .client
+            .post("/detects/entities/summaries/GET/v1", &body)
+            .await?;
 
         if !response.status().is_success() {
             let error = response.text().await.unwrap_or_default();
@@ -445,10 +463,9 @@ impl EDRConnector for CrowdStrikeConnector {
             )));
         }
 
-        let detections_result: CSDetectionsResponse = response
-            .json()
-            .await
-            .map_err(|e| ConnectorError::InvalidResponse(format!("Failed to parse detections: {}", e)))?;
+        let detections_result: CSDetectionsResponse = response.json().await.map_err(|e| {
+            ConnectorError::InvalidResponse(format!("Failed to parse detections: {}", e))
+        })?;
 
         Ok(detections_result
             .resources

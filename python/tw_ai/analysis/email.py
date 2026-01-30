@@ -6,9 +6,7 @@ import hashlib
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
 from html.parser import HTMLParser
-
 
 # ============================================================================
 # Data Classes
@@ -29,7 +27,7 @@ class ExtractedURL:
 
     url: str
     domain: str
-    display_text: Optional[str] = None
+    display_text: str | None = None
     is_shortened: bool = False
     is_ip_based: bool = False
 
@@ -49,8 +47,8 @@ class AttachmentInfo:
     filename: str
     content_type: str
     size_bytes: int
-    md5: Optional[str] = None
-    sha256: Optional[str] = None
+    md5: str | None = None
+    sha256: str | None = None
 
 
 @dataclass
@@ -92,13 +90,13 @@ class EmailAnalysis:
     message_id: str
     subject: str
     sender: str
-    sender_display_name: Optional[str] = None
-    reply_to: Optional[str] = None
+    sender_display_name: str | None = None
+    reply_to: str | None = None
     recipients: list[str] = field(default_factory=list)
     cc: list[str] = field(default_factory=list)
     headers: dict[str, str] = field(default_factory=dict)
-    body_text: Optional[str] = None
-    body_html: Optional[str] = None
+    body_text: str | None = None
+    body_html: str | None = None
     urls: list[ExtractedURL] = field(default_factory=list)
     attachments: list[AttachmentInfo] = field(default_factory=list)
     received_timestamps: list[datetime] = field(default_factory=list)
@@ -110,31 +108,33 @@ class EmailAnalysis:
 # ============================================================================
 
 # Known URL shortening services
-URL_SHORTENERS = frozenset([
-    "bit.ly",
-    "tinyurl.com",
-    "t.co",
-    "goo.gl",
-    "ow.ly",
-    "is.gd",
-    "buff.ly",
-    "j.mp",
-    "rb.gy",
-    "cutt.ly",
-    "shorturl.at",
-    "tiny.cc",
-    "x.co",
-    "su.pr",
-    "lnkd.in",
-    "fb.me",
-    "v.gd",
-    "qr.ae",
-    "adf.ly",
-    "bc.vc",
-    "po.st",
-    "u.to",
-    "s.id",
-])
+URL_SHORTENERS = frozenset(
+    [
+        "bit.ly",
+        "tinyurl.com",
+        "t.co",
+        "goo.gl",
+        "ow.ly",
+        "is.gd",
+        "buff.ly",
+        "j.mp",
+        "rb.gy",
+        "cutt.ly",
+        "shorturl.at",
+        "tiny.cc",
+        "x.co",
+        "su.pr",
+        "lnkd.in",
+        "fb.me",
+        "v.gd",
+        "qr.ae",
+        "adf.ly",
+        "bc.vc",
+        "po.st",
+        "u.to",
+        "s.id",
+    ]
+)
 
 
 # ============================================================================
@@ -307,10 +307,10 @@ class _HTMLLinkExtractor(HTMLParser):
     def __init__(self):
         super().__init__()
         self.links: list[tuple[str, str]] = []  # (href, display_text)
-        self._current_link: Optional[str] = None
+        self._current_link: str | None = None
         self._current_text: list[str] = []
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag.lower() == "a":
             for name, value in attrs:
                 if name.lower() == "href" and value:
@@ -407,7 +407,9 @@ def _parse_spf_result(auth_header: str) -> str:
     header_lower = auth_header.lower()
 
     # Check for SPF result in Authentication-Results header (spf=pass format)
-    spf_match = re.search(r"spf\s*=\s*(pass|fail|softfail|neutral|none|temperror|permerror)", header_lower)
+    spf_match = re.search(
+        r"spf\s*=\s*(pass|fail|softfail|neutral|none|temperror|permerror)", header_lower
+    )
     if spf_match:
         result = spf_match.group(1)
         if result in ("pass",):
@@ -418,7 +420,9 @@ def _parse_spf_result(auth_header: str) -> str:
             return "softfail"
 
     # Check for Received-SPF header format (starts with result like "pass (domain...)")
-    received_spf_match = re.search(r"^\s*(pass|fail|softfail|neutral|none|temperror|permerror)\b", header_lower)
+    received_spf_match = re.search(
+        r"^\s*(pass|fail|softfail|neutral|none|temperror|permerror)\b", header_lower
+    )
     if received_spf_match:
         result = received_spf_match.group(1)
         if result == "pass":
@@ -523,7 +527,7 @@ def parse_authentication_headers(headers: dict) -> EmailAuthResult:
 # ============================================================================
 
 
-def _parse_email_address(value: str) -> tuple[Optional[str], str]:
+def _parse_email_address(value: str) -> tuple[str | None, str]:
     """Parse email address with optional display name.
 
     Args:
@@ -704,10 +708,7 @@ def parse_email_alert(alert_data: dict) -> EmailAnalysis:
 
     # Get subject
     subject = (
-        alert_data.get("subject")
-        or headers.get("Subject", "")
-        or headers.get("subject", "")
-        or ""
+        alert_data.get("subject") or headers.get("Subject", "") or headers.get("subject", "") or ""
     )
 
     # Get sender
@@ -722,9 +723,7 @@ def parse_email_alert(alert_data: dict) -> EmailAnalysis:
 
     # Get Reply-To
     reply_to_raw = (
-        alert_data.get("reply_to")
-        or headers.get("Reply-To", "")
-        or headers.get("reply-to", "")
+        alert_data.get("reply_to") or headers.get("Reply-To", "") or headers.get("reply-to", "")
     )
     _, reply_to = _parse_email_address(reply_to_raw) if reply_to_raw else (None, None)
     if reply_to and reply_to == sender:
@@ -744,12 +743,7 @@ def parse_email_alert(alert_data: dict) -> EmailAnalysis:
         recipients = _parse_email_list(recipients_raw)
 
     # Get CC
-    cc_raw = (
-        alert_data.get("cc")
-        or headers.get("Cc", "")
-        or headers.get("cc", "")
-        or ""
-    )
+    cc_raw = alert_data.get("cc") or headers.get("Cc", "") or headers.get("cc", "") or ""
     if isinstance(cc_raw, list):
         cc = [_parse_email_address(c)[1] for c in cc_raw if c]
     else:

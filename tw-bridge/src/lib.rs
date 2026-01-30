@@ -818,12 +818,7 @@ impl EDRBridge {
     /// Raises:
     ///     RuntimeError: If host not found or retrieval fails
     #[pyo3(signature = (hostname, hours=24))]
-    pub fn get_processes(
-        &self,
-        py: Python<'_>,
-        hostname: &str,
-        hours: i64,
-    ) -> PyResult<PyObject> {
+    pub fn get_processes(&self, py: Python<'_>, hostname: &str, hours: i64) -> PyResult<PyObject> {
         let connector = Arc::clone(&self.connector);
         let hostname = hostname.to_string();
         let timerange = TimeRange::last_hours(hours);
@@ -859,7 +854,11 @@ impl EDRBridge {
         let timerange = TimeRange::last_hours(hours);
 
         let result = get_runtime()
-            .block_on(async move { connector.get_network_connections(&hostname, timerange).await })
+            .block_on(async move {
+                connector
+                    .get_network_connections(&hostname, timerange)
+                    .await
+            })
             .map_err(connector_error_to_py)?;
 
         pythonize::pythonize(py, &result)
@@ -1076,9 +1075,9 @@ impl PolicyBridge {
             "executive" => ApprovalLevel::Executive,
             _ => {
                 return Err(PyValueError::new_err(format!(
-                    "Invalid approval level: {}. Must be one of: analyst, senior, manager, executive",
-                    level
-                )))
+                "Invalid approval level: {}. Must be one of: analyst, senior, manager, executive",
+                level
+            )))
             }
         };
 
@@ -1115,7 +1114,8 @@ impl PolicyBridge {
             .parse::<Uuid>()
             .map_err(|e| PyValueError::new_err(format!("Invalid request_id: {}", e)))?;
 
-        let request = get_runtime().block_on(async { self.approval_manager.get_request(uuid).await });
+        let request =
+            get_runtime().block_on(async { self.approval_manager.get_request(uuid).await });
 
         let result = match request {
             Some(req) => {
@@ -1493,11 +1493,7 @@ mod tests {
         let connector = MockThreatIntelConnector::new("test");
 
         let result = get_runtime()
-            .block_on(async move {
-                connector
-                    .lookup_ip(&"203.0.113.100".parse().unwrap())
-                    .await
-            })
+            .block_on(async move { connector.lookup_ip(&"203.0.113.100".parse().unwrap()).await })
             .unwrap();
 
         assert_eq!(
@@ -1686,18 +1682,9 @@ mod tests {
             .block_on(async move { edr_connector.health_check().await })
             .unwrap();
 
-        assert_eq!(
-            ti_health,
-            tw_connectors::traits::ConnectorHealth::Healthy
-        );
-        assert_eq!(
-            siem_health,
-            tw_connectors::traits::ConnectorHealth::Healthy
-        );
-        assert_eq!(
-            edr_health,
-            tw_connectors::traits::ConnectorHealth::Healthy
-        );
+        assert_eq!(ti_health, tw_connectors::traits::ConnectorHealth::Healthy);
+        assert_eq!(siem_health, tw_connectors::traits::ConnectorHealth::Healthy);
+        assert_eq!(edr_health, tw_connectors::traits::ConnectorHealth::Healthy);
     }
 
     #[test]
@@ -1881,10 +1868,7 @@ mod tests {
                 .await
         });
 
-        assert_eq!(
-            request.status,
-            tw_policy::ManagedApprovalStatus::Pending
-        );
+        assert_eq!(request.status, tw_policy::ManagedApprovalStatus::Pending);
 
         // Check status
         let retrieved = get_runtime()

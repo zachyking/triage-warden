@@ -418,7 +418,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(approved.status, ApprovalStatus::Approved);
-        assert_eq!(approved.decision_by, Some("analyst@example.com".to_string()));
+        assert_eq!(
+            approved.decision_by,
+            Some("analyst@example.com".to_string())
+        );
         assert!(approved.decision_at.is_some());
         assert_eq!(
             approved.decision_comment,
@@ -520,30 +523,15 @@ mod tests {
 
         // Create multiple requests
         let request1 = manager
-            .submit_request(
-                "action1",
-                "target1",
-                ApprovalLevel::Analyst,
-                "requester",
-            )
+            .submit_request("action1", "target1", ApprovalLevel::Analyst, "requester")
             .await;
 
         let request2 = manager
-            .submit_request(
-                "action2",
-                "target2",
-                ApprovalLevel::Senior,
-                "requester",
-            )
+            .submit_request("action2", "target2", ApprovalLevel::Senior, "requester")
             .await;
 
         let request3 = manager
-            .submit_request(
-                "action3",
-                "target3",
-                ApprovalLevel::Manager,
-                "requester",
-            )
+            .submit_request("action3", "target3", ApprovalLevel::Manager, "requester")
             .await;
 
         // Approve one, deny another
@@ -565,9 +553,7 @@ mod tests {
     async fn test_approve_not_found() {
         let manager = ApprovalManager::new(3600);
 
-        let result = manager
-            .approve(Uuid::new_v4(), "approver", None)
-            .await;
+        let result = manager.approve(Uuid::new_v4(), "approver", None).await;
 
         assert!(matches!(result, Err(ApprovalError::NotFound(_))));
     }
@@ -577,12 +563,7 @@ mod tests {
         let manager = ApprovalManager::new(3600);
 
         let request = manager
-            .submit_request(
-                "action",
-                "target",
-                ApprovalLevel::Analyst,
-                "requester",
-            )
+            .submit_request("action", "target", ApprovalLevel::Analyst, "requester")
             .await;
 
         // First approval succeeds
@@ -601,12 +582,7 @@ mod tests {
         let manager = ApprovalManager::new(3600);
 
         let request = manager
-            .submit_request(
-                "action",
-                "target",
-                ApprovalLevel::Analyst,
-                "requester",
-            )
+            .submit_request("action", "target", ApprovalLevel::Analyst, "requester")
             .await;
 
         // First denial succeeds
@@ -625,19 +601,11 @@ mod tests {
         let manager = ApprovalManager::new(3600);
 
         let request = manager
-            .submit_request(
-                "action",
-                "target",
-                ApprovalLevel::Analyst,
-                "requester",
-            )
+            .submit_request("action", "target", ApprovalLevel::Analyst, "requester")
             .await;
 
         // Approve first
-        manager
-            .approve(request.id, "approver", None)
-            .await
-            .unwrap();
+        manager.approve(request.id, "approver", None).await.unwrap();
 
         // Cancel fails
         let result = manager.cancel(request.id).await;
@@ -648,9 +616,7 @@ mod tests {
     async fn test_deny_not_found() {
         let manager = ApprovalManager::new(3600);
 
-        let result = manager
-            .deny(Uuid::new_v4(), "denier", "reason")
-            .await;
+        let result = manager.deny(Uuid::new_v4(), "denier", "reason").await;
 
         assert!(matches!(result, Err(ApprovalError::NotFound(_))));
     }
@@ -670,12 +636,7 @@ mod tests {
 
         // Create a request
         let request = manager
-            .submit_request(
-                "action",
-                "target",
-                ApprovalLevel::Analyst,
-                "requester",
-            )
+            .submit_request("action", "target", ApprovalLevel::Analyst, "requester")
             .await;
 
         // Wait for expiration
@@ -697,12 +658,7 @@ mod tests {
         let manager = ApprovalManager::new(1);
 
         let request = manager
-            .submit_request(
-                "action",
-                "target",
-                ApprovalLevel::Analyst,
-                "requester",
-            )
+            .submit_request("action", "target", ApprovalLevel::Analyst, "requester")
             .await;
 
         // Wait for expiration
@@ -723,12 +679,7 @@ mod tests {
         let manager = ApprovalManager::new(1);
 
         let request = manager
-            .submit_request(
-                "action",
-                "target",
-                ApprovalLevel::Analyst,
-                "requester",
-            )
+            .submit_request("action", "target", ApprovalLevel::Analyst, "requester")
             .await;
 
         // Wait for expiration
@@ -750,12 +701,7 @@ mod tests {
         let manager = ApprovalManager::new(3600);
 
         let request = manager
-            .submit_request(
-                "action",
-                "target",
-                ApprovalLevel::Analyst,
-                "requester",
-            )
+            .submit_request("action", "target", ApprovalLevel::Analyst, "requester")
             .await;
 
         assert!(request.is_pending());
@@ -802,12 +748,7 @@ mod tests {
 
         // Create a request with long expiration
         manager
-            .submit_request(
-                "action",
-                "target",
-                ApprovalLevel::Analyst,
-                "requester",
-            )
+            .submit_request("action", "target", ApprovalLevel::Analyst, "requester")
             .await;
 
         // Cleanup should find nothing expired

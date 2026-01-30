@@ -23,10 +23,7 @@ pub enum MockBehavior {
     /// Return results normally.
     Normal,
     /// Fail with a specific error after N calls.
-    FailAfter {
-        calls: u64,
-        error: ConnectorError,
-    },
+    FailAfter { calls: u64, error: ConnectorError },
     /// Return error for specific indicators.
     FailOn {
         indicators: Vec<String>,
@@ -274,11 +271,7 @@ impl MockThreatIntelConnector {
     }
 
     /// Records a lookup and applies behavior.
-    async fn record_and_check(
-        &self,
-        indicator_type: &str,
-        indicator: &str,
-    ) -> ConnectorResult<()> {
+    async fn record_and_check(&self, indicator_type: &str, indicator: &str) -> ConnectorResult<()> {
         // Record the lookup
         {
             let mut history = self.lookup_history.write().await;

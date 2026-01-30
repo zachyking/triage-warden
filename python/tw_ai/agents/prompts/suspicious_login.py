@@ -8,10 +8,10 @@ covering MITRE ATT&CK techniques:
 """
 
 from tw_ai.agents.prompts.system import (
-    SOC_ANALYST_PERSONA,
     AVAILABLE_TOOLS,
     CHAIN_OF_THOUGHT_GUIDANCE,
     CONFIDENCE_SCORING_CRITERIA,
+    SOC_ANALYST_PERSONA,
     format_output_schema,
 )
 
@@ -68,7 +68,7 @@ LOGIN_RISK_FACTORS = """## Authentication Risk Factor Analysis
 # Suspicious Login Examples
 # =============================================================================
 
-LOGIN_EXAMPLES = '''## Example Analyses
+LOGIN_EXAMPLES = """## Example Analyses
 
 ### Example 1: Impossible Travel - Confirmed Compromise
 
@@ -272,7 +272,7 @@ LOGIN_EXAMPLES = '''## Example Analyses
   ],
   "reasoning": "This alert warrants investigation but is not definitively malicious. Concerning factors: (1) Service accounts should never be used for interactive logins - they exist for automated processes, (2) 2:30 AM is unusual even for backup operations which typically run at midnight, (3) MFA exemption means the account is more vulnerable if credentials are stolen. Mitigating factors: (1) Login originates from the expected backup server, (2) Internal network source reduces likelihood of external attacker, (3) Could be legitimate troubleshooting by admin who has access to service credentials. Need human verification before escalating or closing."
 }
-```'''
+```"""
 
 
 # =============================================================================
@@ -362,17 +362,21 @@ def get_suspicious_login_triage_prompt(
     prompt_parts = [SUSPICIOUS_LOGIN_PROMPT]
 
     if organization_context:
-        prompt_parts.append(f"""## Organization Context
+        prompt_parts.append(
+            f"""## Organization Context
 
-{organization_context}""")
+{organization_context}"""
+        )
 
-    prompt_parts.append(f"""## Alert to Analyze
+    prompt_parts.append(
+        f"""## Alert to Analyze
 
 {alert_context}
 
 Analyze this authentication alert following the methodology above. Gather additional evidence using \
 the available tools as needed (SIEM correlation for related events, user context), then provide your \
-structured assessment.""")
+structured assessment."""
+    )
 
     return "\n\n".join(prompt_parts)
 
@@ -407,7 +411,7 @@ def build_login_alert_context(
 
     parts = [
         f"**Alert ID**: {alert_id}",
-        f"**Alert Type**: Suspicious Authentication",
+        "**Alert Type**: Suspicious Authentication",
         f"**User**: {user}",
     ]
 
@@ -417,16 +421,22 @@ def build_login_alert_context(
     parts.append(f"\n**Login Event**:\n```json\n{json.dumps(login_event, indent=2)}\n```")
 
     if previous_logins:
-        parts.append(f"\n**Previous Logins (Baseline)**:\n```json\n{json.dumps(previous_logins, indent=2)}\n```")
+        parts.append(
+            f"\n**Previous Logins (Baseline)**:\n```json\n{json.dumps(previous_logins, indent=2)}\n```"
+        )
 
     if failed_attempts:
-        parts.append(f"\n**Failed Attempts Before Success**:\n```json\n{json.dumps(failed_attempts, indent=2)}\n```")
+        parts.append(
+            f"\n**Failed Attempts Before Success**:\n```json\n{json.dumps(failed_attempts, indent=2)}\n```"
+        )
 
     if user_context:
         parts.append(f"\n**User Context**:\n```json\n{json.dumps(user_context, indent=2)}\n```")
 
     if device_info:
-        parts.append(f"\n**Device Information**:\n```json\n{json.dumps(device_info, indent=2)}\n```")
+        parts.append(
+            f"\n**Device Information**:\n```json\n{json.dumps(device_info, indent=2)}\n```"
+        )
 
     return "\n".join(parts)
 

@@ -4,7 +4,7 @@ use super::DbError;
 use std::time::Duration;
 
 #[cfg(feature = "database")]
-use sqlx::{Pool, Sqlite, Postgres};
+use sqlx::{Pool, Postgres, Sqlite};
 
 /// Unified database pool that can work with SQLite or PostgreSQL.
 #[cfg(feature = "database")]
@@ -129,14 +129,8 @@ impl DbPool {
     /// Checks if the database connection is healthy.
     pub async fn is_healthy(&self) -> bool {
         match self {
-            DbPool::Sqlite(pool) => sqlx::query("SELECT 1")
-                .fetch_one(pool)
-                .await
-                .is_ok(),
-            DbPool::Postgres(pool) => sqlx::query("SELECT 1")
-                .fetch_one(pool)
-                .await
-                .is_ok(),
+            DbPool::Sqlite(pool) => sqlx::query("SELECT 1").fetch_one(pool).await.is_ok(),
+            DbPool::Postgres(pool) => sqlx::query("SELECT 1").fetch_one(pool).await.is_ok(),
         }
     }
 

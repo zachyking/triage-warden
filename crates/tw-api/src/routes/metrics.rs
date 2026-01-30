@@ -63,9 +63,7 @@ async fn prometheus_metrics(State(_state): State<AppState>) -> String {
     ),
     tag = "Metrics"
 )]
-async fn json_metrics(
-    State(_state): State<AppState>,
-) -> Result<Json<MetricsResponse>, ApiError> {
+async fn json_metrics(State(_state): State<AppState>) -> Result<Json<MetricsResponse>, ApiError> {
     // TODO: Query actual metrics from database
 
     let by_status: HashMap<String, u64> = [

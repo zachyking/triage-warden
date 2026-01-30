@@ -245,10 +245,7 @@ impl RateLimiter {
     /// Increments the concurrent count for an action.
     pub async fn start_concurrent(&self, action_type: &str) {
         let mut state = self.state.write().await;
-        *state
-            .concurrent
-            .entry(action_type.to_string())
-            .or_insert(0) += 1;
+        *state.concurrent.entry(action_type.to_string()).or_insert(0) += 1;
     }
 
     /// Decrements the concurrent count for an action.
@@ -331,9 +328,9 @@ impl PolicyEngine {
             // Require approval for host isolation
             PolicyRule::new(
                 "host_isolation_requires_approval".to_string(),
-                vec![RuleCondition::ActionTypeIn(vec![
-                    "isolate_host".to_string(),
-                ])],
+                vec![RuleCondition::ActionTypeIn(
+                    vec!["isolate_host".to_string()],
+                )],
                 RuleEffect::RequireApproval(ApprovalLevel::Analyst),
             ),
         ];
@@ -382,7 +379,10 @@ impl PolicyEngine {
         }
 
         // Check target protection
-        if self.deny_list.is_target_protected(&context.target.identifier) {
+        if self
+            .deny_list
+            .is_target_protected(&context.target.identifier)
+        {
             info!(
                 "Target {} is protected by deny list",
                 context.target.identifier

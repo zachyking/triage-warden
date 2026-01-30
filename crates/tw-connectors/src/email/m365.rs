@@ -84,7 +84,10 @@ impl M365Connector {
 
         // Sender filter
         if let Some(sender) = &query.sender {
-            filters.push(format!("from/emailAddress/address eq '{}'", escape_odata(sender)));
+            filters.push(format!(
+                "from/emailAddress/address eq '{}'",
+                escape_odata(sender)
+            ));
         }
 
         // Has attachments filter
@@ -191,10 +194,9 @@ impl M365Connector {
             )));
         }
 
-        let msg: GraphMessage = response
-            .json()
-            .await
-            .map_err(|e| ConnectorError::InvalidResponse(format!("Failed to parse message: {}", e)))?;
+        let msg: GraphMessage = response.json().await.map_err(|e| {
+            ConnectorError::InvalidResponse(format!("Failed to parse message: {}", e))
+        })?;
 
         Ok(msg)
     }
@@ -215,12 +217,12 @@ impl crate::traits::Connector for M365Connector {
         let path = "/organization";
         match self.client.get(path).await {
             Ok(response) if response.status().is_success() => Ok(ConnectorHealth::Healthy),
-            Ok(response) if response.status().as_u16() == 401 => {
-                Ok(ConnectorHealth::Unhealthy("Authentication failed".to_string()))
-            }
-            Ok(response) if response.status().as_u16() == 403 => {
-                Ok(ConnectorHealth::Unhealthy("Authorization denied - check permissions".to_string()))
-            }
+            Ok(response) if response.status().as_u16() == 401 => Ok(ConnectorHealth::Unhealthy(
+                "Authentication failed".to_string(),
+            )),
+            Ok(response) if response.status().as_u16() == 403 => Ok(ConnectorHealth::Unhealthy(
+                "Authorization denied - check permissions".to_string(),
+            )),
             Ok(response) if response.status().as_u16() == 429 => {
                 Ok(ConnectorHealth::Degraded("Rate limited".to_string()))
             }
@@ -228,9 +230,10 @@ impl crate::traits::Connector for M365Connector {
                 "Unexpected status: {}",
                 response.status()
             ))),
-            Err(ConnectorError::ConnectionFailed(e)) => {
-                Ok(ConnectorHealth::Unhealthy(format!("Connection failed: {}", e)))
-            }
+            Err(ConnectorError::ConnectionFailed(e)) => Ok(ConnectorHealth::Unhealthy(format!(
+                "Connection failed: {}",
+                e
+            ))),
             Err(e) => Ok(ConnectorHealth::Unhealthy(e.to_string())),
         }
     }
@@ -277,16 +280,12 @@ impl EmailGatewayConnector for M365Connector {
             )));
         }
 
-        let result: GraphMessagesResponse = response
-            .json()
-            .await
-            .map_err(|e| ConnectorError::InvalidResponse(format!("Failed to parse response: {}", e)))?;
+        let result: GraphMessagesResponse = response.json().await.map_err(|e| {
+            ConnectorError::InvalidResponse(format!("Failed to parse response: {}", e))
+        })?;
 
-        let messages: Vec<EmailMessage> = result
-            .value
-            .iter()
-            .map(|m| self.parse_message(m))
-            .collect();
+        let messages: Vec<EmailMessage> =
+            result.value.iter().map(|m| self.parse_message(m)).collect();
 
         debug!("Found {} emails matching query", messages.len());
         Ok(messages)
@@ -408,10 +407,9 @@ impl EmailGatewayConnector for M365Connector {
             )));
         }
 
-        let rules: GraphRulesResponse = response
-            .json()
-            .await
-            .map_err(|e| ConnectorError::InvalidResponse(format!("Failed to parse rules: {}", e)))?;
+        let rules: GraphRulesResponse = response.json().await.map_err(|e| {
+            ConnectorError::InvalidResponse(format!("Failed to parse rules: {}", e))
+        })?;
 
         // Find rule that blocks this sender
         let rule_id = rules.value.iter().find_map(|r| {
@@ -478,10 +476,7 @@ impl EmailGatewayConnector for M365Connector {
         let response = self.client.get(&path).await?;
 
         if !response.status().is_success() {
-            debug!(
-                "No security alerts found for message {}",
-                message_id
-            );
+            debug!("No security alerts found for message {}", message_id);
             return Ok(EmailThreatData {
                 delivery_action: "Unknown".to_string(),
                 threat_types: Vec::new(),
@@ -490,13 +485,10 @@ impl EmailGatewayConnector for M365Connector {
             });
         }
 
-        let alerts: GraphSecurityAlertsResponse = response
-            .json()
-            .await
-            .map_err(|e| {
-                debug!("Failed to parse security alerts: {}", e);
-                ConnectorError::InvalidResponse(format!("Failed to parse security alerts: {}", e))
-            })?;
+        let alerts: GraphSecurityAlertsResponse = response.json().await.map_err(|e| {
+            debug!("Failed to parse security alerts: {}", e);
+            ConnectorError::InvalidResponse(format!("Failed to parse security alerts: {}", e))
+        })?;
 
         // Log alert IDs for correlation
         let alert_ids: Vec<&str> = alerts
@@ -505,7 +497,11 @@ impl EmailGatewayConnector for M365Connector {
             .filter_map(|a| a.id.as_deref())
             .collect();
         if !alert_ids.is_empty() {
-            debug!("Found {} security alerts for message: {:?}", alert_ids.len(), alert_ids);
+            debug!(
+                "Found {} security alerts for message: {:?}",
+                alert_ids.len(),
+                alert_ids
+            );
         }
 
         let threat_types: Vec<String> = alerts
@@ -647,9 +643,7 @@ fn extract_urls_from_body(content: Option<&str>) -> Vec<String> {
     };
 
     // Simple URL extraction using regex pattern
-    let url_pattern = regex::Regex::new(
-        r#"https?://[^\s<>"'{}|\[\]^`\\]+"#
-    ).ok();
+    let url_pattern = regex::Regex::new(r#"https?://[^\s<>"'{}|\[\]^`\\]+"#).ok();
 
     url_pattern
         .map(|re| {

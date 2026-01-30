@@ -10,9 +10,7 @@ pub async fn run_migrations(pool: &DbPool) -> Result<(), DbError> {
     match pool {
         DbPool::Sqlite(pool) => {
             info!("Running SQLite migrations");
-            sqlx::migrate!("src/db/migrations/sqlite")
-                .run(pool)
-                .await?;
+            sqlx::migrate!("src/db/migrations/sqlite").run(pool).await?;
         }
         DbPool::Postgres(pool) => {
             info!("Running PostgreSQL migrations");

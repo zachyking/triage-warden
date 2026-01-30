@@ -220,11 +220,8 @@ mod tests {
 
     #[test]
     fn test_sanitizer_from_patterns() {
-        let sanitizer = Sanitizer::from_patterns(
-            vec![r"\b\d{3}-\d{2}-\d{4}\b"],
-            vec![r"(?i)secret"],
-        )
-        .unwrap();
+        let sanitizer =
+            Sanitizer::from_patterns(vec![r"\b\d{3}-\d{2}-\d{4}\b"], vec![r"(?i)secret"]).unwrap();
 
         assert_eq!(sanitizer.pii_patterns.len(), 1);
         assert_eq!(sanitizer.secret_patterns.len(), 1);
@@ -312,7 +309,11 @@ mod tests {
 
         for (input, expected) in test_cases {
             let result = sanitizer.sanitize(input);
-            assert_eq!(result.redacted_text, expected, "Failed for input: {}", input);
+            assert_eq!(
+                result.redacted_text, expected,
+                "Failed for input: {}",
+                input
+            );
             assert!(result.has_secrets, "Expected secrets for input: {}", input);
         }
     }
@@ -330,7 +331,11 @@ mod tests {
 
         for (input, expected) in test_cases {
             let result = sanitizer.sanitize(input);
-            assert_eq!(result.redacted_text, expected, "Failed for input: {}", input);
+            assert_eq!(
+                result.redacted_text, expected,
+                "Failed for input: {}",
+                input
+            );
             assert!(result.has_secrets, "Expected secrets for input: {}", input);
         }
     }
@@ -347,7 +352,11 @@ mod tests {
 
         for (input, expected) in test_cases {
             let result = sanitizer.sanitize(input);
-            assert_eq!(result.redacted_text, expected, "Failed for input: {}", input);
+            assert_eq!(
+                result.redacted_text, expected,
+                "Failed for input: {}",
+                input
+            );
             assert!(result.has_secrets, "Expected secrets for input: {}", input);
         }
     }

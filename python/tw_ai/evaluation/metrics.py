@@ -11,8 +11,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Literal
-from collections import Counter
-
 
 # Type aliases for clarity
 Verdict = Literal["malicious", "benign", "suspicious"]
@@ -148,28 +146,23 @@ def calculate_verdict_metrics(
         )
 
     if len(predictions) != len(labels):
-        raise ValueError(
-            f"Length mismatch: {len(predictions)} predictions vs {len(labels)} labels"
-        )
+        raise ValueError(f"Length mismatch: {len(predictions)} predictions vs {len(labels)} labels")
 
     total = len(labels)
-    correct = sum(1 for p, l in zip(predictions, labels) if p == l)
+    correct = sum(1 for pred, lbl in zip(predictions, labels) if pred == lbl)
     accuracy = correct / total if total > 0 else 0.0
 
     # Binary metrics treating 'malicious' as positive class
     # For security, we want to catch all malicious cases (high recall)
     # while minimizing false positives (high precision)
     true_positives = sum(
-        1 for p, l in zip(predictions, labels)
-        if p == "malicious" and l == "malicious"
+        1 for pred, lbl in zip(predictions, labels) if pred == "malicious" and lbl == "malicious"
     )
     false_positives = sum(
-        1 for p, l in zip(predictions, labels)
-        if p == "malicious" and l != "malicious"
+        1 for pred, lbl in zip(predictions, labels) if pred == "malicious" and lbl != "malicious"
     )
     false_negatives = sum(
-        1 for p, l in zip(predictions, labels)
-        if p != "malicious" and l == "malicious"
+        1 for pred, lbl in zip(predictions, labels) if pred != "malicious" and lbl == "malicious"
     )
 
     precision = (
@@ -182,20 +175,16 @@ def calculate_verdict_metrics(
         if (true_positives + false_negatives) > 0
         else 0.0
     )
-    f1_score = (
-        2 * precision * recall / (precision + recall)
-        if (precision + recall) > 0
-        else 0.0
-    )
+    f1_score = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
 
     # Per-class metrics
     classes = sorted(set(predictions) | set(labels))
     per_class_metrics = {}
 
     for cls in classes:
-        cls_tp = sum(1 for p, l in zip(predictions, labels) if p == cls and l == cls)
-        cls_fp = sum(1 for p, l in zip(predictions, labels) if p == cls and l != cls)
-        cls_fn = sum(1 for p, l in zip(predictions, labels) if p != cls and l == cls)
+        cls_tp = sum(1 for pred, lbl in zip(predictions, labels) if pred == cls and lbl == cls)
+        cls_fp = sum(1 for pred, lbl in zip(predictions, labels) if pred == cls and lbl != cls)
+        cls_fn = sum(1 for pred, lbl in zip(predictions, labels) if pred != cls and lbl == cls)
 
         cls_precision = cls_tp / (cls_tp + cls_fp) if (cls_tp + cls_fp) > 0 else 0.0
         cls_recall = cls_tp / (cls_tp + cls_fn) if (cls_tp + cls_fn) > 0 else 0.0
@@ -209,7 +198,7 @@ def calculate_verdict_metrics(
             "precision": cls_precision,
             "recall": cls_recall,
             "f1_score": cls_f1,
-            "support": sum(1 for l in labels if l == cls),
+            "support": sum(1 for lbl in labels if lbl == cls),
         }
 
     return VerdictMetrics(
@@ -240,20 +229,19 @@ def calculate_severity_accuracy(
         return 0.0
 
     if len(predictions) != len(labels):
-        raise ValueError(
-            f"Length mismatch: {len(predictions)} predictions vs {len(labels)} labels"
-        )
+        raise ValueError(f"Length mismatch: {len(predictions)} predictions vs {len(labels)} labels")
 
     # Only count cases where both have values
     valid_pairs = [
-        (p, l) for p, l in zip(predictions, labels)
-        if p is not None and l is not None
+        (pred, lbl)
+        for pred, lbl in zip(predictions, labels)
+        if pred is not None and lbl is not None
     ]
 
     if not valid_pairs:
         return 0.0
 
-    correct = sum(1 for p, l in valid_pairs if p == l)
+    correct = sum(1 for pred, lbl in valid_pairs if pred == lbl)
     return correct / len(valid_pairs)
 
 
@@ -274,17 +262,14 @@ def generate_confusion_matrix(
         return {}
 
     if len(predictions) != len(labels):
-        raise ValueError(
-            f"Length mismatch: {len(predictions)} predictions vs {len(labels)} labels"
-        )
+        raise ValueError(f"Length mismatch: {len(predictions)} predictions vs {len(labels)} labels")
 
     # Get all classes
     classes = sorted(set(predictions) | set(labels))
 
     # Initialize matrix
     matrix: dict[str, dict[str, int]] = {
-        actual: {predicted: 0 for predicted in classes}
-        for actual in classes
+        actual: {predicted: 0 for predicted in classes} for actual in classes
     }
 
     # Populate matrix

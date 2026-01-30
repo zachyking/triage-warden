@@ -104,7 +104,11 @@ impl SplunkConnector {
     /// This is an alternative to the async search that blocks server-side.
     /// Useful for short-running searches where you don't need progress updates.
     #[instrument(skip(self))]
-    pub async fn create_blocking_search_job(&self, spl: &str, timerange: &TimeRange) -> ConnectorResult<String> {
+    pub async fn create_blocking_search_job(
+        &self,
+        spl: &str,
+        timerange: &TimeRange,
+    ) -> ConnectorResult<String> {
         let earliest = format_splunk_time(&timerange.start);
         let latest = format_splunk_time(&timerange.end);
 
@@ -118,11 +122,9 @@ impl SplunkConnector {
         ];
 
         let path = self.service_path("search/jobs");
-        let response = self
-            .client
-            .post(&path, &params)
-            .await
-            .map_err(|e| ConnectorError::RequestFailed(format!("Failed to create search job: {}", e)))?;
+        let response = self.client.post(&path, &params).await.map_err(|e| {
+            ConnectorError::RequestFailed(format!("Failed to create search job: {}", e))
+        })?;
 
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
@@ -132,10 +134,9 @@ impl SplunkConnector {
             )));
         }
 
-        let job_response: SplunkJobResponse = response
-            .json()
-            .await
-            .map_err(|e| ConnectorError::InvalidResponse(format!("Failed to parse job response: {}", e)))?;
+        let job_response: SplunkJobResponse = response.json().await.map_err(|e| {
+            ConnectorError::InvalidResponse(format!("Failed to parse job response: {}", e))
+        })?;
 
         debug!("Created search job: {}", job_response.sid);
         Ok(job_response.sid)
@@ -160,11 +161,9 @@ impl SplunkConnector {
         ];
 
         let path = self.service_path("search/jobs");
-        let response = self
-            .client
-            .post(&path, &params)
-            .await
-            .map_err(|e| ConnectorError::RequestFailed(format!("Failed to create search job: {}", e)))?;
+        let response = self.client.post(&path, &params).await.map_err(|e| {
+            ConnectorError::RequestFailed(format!("Failed to create search job: {}", e))
+        })?;
 
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
@@ -174,10 +173,9 @@ impl SplunkConnector {
             )));
         }
 
-        let job_response: SplunkJobResponse = response
-            .json()
-            .await
-            .map_err(|e| ConnectorError::InvalidResponse(format!("Failed to parse job response: {}", e)))?;
+        let job_response: SplunkJobResponse = response.json().await.map_err(|e| {
+            ConnectorError::InvalidResponse(format!("Failed to parse job response: {}", e))
+        })?;
 
         debug!("Created async search job: {}", job_response.sid);
         Ok(job_response.sid)
@@ -186,7 +184,10 @@ impl SplunkConnector {
     /// Waits for a search job to complete.
     #[instrument(skip(self))]
     async fn wait_for_job(&self, sid: &str) -> ConnectorResult<()> {
-        let path = format!("{}?output_mode=json", self.service_path(&format!("search/jobs/{}", sid)));
+        let path = format!(
+            "{}?output_mode=json",
+            self.service_path(&format!("search/jobs/{}", sid))
+        );
         let timeout = Duration::from_secs(self.config.search_timeout);
         let start = std::time::Instant::now();
         let poll_interval = Duration::from_secs(1);
@@ -209,10 +210,9 @@ impl SplunkConnector {
                 )));
             }
 
-            let status: SplunkJobStatusResponse = response
-                .json()
-                .await
-                .map_err(|e| ConnectorError::InvalidResponse(format!("Failed to parse job status: {}", e)))?;
+            let status: SplunkJobStatusResponse = response.json().await.map_err(|e| {
+                ConnectorError::InvalidResponse(format!("Failed to parse job status: {}", e))
+            })?;
 
             if let Some(entry) = status.entry.first() {
                 let state = &entry.content.dispatch_state;
@@ -261,10 +261,9 @@ impl SplunkConnector {
             )));
         }
 
-        let results: SplunkResultsResponse = response
-            .json()
-            .await
-            .map_err(|e| ConnectorError::InvalidResponse(format!("Failed to parse results: {}", e)))?;
+        let results: SplunkResultsResponse = response.json().await.map_err(|e| {
+            ConnectorError::InvalidResponse(format!("Failed to parse results: {}", e))
+        })?;
 
         Ok(results)
     }
@@ -328,9 +327,9 @@ impl crate::traits::Connector for SplunkConnector {
         let path = "/services/server/info?output_mode=json";
         match self.client.get(path).await {
             Ok(response) if response.status().is_success() => Ok(ConnectorHealth::Healthy),
-            Ok(response) if response.status().as_u16() == 401 => {
-                Ok(ConnectorHealth::Unhealthy("Authentication failed".to_string()))
-            }
+            Ok(response) if response.status().as_u16() == 401 => Ok(ConnectorHealth::Unhealthy(
+                "Authentication failed".to_string(),
+            )),
             Ok(response) if response.status().as_u16() == 503 => {
                 Ok(ConnectorHealth::Degraded("Service unavailable".to_string()))
             }
@@ -338,9 +337,10 @@ impl crate::traits::Connector for SplunkConnector {
                 "Unexpected status: {}",
                 response.status()
             ))),
-            Err(ConnectorError::ConnectionFailed(e)) => {
-                Ok(ConnectorHealth::Unhealthy(format!("Connection failed: {}", e)))
-            }
+            Err(ConnectorError::ConnectionFailed(e)) => Ok(ConnectorHealth::Unhealthy(format!(
+                "Connection failed: {}",
+                e
+            ))),
             Err(e) => Ok(ConnectorHealth::Unhealthy(e.to_string())),
         }
     }
@@ -369,7 +369,10 @@ impl SIEMConnector for SplunkConnector {
         let is_preview = results.is_preview();
 
         if is_preview {
-            debug!("Search {} returned preview results (offset: {})", sid, offset);
+            debug!(
+                "Search {} returned preview results (offset: {})",
+                sid, offset
+            );
         }
 
         let events = self.parse_results(results);
@@ -408,10 +411,9 @@ impl SIEMConnector for SplunkConnector {
             )));
         }
 
-        let saved: SplunkSavedSearchesResponse = response
-            .json()
-            .await
-            .map_err(|e| ConnectorError::InvalidResponse(format!("Failed to parse saved searches: {}", e)))?;
+        let saved: SplunkSavedSearchesResponse = response.json().await.map_err(|e| {
+            ConnectorError::InvalidResponse(format!("Failed to parse saved searches: {}", e))
+        })?;
 
         let searches: Vec<SavedSearch> = saved
             .entry
@@ -445,10 +447,9 @@ impl SIEMConnector for SplunkConnector {
             )));
         }
 
-        let alerts_response: SplunkFiredAlertsResponse = response
-            .json()
-            .await
-            .map_err(|e| ConnectorError::InvalidResponse(format!("Failed to parse alerts: {}", e)))?;
+        let alerts_response: SplunkFiredAlertsResponse = response.json().await.map_err(|e| {
+            ConnectorError::InvalidResponse(format!("Failed to parse alerts: {}", e))
+        })?;
 
         let alerts: Vec<SIEMAlert> = alerts_response
             .entry
@@ -504,7 +505,11 @@ impl SIEMConnector for SplunkConnector {
         limit: usize,
     ) -> ConnectorResult<Vec<String>> {
         // Use stats to get top values for the field
-        let query = format!("* | stats count by {} | head {}", Self::escape_spl(field), limit);
+        let query = format!(
+            "* | stats count by {} | head {}",
+            Self::escape_spl(field),
+            limit
+        );
         let results = self.search(&query, timerange).await?;
 
         let values: Vec<String> = results
@@ -626,7 +631,11 @@ fn parse_splunk_time(s: &str) -> Option<DateTime<Utc>> {
 
     // Try Splunk's default format: YYYY-MM-DD HH:MM:SS.sss TZ
     if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(
-        s.split_whitespace().take(2).collect::<Vec<_>>().join(" ").as_str(),
+        s.split_whitespace()
+            .take(2)
+            .collect::<Vec<_>>()
+            .join(" ")
+            .as_str(),
         "%Y-%m-%d %H:%M:%S%.f",
     ) {
         return Some(Utc.from_utc_datetime(&dt));

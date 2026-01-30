@@ -178,7 +178,9 @@ impl ModeManager {
             // In Assisted mode, no auto-execution is allowed
             OperationMode::Assisted => false,
             // In Supervised mode, only Low and Medium risk are auto-allowed
-            OperationMode::Supervised => matches!(action_risk, ActionRisk::Low | ActionRisk::Medium),
+            OperationMode::Supervised => {
+                matches!(action_risk, ActionRisk::Low | ActionRisk::Medium)
+            }
             // In Autonomous mode, all actions are allowed
             OperationMode::Autonomous => true,
         };
@@ -251,7 +253,11 @@ mod tests {
             .set_mode(OperationMode::Assisted, "user1", Some("Going manual"))
             .await;
         manager
-            .set_mode(OperationMode::Autonomous, "user2", Some("Emergency response"))
+            .set_mode(
+                OperationMode::Autonomous,
+                "user2",
+                Some("Emergency response"),
+            )
             .await;
         manager
             .set_mode(OperationMode::Supervised, "user1", Some("Back to normal"))

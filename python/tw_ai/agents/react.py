@@ -19,12 +19,13 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Awaitable, Protocol, Optional
+from typing import Any, Protocol
 
 import structlog
 
 try:
     import tiktoken
+
     _TIKTOKEN_AVAILABLE = True
 except ImportError:
     tiktoken = None
@@ -41,7 +42,7 @@ if sys.version_info >= (3, 11):
 else:
     # Fallback for Python 3.9/3.10
     @asynccontextmanager
-    async def async_timeout(delay: Optional[float]):
+    async def async_timeout(delay: float | None):
         """Async context manager for timeout (Python 3.9/3.10 compatibility).
 
         Args:
@@ -65,10 +66,11 @@ else:
         finally:
             handle.cancel()
 
-from tw_ai.llm.base import LLMProvider, LLMResponse, Message, Role, ToolDefinition
-from tw_ai.agents.tools import Tool, ToolRegistry
+
 from tw_ai.agents.models import TriageAnalysis
-from tw_ai.agents.output_parser import parse_triage_analysis, ParseError
+from tw_ai.agents.output_parser import ParseError, parse_triage_analysis
+from tw_ai.agents.tools import ToolRegistry
+from tw_ai.llm.base import LLMProvider, Message
 
 logger = structlog.get_logger()
 
@@ -80,6 +82,7 @@ logger = structlog.get_logger()
 
 class StepType(str, Enum):
     """Type of step in the execution trace."""
+
     THOUGHT = "thought"
     ACTION = "action"
     OBSERVATION = "observation"
@@ -144,22 +147,28 @@ class TriageRequest:
         ]
 
         if self.context:
-            task_parts.extend([
-                "",
-                "## Additional Context",
-                json.dumps(self.context, indent=2),
-            ])
+            task_parts.extend(
+                [
+                    "",
+                    "## Additional Context",
+                    json.dumps(self.context, indent=2),
+                ]
+            )
 
         if self.priority:
-            task_parts.extend([
-                "",
-                f"## Priority: {self.priority}",
-            ])
+            task_parts.extend(
+                [
+                    "",
+                    f"## Priority: {self.priority}",
+                ]
+            )
 
-        task_parts.extend([
-            "",
-            "Analyze this alert thoroughly and provide your verdict.",
-        ])
+        task_parts.extend(
+            [
+                "",
+                "Analyze this alert thoroughly and provide your verdict.",
+            ]
+        )
 
         return "\n".join(task_parts)
 
@@ -204,11 +213,13 @@ class AgentResult:
         # Populate actions_taken from execution trace
         for step in self.execution_trace:
             if step.step_type == StepType.ACTION and step.tool_name:
-                self.actions_taken.append({
-                    "tool": step.tool_name,
-                    "arguments": step.tool_arguments,
-                    "result_preview": str(step.tool_result)[:200] if step.tool_result else "",
-                })
+                self.actions_taken.append(
+                    {
+                        "tool": step.tool_name,
+                        "arguments": step.tool_arguments,
+                        "result_preview": str(step.tool_result)[:200] if step.tool_result else "",
+                    }
+                )
 
         self.tool_calls = len(self.actions_taken)
         self.total_tokens = self.tokens_used
@@ -216,16 +227,19 @@ class AgentResult:
 
 class OnThoughtCallback(Protocol):
     """Callback protocol for thought events."""
+
     async def __call__(self, thought: str, step: Step) -> None: ...
 
 
 class OnActionCallback(Protocol):
     """Callback protocol for action events."""
+
     async def __call__(self, tool_name: str, arguments: dict[str, Any], step: Step) -> None: ...
 
 
 class OnObservationCallback(Protocol):
     """Callback protocol for observation events."""
+
     async def __call__(self, result: Any, step: Step) -> None: ...
 
 
@@ -385,7 +399,8 @@ class ReActAgent:
 
     def _default_system_prompt(self) -> str:
         """Generate the default system prompt for security triage."""
-        return """You are an expert Security Operations Center (SOC) analyst AI assistant. Your role is to help triage security incidents by:
+        return """You are an expert Security Operations Center (SOC) analyst AI assistant.
+Your role is to help triage security incidents by:
 
 1. Analyzing available evidence (alerts, logs, threat intel)
 2. Gathering additional context using the available tools
@@ -405,12 +420,13 @@ Output your final analysis as a JSON object with this schema:
     "severity": "critical" | "high" | "medium" | "low" | "informational",
     "summary": "Brief summary of findings",
     "indicators": [{"type": "ip|domain|hash|...", "value": "...", "verdict": "..."}],
-    "mitre_techniques": [{"id": "T1234", "name": "...", "tactic": "...", "relevance": "..."}],
-    "recommended_actions": [{"action": "...", "priority": "immediate|high|medium|low", "reason": "..."}],
+    "mitre_techniques": [{"id": "T1234", "name": "...", "tactic": "..."}],
+    "recommended_actions": [{"action": "...", "priority": "immediate|high|medium|low"}],
     "reasoning": "Detailed reasoning chain"
 }
 
-You have access to tools for threat intelligence, SIEM queries, and EDR data. Use them wisely to build a complete picture of the incident."""
+You have access to tools for threat intelligence, SIEM queries, and EDR data.
+Use them wisely to build a complete picture of the incident."""
 
     async def run(
         self,
@@ -566,9 +582,7 @@ You have access to tools for threat intelligence, SIEM queries, and EDR data. Us
 
                     # Add tool result to messages
                     result_str = self._format_tool_result(observation_step.tool_result)
-                    messages.append(
-                        Message.tool_result(result_str, tool_call.id)
-                    )
+                    messages.append(Message.tool_result(result_str, tool_call.id))
 
                     # Track tokens for tool result
                     total_tokens += self._token_counter.count(result_str)
@@ -709,7 +723,7 @@ You have access to tools for threat intelligence, SIEM queries, and EDR data. Us
 
                 if attempt < self.tool_retries:
                     # Exponential backoff
-                    delay = self.retry_base_delay * (2 ** attempt)
+                    delay = self.retry_base_delay * (2**attempt)
                     await asyncio.sleep(delay)
 
         # All retries failed

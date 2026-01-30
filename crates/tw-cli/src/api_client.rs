@@ -136,10 +136,8 @@ impl ApiClient {
                 .await
                 .context("Failed to parse response body")
         } else {
-            let error: ApiErrorResponse = response
-                .json()
-                .await
-                .unwrap_or_else(|_| ApiErrorResponse {
+            let error: ApiErrorResponse =
+                response.json().await.unwrap_or_else(|_| ApiErrorResponse {
                     code: "UNKNOWN".to_string(),
                     message: "Unknown error".to_string(),
                     details: None,

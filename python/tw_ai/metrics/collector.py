@@ -30,15 +30,11 @@ class MetricsData:
     """
 
     triage_count: dict[str, int] = field(default_factory=lambda: defaultdict(int))
-    triage_confidence: dict[str, list[float]] = field(
-        default_factory=lambda: defaultdict(list)
-    )
+    triage_confidence: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
     triage_duration_ms: list[int] = field(default_factory=list)
     action_count: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     action_success: dict[str, int] = field(default_factory=lambda: defaultdict(int))
-    stage_latency_ms: dict[str, list[int]] = field(
-        default_factory=lambda: defaultdict(list)
-    )
+    stage_latency_ms: dict[str, list[int]] = field(default_factory=lambda: defaultdict(list))
     error_count: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     start_time: float = field(default_factory=time.time)
 
@@ -139,15 +135,11 @@ class MetricsCollector:
 
             return {
                 "triage_count": dict(self._data.triage_count),
-                "triage_confidence": {
-                    k: list(v) for k, v in self._data.triage_confidence.items()
-                },
+                "triage_confidence": {k: list(v) for k, v in self._data.triage_confidence.items()},
                 "triage_duration_ms": list(self._data.triage_duration_ms),
                 "action_count": dict(self._data.action_count),
                 "action_success_rate": action_success_rate,
-                "stage_latency_ms": {
-                    k: list(v) for k, v in self._data.stage_latency_ms.items()
-                },
+                "stage_latency_ms": {k: list(v) for k, v in self._data.stage_latency_ms.items()},
                 "error_count": dict(self._data.error_count),
                 "collection_duration_seconds": time.time() - self._data.start_time,
             }

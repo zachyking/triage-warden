@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any
 
 import structlog
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 logger = structlog.get_logger()
 
@@ -42,11 +42,11 @@ class Condition(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    verdict: Optional[str] = None
-    confidence_above: Optional[float] = None
-    confidence_below: Optional[float] = None
-    confidence_between: Optional[list[float]] = None
-    expression: Optional[str] = None  # Custom expression like "input.reported_by is not null"
+    verdict: str | None = None
+    confidence_above: float | None = None
+    confidence_below: float | None = None
+    confidence_between: list[float] | None = None
+    expression: str | None = None  # Custom expression like "input.reported_by is not null"
 
     @field_validator("confidence_above", "confidence_below")
     @classmethod
@@ -188,10 +188,16 @@ class Step(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     action: str = Field(description="The action to execute")
-    input: dict[str, Any] = Field(default_factory=dict, description="Input parameters for the action")
+    input: dict[str, Any] = Field(
+        default_factory=dict, description="Input parameters for the action"
+    )
     output: list[str] = Field(default_factory=list, description="Output variable names")
-    conditions: list[Condition] = Field(default_factory=list, description="Conditions for step execution")
-    requires_approval: bool = Field(default=False, description="Whether this step requires human approval")
+    conditions: list[Condition] = Field(
+        default_factory=list, description="Conditions for step execution"
+    )
+    requires_approval: bool = Field(
+        default=False, description="Whether this step requires human approval"
+    )
 
     @field_validator("action")
     @classmethod
@@ -436,12 +442,12 @@ class ValidationResult(BaseModel):
     warnings: list[str] = Field(default_factory=list, description="List of validation warnings")
 
     @classmethod
-    def ok(cls) -> "ValidationResult":
+    def ok(cls) -> ValidationResult:
         """Create a successful validation result."""
         return cls(valid=True)
 
     @classmethod
-    def error(cls, errors: list[str]) -> "ValidationResult":
+    def error(cls, errors: list[str]) -> ValidationResult:
         """Create a failed validation result."""
         return cls(valid=False, errors=errors)
 
@@ -495,7 +501,7 @@ class PlaybookLoader:
         self._logger.info("loading_playbook", path=str(path))
 
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = yaml.safe_load(f)
         except yaml.YAMLError as e:
             raise PlaybookValidationError(f"Invalid YAML: {e}")

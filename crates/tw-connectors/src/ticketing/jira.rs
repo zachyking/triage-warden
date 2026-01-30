@@ -5,8 +5,8 @@
 
 use crate::http::{HttpClient, RateLimitConfig};
 use crate::traits::{
-    ConnectorConfig, ConnectorError, ConnectorHealth, ConnectorResult, CreateTicketRequest,
-    Ticket, TicketPriority, TicketStatus, TicketingConnector, UpdateTicketRequest,
+    ConnectorConfig, ConnectorError, ConnectorHealth, ConnectorResult, CreateTicketRequest, Ticket,
+    TicketPriority, TicketStatus, TicketingConnector, UpdateTicketRequest,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -208,7 +208,8 @@ impl JiraConnector {
             .iter()
             .find(|t| t.to.name.eq_ignore_ascii_case(target_status))
             .ok_or_else(|| {
-                let available: Vec<_> = transitions.transitions.iter().map(|t| &t.to.name).collect();
+                let available: Vec<_> =
+                    transitions.transitions.iter().map(|t| &t.to.name).collect();
                 ConnectorError::RequestFailed(format!(
                     "No transition available to status '{}'. Available: {:?}",
                     target_status, available
@@ -243,7 +244,11 @@ impl JiraConnector {
         let response = self.client.post(&path, &body).await?;
 
         if !response.status().is_success() {
-            warn!("Failed to add watcher to {}: {}", ticket_id, response.status());
+            warn!(
+                "Failed to add watcher to {}: {}",
+                ticket_id,
+                response.status()
+            );
         }
 
         Ok(())
@@ -305,7 +310,11 @@ impl JiraConnector {
             .await
             .map_err(|e| ConnectorError::InvalidResponse(e.to_string()))?;
 
-        Ok(result.issue_link_types.into_iter().map(|lt| lt.name).collect())
+        Ok(result
+            .issue_link_types
+            .into_iter()
+            .map(|lt| lt.name)
+            .collect())
     }
 
     /// Search for issues using JQL.
@@ -365,16 +374,17 @@ impl crate::traits::Connector for JiraConnector {
         let path = self.api_path("/myself");
         match self.client.get(&path).await {
             Ok(response) if response.status().is_success() => Ok(ConnectorHealth::Healthy),
-            Ok(response) if response.status() == reqwest::StatusCode::UNAUTHORIZED => {
-                Ok(ConnectorHealth::Unhealthy("Authentication failed".to_string()))
-            }
+            Ok(response) if response.status() == reqwest::StatusCode::UNAUTHORIZED => Ok(
+                ConnectorHealth::Unhealthy("Authentication failed".to_string()),
+            ),
             Ok(response) => Ok(ConnectorHealth::Degraded(format!(
                 "Unexpected status: {}",
                 response.status()
             ))),
-            Err(ConnectorError::ConnectionFailed(e)) => {
-                Ok(ConnectorHealth::Unhealthy(format!("Connection failed: {}", e)))
-            }
+            Err(ConnectorError::ConnectionFailed(e)) => Ok(ConnectorHealth::Unhealthy(format!(
+                "Connection failed: {}",
+                e
+            ))),
             Err(e) => Ok(ConnectorHealth::Unhealthy(e.to_string())),
         }
     }
@@ -410,7 +420,8 @@ impl TicketingConnector for JiraConnector {
             if self.config.is_server {
                 fields["description"] = serde_json::json!(request.description);
             } else {
-                fields["description"] = serde_json::json!(JiraDescription::text(&request.description));
+                fields["description"] =
+                    serde_json::json!(JiraDescription::text(&request.description));
             }
         }
 
@@ -523,7 +534,10 @@ impl TicketingConnector for JiraConnector {
 
         if let Some(assignee) = update.assignee {
             if self.config.is_server {
-                fields.insert("assignee".to_string(), serde_json::json!({"name": assignee}));
+                fields.insert(
+                    "assignee".to_string(),
+                    serde_json::json!({"name": assignee}),
+                );
             } else {
                 fields.insert(
                     "assignee".to_string(),
@@ -837,7 +851,10 @@ mod tests {
         assert_eq!(connector.parse_priority("Minor"), TicketPriority::Low);
         assert_eq!(connector.parse_priority("Medium"), TicketPriority::Medium);
         assert_eq!(connector.parse_priority("Major"), TicketPriority::High);
-        assert_eq!(connector.parse_priority("Critical"), TicketPriority::Highest);
+        assert_eq!(
+            connector.parse_priority("Critical"),
+            TicketPriority::Highest
+        );
         assert_eq!(connector.parse_priority("Blocker"), TicketPriority::Highest);
     }
 
@@ -863,8 +880,12 @@ mod tests {
     #[test]
     fn test_custom_priority_mappings() {
         let mut config = create_test_config();
-        config.priority_mappings.insert("highest".to_string(), "P1".to_string());
-        config.priority_mappings.insert("high".to_string(), "P2".to_string());
+        config
+            .priority_mappings
+            .insert("highest".to_string(), "P1".to_string());
+        config
+            .priority_mappings
+            .insert("high".to_string(), "P2".to_string());
 
         let connector = JiraConnector::new(config).unwrap();
         assert_eq!(connector.map_priority(TicketPriority::Highest), "P1");

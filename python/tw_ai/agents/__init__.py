@@ -1,7 +1,5 @@
 """Agentic reasoning components for Triage Warden."""
 
-from tw_ai.agents.react import ReActAgent, AgentResult
-from tw_ai.agents.tools import Tool, ToolRegistry
 from tw_ai.agents.models import (
     Indicator,
     MITRETechnique,
@@ -13,6 +11,8 @@ from tw_ai.agents.output_parser import (
     parse_json_from_response,
     parse_triage_analysis,
 )
+from tw_ai.agents.react import AgentResult, ReActAgent
+from tw_ai.agents.tools import Tool, ToolRegistry
 
 __all__ = [
     "ReActAgent",

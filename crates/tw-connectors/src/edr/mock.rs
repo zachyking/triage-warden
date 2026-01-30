@@ -131,7 +131,11 @@ impl MockEDRConnector {
                 last_seen: now,
                 isolated: false,
                 status: HostStatus::Online,
-                tags: vec!["server".to_string(), "production".to_string(), "critical".to_string()],
+                tags: vec![
+                    "server".to_string(),
+                    "production".to_string(),
+                    "critical".to_string(),
+                ],
             },
             HostInfo {
                 hostname: "dc01".to_string(),
@@ -144,7 +148,11 @@ impl MockEDRConnector {
                 last_seen: now,
                 isolated: false,
                 status: HostStatus::Online,
-                tags: vec!["server".to_string(), "domain-controller".to_string(), "critical".to_string()],
+                tags: vec![
+                    "server".to_string(),
+                    "domain-controller".to_string(),
+                    "critical".to_string(),
+                ],
             },
         ];
 
@@ -166,14 +174,18 @@ impl MockEDRConnector {
                     name: "Suspicious PowerShell Execution".to_string(),
                     severity: "high".to_string(),
                     timestamp: now - Duration::minutes(10),
-                    description: "PowerShell executed encoded command with suspicious parameters".to_string(),
+                    description: "PowerShell executed encoded command with suspicious parameters"
+                        .to_string(),
                     tactic: Some("Execution".to_string()),
                     technique: Some("T1059.001".to_string()),
                     file_hash: Some("abc123def456".to_string()),
                     process_name: Some("powershell.exe".to_string()),
                     details: {
                         let mut m = HashMap::new();
-                        m.insert("command_line".to_string(), serde_json::json!("-enc SGVsbG8gV29ybGQ="));
+                        m.insert(
+                            "command_line".to_string(),
+                            serde_json::json!("-enc SGVsbG8gV29ybGQ="),
+                        );
                         m.insert("parent_process".to_string(), serde_json::json!("cmd.exe"));
                         m
                     },
@@ -183,7 +195,8 @@ impl MockEDRConnector {
                     name: "Connection to Known Malicious IP".to_string(),
                     severity: "critical".to_string(),
                     timestamp: now - Duration::minutes(5),
-                    description: "Process established connection to IP associated with botnet C2".to_string(),
+                    description: "Process established connection to IP associated with botnet C2"
+                        .to_string(),
                     tactic: Some("Command and Control".to_string()),
                     technique: Some("T1071.001".to_string()),
                     file_hash: None,
@@ -246,12 +259,15 @@ impl MockEDRConnector {
                 ProcessInfo {
                     pid: 5678,
                     name: "chrome.exe".to_string(),
-                    command_line: "\"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\"".to_string(),
+                    command_line: "\"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\""
+                        .to_string(),
                     parent_pid: Some(1234),
                     user: "DOMAIN\\user".to_string(),
                     start_time: now - Duration::hours(2),
                     file_hash: Some("chrome_hash".to_string()),
-                    file_path: Some("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe".to_string()),
+                    file_path: Some(
+                        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe".to_string(),
+                    ),
                 },
                 ProcessInfo {
                     pid: 9999,
@@ -261,7 +277,10 @@ impl MockEDRConnector {
                     user: "DOMAIN\\user".to_string(),
                     start_time: now - Duration::minutes(10),
                     file_hash: Some("powershell_hash".to_string()),
-                    file_path: Some("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe".to_string()),
+                    file_path: Some(
+                        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+                            .to_string(),
+                    ),
                 },
             ],
         );
@@ -422,10 +441,10 @@ impl EDRConnector for MockEDRConnector {
             .values()
             .filter(|h| {
                 h.hostname.to_lowercase().contains(&query_lower)
-                    || h.ip_addresses
+                    || h.ip_addresses.iter().any(|ip| ip.contains(&query_lower))
+                    || h.tags
                         .iter()
-                        .any(|ip| ip.contains(&query_lower))
-                    || h.tags.iter().any(|t| t.to_lowercase().contains(&query_lower))
+                        .any(|t| t.to_lowercase().contains(&query_lower))
                     || h.host_id.to_lowercase().contains(&query_lower)
             })
             .take(limit)
@@ -658,7 +677,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(detections.len(), 2);
-        assert!(detections.iter().any(|d| d.name == "Suspicious PowerShell Execution"));
+        assert!(detections
+            .iter()
+            .any(|d| d.name == "Suspicious PowerShell Execution"));
     }
 
     #[tokio::test]

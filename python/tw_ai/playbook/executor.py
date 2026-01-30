@@ -12,12 +12,13 @@ from __future__ import annotations
 import asyncio
 import re
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Awaitable, Optional, Protocol
+from typing import Any, Protocol
 
 import structlog
 
-from tw_ai.playbook.loader import Playbook, Stage, Step, Branch, Condition
+from tw_ai.playbook.loader import Branch, Playbook, Stage, Step
 
 logger = structlog.get_logger()
 
@@ -55,12 +56,12 @@ class StepResult:
     action: str
     success: bool
     output: dict[str, Any] = field(default_factory=dict)
-    error: Optional[str] = None
+    error: str | None = None
     execution_time_ms: int = 0
     skipped: bool = False
-    skip_reason: Optional[str] = None
+    skip_reason: str | None = None
     requires_approval: bool = False
-    approved: Optional[bool] = None
+    approved: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -84,9 +85,9 @@ class StageResult:
     name: str
     success: bool
     steps: list[StepResult] = field(default_factory=list)
-    branch_taken: Optional[str] = None
+    branch_taken: str | None = None
     execution_time_ms: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -119,7 +120,7 @@ class ExecutionResult:
     actions_taken: list[dict[str, Any]] = field(default_factory=list)
     stage_results: list[StageResult] = field(default_factory=list)
     execution_time_seconds: float = 0.0
-    error: Optional[str] = None
+    error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -237,8 +238,8 @@ class PlaybookExecutor:
 
     def __init__(
         self,
-        action_handler: Optional[ActionHandler] = None,
-        approval_handler: Optional[Callable[[str, dict[str, Any]], Awaitable[bool]]] = None,
+        action_handler: ActionHandler | None = None,
+        approval_handler: Callable[[str, dict[str, Any]], Awaitable[bool]] | None = None,
         max_parallel_steps: int = 10,
     ) -> None:
         """Initialize the playbook executor.
@@ -257,7 +258,7 @@ class PlaybookExecutor:
         self,
         playbook: Playbook,
         context: dict[str, Any],
-        trigger_data: Optional[dict[str, Any]] = None,
+        trigger_data: dict[str, Any] | None = None,
     ) -> ExecutionResult:
         """Execute a playbook with the given context.
 
@@ -287,7 +288,7 @@ class PlaybookExecutor:
         stage_results: list[StageResult] = []
         actions_taken: list[dict[str, Any]] = []
         stages_completed = 0
-        error: Optional[str] = None
+        error: str | None = None
 
         try:
             for stage in playbook.stages:
@@ -304,12 +305,14 @@ class PlaybookExecutor:
                 # Collect actions taken
                 for step_result in stage_result.steps:
                     if not step_result.skipped:
-                        actions_taken.append({
-                            "stage": stage.name,
-                            "action": step_result.action,
-                            "success": step_result.success,
-                            "output": step_result.output,
-                        })
+                        actions_taken.append(
+                            {
+                                "stage": stage.name,
+                                "action": step_result.action,
+                                "success": step_result.success,
+                                "output": step_result.output,
+                            }
+                        )
 
                 # Update context with stage outputs
                 exec_context.set_stage_output(stage.name, stage_result.get_outputs())
@@ -379,10 +382,7 @@ class PlaybookExecutor:
         execution_time_ms = int((time.time() - start_time) * 1000)
 
         # Determine overall success
-        success = all(
-            r.success or r.skipped
-            for r in step_results
-        )
+        success = all(r.success or r.skipped for r in step_results)
 
         # Find first error if any
         error = None
@@ -409,7 +409,7 @@ class PlaybookExecutor:
         context_dict = context.to_dict()
 
         # Find the first matching branch
-        matched_branch: Optional[tuple[str, Branch]] = None
+        matched_branch: tuple[str, Branch] | None = None
         for branch_name, branch in stage.branches.items():
             if branch.evaluate_conditions(context_dict):
                 matched_branch = (branch_name, branch)
@@ -495,11 +495,13 @@ class PlaybookExecutor:
         processed_results: list[StepResult] = []
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                processed_results.append(StepResult(
-                    action=steps[i].action,
-                    success=False,
-                    error=str(result),
-                ))
+                processed_results.append(
+                    StepResult(
+                        action=steps[i].action,
+                        success=False,
+                        error=str(result),
+                    )
+                )
             else:
                 processed_results.append(result)
 
@@ -649,10 +651,7 @@ class PlaybookExecutor:
             return self.TEMPLATE_PATTERN.sub(replace_match, data)
 
         elif isinstance(data, dict):
-            return {
-                key: self._resolve_templates(value, context)
-                for key, value in data.items()
-            }
+            return {key: self._resolve_templates(value, context) for key, value in data.items()}
 
         elif isinstance(data, list):
             return [self._resolve_templates(item, context) for item in data]

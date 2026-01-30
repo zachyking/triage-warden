@@ -88,7 +88,7 @@ impl NotificationPriority {
     /// Returns a color hex code for the priority level.
     pub fn color(&self) -> &'static str {
         match self {
-            NotificationPriority::Low => "#36a64f",     // Green
+            NotificationPriority::Low => "#36a64f",    // Green
             NotificationPriority::Normal => "#2196F3", // Blue
             NotificationPriority::High => "#ff9800",   // Orange
             NotificationPriority::Urgent => "#f44336", // Red
@@ -350,14 +350,24 @@ mod tests {
             .with_metadata("severity", "high");
 
         assert_eq!(notification.metadata.len(), 2);
-        assert_eq!(notification.metadata.get("incident_id"), Some(&"INC-123".to_string()));
-        assert_eq!(notification.metadata.get("severity"), Some(&"high".to_string()));
+        assert_eq!(
+            notification.metadata.get("incident_id"),
+            Some(&"INC-123".to_string())
+        );
+        assert_eq!(
+            notification.metadata.get("severity"),
+            Some(&"high".to_string())
+        );
     }
 
     #[test]
     fn test_notification_convenience_constructors() {
-        let approval = Notification::approval_required("Title", "Message", NotificationPriority::High);
-        assert_eq!(approval.notification_type, NotificationType::ApprovalRequired);
+        let approval =
+            Notification::approval_required("Title", "Message", NotificationPriority::High);
+        assert_eq!(
+            approval.notification_type,
+            NotificationType::ApprovalRequired
+        );
 
         let escalation = Notification::escalation("Title", "Message", NotificationPriority::Urgent);
         assert_eq!(escalation.notification_type, NotificationType::Escalation);
@@ -533,7 +543,10 @@ mod tests {
 
     #[test]
     fn test_notification_type_display() {
-        assert_eq!(NotificationType::ApprovalRequired.to_string(), "Approval Required");
+        assert_eq!(
+            NotificationType::ApprovalRequired.to_string(),
+            "Approval Required"
+        );
         assert_eq!(NotificationType::Escalation.to_string(), "Escalation");
         assert_eq!(NotificationType::Alert.to_string(), "Alert");
         assert_eq!(NotificationType::Info.to_string(), "Info");

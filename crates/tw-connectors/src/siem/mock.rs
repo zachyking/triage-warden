@@ -509,8 +509,14 @@ mod tests {
     async fn test_search_history() {
         let connector = MockSIEMConnector::new("test");
 
-        connector.search("query1", TimeRange::last_hours(1)).await.ok();
-        connector.search("query2", TimeRange::last_hours(2)).await.ok();
+        connector
+            .search("query1", TimeRange::last_hours(1))
+            .await
+            .ok();
+        connector
+            .search("query2", TimeRange::last_hours(2))
+            .await
+            .ok();
 
         let history = connector.get_search_history().await;
         assert_eq!(history.len(), 2);

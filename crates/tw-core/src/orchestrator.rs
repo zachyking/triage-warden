@@ -156,7 +156,10 @@ impl Orchestrator {
     /// Sets the operation mode.
     pub async fn set_operation_mode(&self, mode: OperationMode) {
         let mut config = self.config.write().await;
-        info!("Changing operation mode from {:?} to {:?}", config.mode, mode);
+        info!(
+            "Changing operation mode from {:?} to {:?}",
+            config.mode, mode
+        );
         config.mode = mode;
     }
 
@@ -170,10 +173,7 @@ impl Orchestrator {
     pub async fn activate_kill_switch(&self, reason: &str, activated_by: &str) {
         let mut config = self.config.write().await;
         config.kill_switch_enabled = true;
-        error!(
-            "Kill switch activated by {}: {}",
-            activated_by, reason
-        );
+        error!("Kill switch activated by {}: {}", activated_by, reason);
 
         // Publish kill switch event
         let _ = self
@@ -444,7 +444,10 @@ mod tests {
     async fn test_orchestrator_creation() {
         let orchestrator = Orchestrator::new();
         assert!(!orchestrator.is_running().await);
-        assert_eq!(orchestrator.operation_mode().await, OperationMode::Supervised);
+        assert_eq!(
+            orchestrator.operation_mode().await,
+            OperationMode::Supervised
+        );
     }
 
     #[tokio::test]
@@ -481,16 +484,17 @@ mod tests {
         let orchestrator = Orchestrator::new();
 
         // Activate kill switch
-        orchestrator
-            .activate_kill_switch("Test", "test_user")
-            .await;
+        orchestrator.activate_kill_switch("Test", "test_user").await;
 
         assert!(orchestrator.is_kill_switch_active().await);
 
         // Should not be able to process alerts
         let alert = create_test_alert();
         let result = orchestrator.process_alert(alert).await;
-        assert!(matches!(result, Err(OrchestratorError::KillSwitchActivated(_))));
+        assert!(matches!(
+            result,
+            Err(OrchestratorError::KillSwitchActivated(_))
+        ));
 
         // Deactivate and try again
         orchestrator.deactivate_kill_switch("test_user").await;
@@ -522,13 +526,23 @@ mod tests {
     async fn test_operation_mode() {
         let orchestrator = Orchestrator::new();
 
-        assert_eq!(orchestrator.operation_mode().await, OperationMode::Supervised);
+        assert_eq!(
+            orchestrator.operation_mode().await,
+            OperationMode::Supervised
+        );
 
-        orchestrator.set_operation_mode(OperationMode::Assisted).await;
+        orchestrator
+            .set_operation_mode(OperationMode::Assisted)
+            .await;
         assert_eq!(orchestrator.operation_mode().await, OperationMode::Assisted);
 
-        orchestrator.set_operation_mode(OperationMode::Autonomous).await;
-        assert_eq!(orchestrator.operation_mode().await, OperationMode::Autonomous);
+        orchestrator
+            .set_operation_mode(OperationMode::Autonomous)
+            .await;
+        assert_eq!(
+            orchestrator.operation_mode().await,
+            OperationMode::Autonomous
+        );
     }
 
     #[tokio::test]

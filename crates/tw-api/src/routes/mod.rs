@@ -5,8 +5,8 @@ pub mod incidents;
 pub mod metrics;
 pub mod webhooks;
 
-use axum::Router;
 use crate::state::AppState;
+use axum::Router;
 
 /// Creates the main API router.
 pub fn create_router(state: AppState) -> Router {

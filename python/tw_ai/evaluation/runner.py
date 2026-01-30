@@ -21,10 +21,10 @@ from tw_ai.evaluation.dataset import TestCase
 from tw_ai.evaluation.metrics import (
     EvaluationReport,
     VerdictMetrics,
-    calculate_verdict_metrics,
     calculate_severity_accuracy,
-    generate_confusion_matrix,
     calculate_technique_recall,
+    calculate_verdict_metrics,
+    generate_confusion_matrix,
 )
 
 logger = structlog.get_logger()
@@ -456,16 +456,12 @@ class EvaluationRunner:
         if predictions and labels:
             verdict_metrics = calculate_verdict_metrics(predictions, labels)
         else:
-            verdict_metrics = VerdictMetrics(
-                accuracy=0.0, precision=0.0, recall=0.0, f1_score=0.0
-            )
+            verdict_metrics = VerdictMetrics(accuracy=0.0, precision=0.0, recall=0.0, f1_score=0.0)
 
         # Calculate severity accuracy
         severity_predictions = [r.predicted_severity for r in valid_results]
         severity_labels = [r.expected_severity for r in valid_results]
-        severity_accuracy = calculate_severity_accuracy(
-            severity_predictions, severity_labels
-        )
+        severity_accuracy = calculate_severity_accuracy(severity_predictions, severity_labels)
 
         # Generate confusion matrix
         if predictions and labels:
@@ -476,9 +472,7 @@ class EvaluationRunner:
         # Calculate technique recall
         technique_predictions = [r.predicted_techniques for r in valid_results]
         technique_labels = [r.expected_techniques for r in valid_results]
-        technique_recall = calculate_technique_recall(
-            technique_predictions, technique_labels
-        )
+        technique_recall = calculate_technique_recall(technique_predictions, technique_labels)
 
         # Count passed/failed
         passed = sum(1 for r in results if r.passed)

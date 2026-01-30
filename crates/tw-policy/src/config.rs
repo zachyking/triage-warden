@@ -569,7 +569,10 @@ escalation_rules:
 
         // Verify deny list
         assert_eq!(config.deny_list.actions.len(), 2);
-        assert!(config.deny_list.actions.contains(&"delete_user".to_string()));
+        assert!(config
+            .deny_list
+            .actions
+            .contains(&"delete_user".to_string()));
         assert_eq!(config.deny_list.target_patterns.len(), 2);
         assert_eq!(config.deny_list.protected_ips.len(), 1);
         assert_eq!(config.deny_list.protected_users.len(), 2);
@@ -647,7 +650,10 @@ escalation_rules: []
 
         let result = load_guardrails(file.path());
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ConfigError::InvalidRegex { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ConfigError::InvalidRegex { .. }
+        ));
     }
 
     #[test]
@@ -708,7 +714,10 @@ escalation_rules: []
 
         let result = load_guardrails(file.path());
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ConfigError::EnvVarNotFound(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            ConfigError::EnvVarNotFound(_)
+        ));
     }
 
     #[test]
@@ -894,12 +903,27 @@ escalation_rules: []
             let config = load_guardrails(&config_path).expect("Failed to load guardrails.yaml");
 
             // Verify key components are loaded
-            assert!(!config.deny_list.actions.is_empty(), "deny_list.actions should not be empty");
-            assert!(!config.rate_limits.is_empty(), "rate_limits should not be empty");
-            assert!(!config.approval_policies.is_empty(), "approval_policies should not be empty");
-            assert!(!config.auto_approve_rules.is_empty(), "auto_approve_rules should not be empty");
+            assert!(
+                !config.deny_list.actions.is_empty(),
+                "deny_list.actions should not be empty"
+            );
+            assert!(
+                !config.rate_limits.is_empty(),
+                "rate_limits should not be empty"
+            );
+            assert!(
+                !config.approval_policies.is_empty(),
+                "approval_policies should not be empty"
+            );
+            assert!(
+                !config.auto_approve_rules.is_empty(),
+                "auto_approve_rules should not be empty"
+            );
             assert!(config.data_policies.pii_filter, "pii_filter should be true");
-            assert!(!config.escalation_rules.is_empty(), "escalation_rules should not be empty");
+            assert!(
+                !config.escalation_rules.is_empty(),
+                "escalation_rules should not be empty"
+            );
 
             // Verify we can create a PolicyEngine from the config
             let engine = PolicyEngine::from_config(config);

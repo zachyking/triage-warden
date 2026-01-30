@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import List, Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -18,7 +18,7 @@ class Indicator(BaseModel):
     verdict: str = Field(
         description="Assessment of the indicator (e.g., 'malicious', 'suspicious', 'benign')"
     )
-    context: Optional[str] = Field(
+    context: str | None = Field(
         default=None,
         description="Additional context about this indicator",
     )
@@ -108,15 +108,15 @@ class TriageAnalysis(BaseModel):
         description="Severity level of the incident"
     )
     summary: str = Field(description="Brief summary of the analysis findings")
-    indicators: List[Indicator] = Field(
+    indicators: list[Indicator] = Field(
         default_factory=list,
         description="List of indicators of compromise (IOCs) identified",
     )
-    mitre_techniques: List[MITRETechnique] = Field(
+    mitre_techniques: list[MITRETechnique] = Field(
         default_factory=list,
         description="Mapped MITRE ATT&CK techniques",
     )
-    recommended_actions: List[RecommendedAction] = Field(
+    recommended_actions: list[RecommendedAction] = Field(
         default_factory=list,
         description="Recommended response actions",
     )

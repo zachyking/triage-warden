@@ -6,10 +6,10 @@ covering MITRE ATT&CK techniques T1566.* (Phishing).
 """
 
 from tw_ai.agents.prompts.system import (
-    SOC_ANALYST_PERSONA,
     AVAILABLE_TOOLS,
     CHAIN_OF_THOUGHT_GUIDANCE,
     CONFIDENCE_SCORING_CRITERIA,
+    SOC_ANALYST_PERSONA,
     format_output_schema,
 )
 
@@ -59,7 +59,7 @@ PHISHING_INDICATORS = """## Phishing Indicator Analysis
 # Phishing Few-Shot Examples
 # =============================================================================
 
-PHISHING_EXAMPLES = '''## Example Analyses
+PHISHING_EXAMPLES = """## Example Analyses
 
 ### Example 1: Clear Phishing Attack
 
@@ -166,7 +166,7 @@ DKIM: none
   ],
   "reasoning": "This email has mixed signals. Positive: SPF passes, domain is not flagged as malicious, no obvious phishing indicators in content. Concerning: No prior communication with this sender, DKIM not configured (many legitimate SMBs don't have DKIM), unsolicited attachment. The document hash is not in any threat intel database (clean but also unknown). Recommend sandbox analysis and recipient verification before delivery."
 }
-```'''
+```"""
 
 
 # =============================================================================
@@ -240,21 +240,25 @@ def get_phishing_triage_prompt(
     prompt_parts = [PHISHING_PROMPT]
 
     if organization_context:
-        prompt_parts.append(f"""## Organization Context
+        prompt_parts.append(
+            f"""## Organization Context
 
-{organization_context}""")
+{organization_context}"""
+        )
 
     if not include_examples:
         # Remove examples section if not wanted (already in PHISHING_PROMPT)
         # For production, examples are usually helpful, so default is True
         pass
 
-    prompt_parts.append(f"""## Alert to Analyze
+    prompt_parts.append(
+        f"""## Alert to Analyze
 
 {alert_context}
 
 Analyze this alert following the methodology above. Gather additional evidence using the available \
-tools as needed, then provide your structured assessment.""")
+tools as needed, then provide your structured assessment."""
+    )
 
     return "\n\n".join(prompt_parts)
 
@@ -287,7 +291,7 @@ def build_phishing_alert_context(
 
     parts = [
         f"**Alert ID**: {alert_id}",
-        f"**Alert Type**: Potential Phishing Email",
+        "**Alert Type**: Potential Phishing Email",
     ]
 
     if reporter:
@@ -306,6 +310,6 @@ def build_phishing_alert_context(
         parts.append(f"\n**Attachments**:\n```json\n{json.dumps(attachments, indent=2)}\n```")
 
     if urls:
-        parts.append(f"\n**Extracted URLs**:\n" + "\n".join(f"- {url}" for url in urls))
+        parts.append("\n**Extracted URLs**:\n" + "\n".join(f"- {url}" for url in urls))
 
     return "\n".join(parts)

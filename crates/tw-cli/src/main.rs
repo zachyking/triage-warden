@@ -226,13 +226,11 @@ async fn main() -> Result<()> {
         tracing::Level::INFO
     };
 
-    tw_observability::logging::init_logging_with_config(
-        tw_observability::logging::LoggingConfig {
-            level: log_level,
-            json_format: cli.format == OutputFormat::Json,
-            ..Default::default()
-        },
-    );
+    tw_observability::logging::init_logging_with_config(tw_observability::logging::LoggingConfig {
+        level: log_level,
+        json_format: cli.format == OutputFormat::Json,
+        ..Default::default()
+    });
 
     // Load configuration
     let config_path = cli.config.clone().unwrap_or_else(default_config_path);
@@ -251,13 +249,17 @@ async fn main() -> Result<()> {
             database,
             no_swagger,
         } => {
-            cmd_serve(ServeConfig {
-                port,
-                host,
-                database_url: database,
-                enable_swagger: !no_swagger,
-                timeout_secs: 30,
-            }, config).await
+            cmd_serve(
+                ServeConfig {
+                    port,
+                    host,
+                    database_url: database,
+                    enable_swagger: !no_swagger,
+                    timeout_secs: 30,
+                },
+                config,
+            )
+            .await
         }
         Commands::Start { foreground } => cmd_start(config, foreground).await,
         Commands::Stop => cmd_stop().await,
@@ -270,7 +272,10 @@ async fn main() -> Result<()> {
         Commands::Connector { action } => cmd_connector(action, config, cli.format).await,
         Commands::Action { action } => cmd_action(action, config, cli.format).await,
         Commands::Metrics => cmd_metrics(cli.format, &cli.api_url).await,
-        Commands::Test { alert_type, dry_run } => cmd_test(config, &alert_type, dry_run).await,
+        Commands::Test {
+            alert_type,
+            dry_run,
+        } => cmd_test(config, &alert_type, dry_run).await,
     }
 }
 
@@ -296,14 +301,15 @@ async fn cmd_start(config: AppConfig, foreground: bool) -> Result<()> {
     }
 
     // Create orchestrator
-    let orchestrator = tw_core::Orchestrator::with_config(tw_core::orchestrator::OrchestratorConfig {
-        mode: match config.operation_mode.as_str() {
-            "assisted" => tw_core::orchestrator::OperationMode::Assisted,
-            "autonomous" => tw_core::orchestrator::OperationMode::Autonomous,
-            _ => tw_core::orchestrator::OperationMode::Supervised,
-        },
-        ..Default::default()
-    });
+    let orchestrator =
+        tw_core::Orchestrator::with_config(tw_core::orchestrator::OrchestratorConfig {
+            mode: match config.operation_mode.as_str() {
+                "assisted" => tw_core::orchestrator::OperationMode::Assisted,
+                "autonomous" => tw_core::orchestrator::OperationMode::Autonomous,
+                _ => tw_core::orchestrator::OperationMode::Supervised,
+            },
+            ..Default::default()
+        });
 
     // Start the orchestrator
     orchestrator.start().await?;
@@ -391,7 +397,10 @@ async fn cmd_config(config: AppConfig, show_secrets: bool, format: OutputFormat)
         println!("Operation Mode: {}", display_config.operation_mode);
         println!("\nConnectors:");
         for (name, connector) in &display_config.connectors {
-            println!("  - {}: {} ({})", name, connector.connector_type, connector.enabled);
+            println!(
+                "  - {}: {} ({})",
+                name, connector.connector_type, connector.enabled
+            );
         }
     }
 
@@ -450,57 +459,59 @@ async fn cmd_incident(action: IncidentCommands, format: OutputFormat, api_url: &
                 }
             }
         }
-        IncidentCommands::Show { id } => {
-            match uuid::Uuid::parse_str(&id) {
-                Ok(uuid) => match client.get_incident(uuid).await {
-                    Ok(incident) => {
-                        if format == OutputFormat::Json {
-                            println!("{}", serde_json::to_string_pretty(&incident)?);
-                        } else {
-                            println!("{} {}", "Incident:".bold(), incident.incident.id);
-                            println!("─────────────────────────────────────────");
-                            println!("  {} {}", "Status:".cyan(), incident.incident.status);
-                            println!("  {} {}", "Severity:".cyan(), incident.incident.severity);
-                            println!("  {} {}", "Source:".cyan(), incident.incident.source);
-                            if let Some(title) = &incident.incident.title {
-                                println!("  {} {}", "Title:".cyan(), title);
-                            }
-                            if let Some(verdict) = &incident.incident.verdict {
-                                println!("  {} {}", "Verdict:".cyan(), verdict);
-                            }
-                            println!("  {} {}", "Created:".cyan(), incident.incident.created_at);
-                            println!();
-                            println!("{} ({})", "Proposed Actions".bold(), incident.proposed_actions.len());
-                            for action in &incident.proposed_actions {
-                                println!(
-                                    "  {} [{}] {} - {}",
-                                    action.id.to_string()[..8].cyan(),
-                                    action.approval_status,
-                                    action.action_type,
-                                    action.reason
-                                );
-                            }
-                            println!();
-                            println!("{} ({})", "Audit Log".bold(), incident.audit_log.len());
-                            for entry in &incident.audit_log {
-                                println!(
-                                    "  {} {} by {}",
-                                    entry.timestamp.format("%Y-%m-%d %H:%M:%S"),
-                                    entry.action,
-                                    entry.actor
-                                );
-                            }
+        IncidentCommands::Show { id } => match uuid::Uuid::parse_str(&id) {
+            Ok(uuid) => match client.get_incident(uuid).await {
+                Ok(incident) => {
+                    if format == OutputFormat::Json {
+                        println!("{}", serde_json::to_string_pretty(&incident)?);
+                    } else {
+                        println!("{} {}", "Incident:".bold(), incident.incident.id);
+                        println!("─────────────────────────────────────────");
+                        println!("  {} {}", "Status:".cyan(), incident.incident.status);
+                        println!("  {} {}", "Severity:".cyan(), incident.incident.severity);
+                        println!("  {} {}", "Source:".cyan(), incident.incident.source);
+                        if let Some(title) = &incident.incident.title {
+                            println!("  {} {}", "Title:".cyan(), title);
+                        }
+                        if let Some(verdict) = &incident.incident.verdict {
+                            println!("  {} {}", "Verdict:".cyan(), verdict);
+                        }
+                        println!("  {} {}", "Created:".cyan(), incident.incident.created_at);
+                        println!();
+                        println!(
+                            "{} ({})",
+                            "Proposed Actions".bold(),
+                            incident.proposed_actions.len()
+                        );
+                        for action in &incident.proposed_actions {
+                            println!(
+                                "  {} [{}] {} - {}",
+                                action.id.to_string()[..8].cyan(),
+                                action.approval_status,
+                                action.action_type,
+                                action.reason
+                            );
+                        }
+                        println!();
+                        println!("{} ({})", "Audit Log".bold(), incident.audit_log.len());
+                        for entry in &incident.audit_log {
+                            println!(
+                                "  {} {} by {}",
+                                entry.timestamp.format("%Y-%m-%d %H:%M:%S"),
+                                entry.action,
+                                entry.actor
+                            );
                         }
                     }
-                    Err(e) => {
-                        println!("{}: {}", "Error".red(), e);
-                    }
-                },
-                Err(_) => {
-                    println!("{}: Invalid UUID format", "Error".red());
                 }
+                Err(e) => {
+                    println!("{}: {}", "Error".red(), e);
+                }
+            },
+            Err(_) => {
+                println!("{}: Invalid UUID format", "Error".red());
             }
-        }
+        },
         IncidentCommands::Update { id, status } => {
             println!("Updating incident {} to status: {}", id.cyan(), status);
             println!("(not implemented - use API directly)");
@@ -558,16 +569,15 @@ async fn cmd_connector(
     Ok(())
 }
 
-async fn cmd_action(
-    action: ActionCommands,
-    config: AppConfig,
-    format: OutputFormat,
-) -> Result<()> {
+async fn cmd_action(action: ActionCommands, config: AppConfig, format: OutputFormat) -> Result<()> {
     match action {
         ActionCommands::List => {
             println!("{}", "Available Actions".bold());
             println!("─────────────────");
-            println!("  {} - Isolate a host from the network", "isolate_host".cyan());
+            println!(
+                "  {} - Isolate a host from the network",
+                "isolate_host".cyan()
+            );
             println!("  {} - Remove host isolation", "unisolate_host".cyan());
             println!("  {} - Disable a user account", "disable_user".cyan());
             println!("  {} - Create a ticket", "create_ticket".cyan());
@@ -618,8 +628,14 @@ async fn cmd_metrics(format: OutputFormat, api_url: &str) -> Result<()> {
                 println!();
                 println!("{}", "Incidents".bold());
                 println!("  Total: {}", metrics.incidents.total);
-                println!("  Created (last hour): {}", metrics.incidents.created_last_hour);
-                println!("  Resolved (last hour): {}", metrics.incidents.resolved_last_hour);
+                println!(
+                    "  Created (last hour): {}",
+                    metrics.incidents.created_last_hour
+                );
+                println!(
+                    "  Resolved (last hour): {}",
+                    metrics.incidents.resolved_last_hour
+                );
                 println!();
                 println!("{}", "By Status".bold());
                 for (status, count) in &metrics.incidents.by_status {
@@ -628,7 +644,10 @@ async fn cmd_metrics(format: OutputFormat, api_url: &str) -> Result<()> {
                 println!();
                 println!("{}", "Actions".bold());
                 println!("  Total executed: {}", metrics.actions.total_executed);
-                println!("  Success rate: {:.1}%", metrics.actions.success_rate * 100.0);
+                println!(
+                    "  Success rate: {:.1}%",
+                    metrics.actions.success_rate * 100.0
+                );
                 println!("  Pending approvals: {}", metrics.actions.pending_approvals);
                 println!();
                 println!("{}", "Performance".bold());
@@ -705,7 +724,10 @@ async fn cmd_test(config: AppConfig, alert_type: &str, dry_run: bool) -> Result<
     let orchestrator = tw_core::Orchestrator::new();
 
     if dry_run {
-        println!("\n{}: Would process alert through triage pipeline", "Dry run".yellow());
+        println!(
+            "\n{}: Would process alert through triage pipeline",
+            "Dry run".yellow()
+        );
     } else {
         println!("\nProcessing alert...");
         match orchestrator.process_alert(alert).await {

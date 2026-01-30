@@ -16,13 +16,13 @@ Usage:
 """
 
 from tw_ai.evaluation.dataset import TestCase, load_test_cases
-from tw_ai.evaluation.runner import EvaluationRunner, EvaluationConfig
 from tw_ai.evaluation.metrics import (
     EvaluationReport,
-    calculate_verdict_metrics,
     calculate_severity_accuracy,
+    calculate_verdict_metrics,
     generate_confusion_matrix,
 )
+from tw_ai.evaluation.runner import EvaluationConfig, EvaluationRunner
 
 __all__ = [
     # Dataset

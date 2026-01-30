@@ -204,7 +204,10 @@ impl EscalationManager {
         let state = self.state.read().await;
 
         for rule in &self.rules {
-            if self.evaluate_condition(&rule.condition, incident, &state).await {
+            if self
+                .evaluate_condition(&rule.condition, incident, &state)
+                .await
+            {
                 info!(
                     "Escalation rule '{}' triggered for incident type '{}'",
                     rule.name, incident.alert_type
@@ -279,12 +282,18 @@ impl EscalationManager {
                         if let Ok(re) = regex::Regex::new(value) {
                             re.is_match(field_value)
                         } else {
-                            warn!("Invalid regex pattern in custom escalation condition: {}", value);
+                            warn!(
+                                "Invalid regex pattern in custom escalation condition: {}",
+                                value
+                            );
                             false
                         }
                     }
                     _ => {
-                        warn!("Unknown operator in custom escalation condition: {}", operator);
+                        warn!(
+                            "Unknown operator in custom escalation condition: {}",
+                            operator
+                        );
                         false
                     }
                 }
@@ -377,7 +386,10 @@ impl EscalationManager {
         // Remove empty entries
         state.incident_tracker.retain(|_, v| !v.is_empty());
 
-        debug!("Cleaned up incident tracker, max age {} hours", max_age_hours);
+        debug!(
+            "Cleaned up incident tracker, max age {} hours",
+            max_age_hours
+        );
     }
 
     /// Gets false positive stats for all tracked alert types.
@@ -594,7 +606,10 @@ mod tests {
         )];
 
         let manager = EscalationManager::new(rules);
-        let incident = IncidentContext::new("ransomware_malware_detected".to_string(), "high".to_string());
+        let incident = IncidentContext::new(
+            "ransomware_malware_detected".to_string(),
+            "high".to_string(),
+        );
         let action = manager.check_escalation(&incident).await;
 
         assert_eq!(action, Some(EscalationAction::EscalateToSenior));
@@ -615,7 +630,8 @@ mod tests {
 
         let manager = EscalationManager::new(rules);
 
-        let incident1 = IncidentContext::new("apt_campaign_detected".to_string(), "high".to_string());
+        let incident1 =
+            IncidentContext::new("apt_campaign_detected".to_string(), "high".to_string());
         assert_eq!(
             manager.check_escalation(&incident1).await,
             Some(EscalationAction::EscalateToManager)

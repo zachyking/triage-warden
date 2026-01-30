@@ -104,9 +104,15 @@ OUTPUT_SCHEMA = {
         "items": {
             "type": "object",
             "properties": {
-                "type": {"type": "string", "description": "Indicator type (ip, domain, hash, url, email)"},
+                "type": {
+                    "type": "string",
+                    "description": "Indicator type (ip, domain, hash, url, email)",
+                },
                 "value": {"type": "string", "description": "The indicator value"},
-                "verdict": {"type": "string", "description": "Assessment of this specific indicator"},
+                "verdict": {
+                    "type": "string",
+                    "description": "Assessment of this specific indicator",
+                },
             },
         },
         "description": "List of extracted and analyzed indicators",
@@ -118,7 +124,10 @@ OUTPUT_SCHEMA = {
             "properties": {
                 "id": {"type": "string", "description": "MITRE technique ID (e.g., T1566.001)"},
                 "name": {"type": "string", "description": "Technique name"},
-                "relevance": {"type": "string", "description": "How this technique relates to the alert"},
+                "relevance": {
+                    "type": "string",
+                    "description": "How this technique relates to the alert",
+                },
             },
         },
         "description": "Mapped MITRE ATT&CK techniques",
@@ -145,6 +154,7 @@ OUTPUT_SCHEMA = {
 def format_output_schema() -> str:
     """Format the output schema as a string for inclusion in prompts."""
     import json
+
     return json.dumps(OUTPUT_SCHEMA, indent=2)
 
 
@@ -246,6 +256,7 @@ Apply these modifiers to your base confidence:
 # Prompt Assembly Functions
 # =============================================================================
 
+
 def get_base_system_prompt(
     include_tools: bool = True,
     include_methodology: bool = True,
@@ -276,7 +287,8 @@ def get_base_system_prompt(
         sections.append(CONFIDENCE_SCORING_CRITERIA)
 
     # Always include output schema
-    sections.append(f"""## Required Output Format
+    sections.append(
+        f"""## Required Output Format
 
 You MUST respond with a JSON object matching this schema:
 
@@ -289,7 +301,8 @@ Important:
 - Confidence must be an integer between 0 and 100
 - Include at least one recommended action
 - Your reasoning should explain your thought process step by step
-- Map to MITRE ATT&CK techniques when applicable""")
+- Map to MITRE ATT&CK techniques when applicable"""
+    )
 
     if custom_context:
         sections.append(f"## Additional Context\n\n{custom_context}")
@@ -332,9 +345,13 @@ def build_alert_context(
     ]
 
     if asset_info:
-        context_parts.append(f"\n**Asset Context**:\n```json\n{json.dumps(asset_info, indent=2)}\n```")
+        context_parts.append(
+            f"\n**Asset Context**:\n```json\n{json.dumps(asset_info, indent=2)}\n```"
+        )
 
     if user_info:
-        context_parts.append(f"\n**User Context**:\n```json\n{json.dumps(user_info, indent=2)}\n```")
+        context_parts.append(
+            f"\n**User Context**:\n```json\n{json.dumps(user_info, indent=2)}\n```"
+        )
 
     return "\n".join(context_parts)

@@ -14,7 +14,7 @@ use validator::Validate;
 use crate::dto::{WebhookAcceptedResponse, WebhookAlertPayload};
 use crate::error::ApiError;
 use crate::state::AppState;
-use crate::webhooks::{validate_signature, normalize_alert};
+use crate::webhooks::{normalize_alert, validate_signature};
 
 /// Creates webhook routes.
 pub fn routes() -> Router<AppState> {
@@ -60,11 +60,17 @@ async fn receive_alert(
     let incident_id = incident.id;
 
     // Publish event (async processing)
-    let _ = state.event_bus.publish(tw_core::TriageEvent::AlertReceived(alert)).await;
-    let _ = state.event_bus.publish(tw_core::TriageEvent::IncidentCreated {
-        incident_id,
-        alert_id: alert_id.clone(),
-    }).await;
+    let _ = state
+        .event_bus
+        .publish(tw_core::TriageEvent::AlertReceived(alert))
+        .await;
+    let _ = state
+        .event_bus
+        .publish(tw_core::TriageEvent::IncidentCreated {
+            incident_id,
+            alert_id: alert_id.clone(),
+        })
+        .await;
 
     // TODO: Persist incident to database
     // let repo = tw_core::db::create_incident_repository(&state.db);
@@ -126,11 +132,17 @@ async fn receive_alert_from_source(
     let incident_id = incident.id;
 
     // Publish event (async processing)
-    let _ = state.event_bus.publish(tw_core::TriageEvent::AlertReceived(alert)).await;
-    let _ = state.event_bus.publish(tw_core::TriageEvent::IncidentCreated {
-        incident_id,
-        alert_id: alert_id.clone(),
-    }).await;
+    let _ = state
+        .event_bus
+        .publish(tw_core::TriageEvent::AlertReceived(alert))
+        .await;
+    let _ = state
+        .event_bus
+        .publish(tw_core::TriageEvent::IncidentCreated {
+            incident_id,
+            alert_id: alert_id.clone(),
+        })
+        .await;
 
     Ok((
         StatusCode::ACCEPTED,

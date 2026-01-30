@@ -1,7 +1,6 @@
 """Local LLM provider for self-hosted models (vLLM, Ollama, etc.)."""
 
 import json
-import os
 from typing import Any
 
 import httpx

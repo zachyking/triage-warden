@@ -15,8 +15,8 @@ pub mod db;
 
 pub use events::{EventBus, TriageEvent};
 pub use incident::{
-    Alert, AlertSource, AuditEntry, Enrichment, Incident, IncidentStatus, ProposedAction,
-    Severity, TriageAnalysis,
+    Alert, AlertSource, AuditEntry, Enrichment, Incident, IncidentStatus, ProposedAction, Severity,
+    TriageAnalysis,
 };
 pub use orchestrator::Orchestrator;
 pub use workflow::{WorkflowEngine, WorkflowState, WorkflowTransition};

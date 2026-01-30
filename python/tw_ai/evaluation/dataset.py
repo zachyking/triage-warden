@@ -7,7 +7,6 @@ This module provides:
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -137,7 +136,7 @@ def _load_yaml_file(file_path: Path) -> list[TestCase]:
     Returns:
         List of TestCase instances from the file
     """
-    with open(file_path, "r", encoding="utf-8") as f:
+    with open(file_path, encoding="utf-8") as f:
         content = yaml.safe_load(f)
 
     if content is None:

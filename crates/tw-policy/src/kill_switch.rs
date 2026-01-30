@@ -567,7 +567,10 @@ mod tests {
         let event2 = rx2.recv().await.unwrap();
 
         match (event1, event2) {
-            (KillSwitchEvent::Activated { by: by1, .. }, KillSwitchEvent::Activated { by: by2, .. }) => {
+            (
+                KillSwitchEvent::Activated { by: by1, .. },
+                KillSwitchEvent::Activated { by: by2, .. },
+            ) => {
                 assert_eq!(by1, "admin");
                 assert_eq!(by2, "admin");
             }

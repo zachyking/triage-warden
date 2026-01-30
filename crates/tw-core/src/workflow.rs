@@ -409,7 +409,10 @@ impl WorkflowEngine {
 
     /// Gets all possible next states from the current state.
     pub fn get_possible_transitions(&self, from: &IncidentStatus) -> Vec<&WorkflowTransition> {
-        self.transitions.iter().filter(|t| &t.from == from).collect()
+        self.transitions
+            .iter()
+            .filter(|t| &t.from == from)
+            .collect()
     }
 
     /// Removes a completed workflow.

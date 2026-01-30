@@ -162,13 +162,17 @@ impl ActionContext {
 
     /// Gets a parameter as a string.
     pub fn get_string(&self, key: &str) -> Option<String> {
-        self.parameters.get(key).and_then(|v| v.as_str()).map(String::from)
+        self.parameters
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(String::from)
     }
 
     /// Gets a required parameter as a string.
     pub fn require_string(&self, key: &str) -> Result<String, ActionError> {
-        self.get_string(key)
-            .ok_or_else(|| ActionError::InvalidParameters(format!("Missing required parameter: {}", key)))
+        self.get_string(key).ok_or_else(|| {
+            ActionError::InvalidParameters(format!("Missing required parameter: {}", key))
+        })
     }
 }
 
@@ -201,7 +205,10 @@ pub trait Action: Send + Sync {
     async fn execute(&self, context: ActionContext) -> Result<ActionResult, ActionError>;
 
     /// Rolls back the action (if supported).
-    async fn rollback(&self, rollback_data: serde_json::Value) -> Result<ActionResult, ActionError> {
+    async fn rollback(
+        &self,
+        rollback_data: serde_json::Value,
+    ) -> Result<ActionResult, ActionError> {
         Err(ActionError::NotSupported(format!(
             "Rollback not supported for action: {}",
             self.name()
@@ -431,8 +438,8 @@ mod tests {
         let mut registry = ActionRegistry::new();
         registry.register(Arc::new(TestAction));
 
-        let context = ActionContext::new(Uuid::new_v4())
-            .with_param("target", serde_json::json!("test-host"));
+        let context =
+            ActionContext::new(Uuid::new_v4()).with_param("target", serde_json::json!("test-host"));
 
         let result = registry.execute("test_action", context).await.unwrap();
         assert!(result.success);

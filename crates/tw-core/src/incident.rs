@@ -484,9 +484,15 @@ impl std::fmt::Display for ActionType {
 #[serde(rename_all = "snake_case")]
 pub enum ActionTarget {
     /// A host/endpoint
-    Host { hostname: String, ip: Option<String> },
+    Host {
+        hostname: String,
+        ip: Option<String>,
+    },
     /// A user account
-    User { username: String, email: Option<String> },
+    User {
+        username: String,
+        email: Option<String>,
+    },
     /// An IP address
     IpAddress(String),
     /// A domain

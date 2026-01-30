@@ -2,26 +2,26 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Callable, Awaitable, Optional
 import time
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from typing import Any
 
 import structlog
 
-from tw_ai.llm.base import ToolDefinition
-
 # Import email analysis modules
 from tw_ai.analysis.email import (
-    parse_email_alert,
-    extract_urls,
-    extract_urls_from_html,
     EmailAnalysis,
     ExtractedURL,
+    extract_urls,
+    extract_urls_from_html,
+    parse_email_alert,
 )
 from tw_ai.analysis.phishing import (
-    analyze_phishing_indicators,
     PhishingIndicators,
+    analyze_phishing_indicators,
 )
+from tw_ai.llm.base import ToolDefinition
 
 logger = structlog.get_logger()
 
@@ -39,6 +39,7 @@ SIEMBridge = None
 
 try:
     from tw_bridge import ThreatIntelBridge
+
     _THREAT_INTEL_BRIDGE_AVAILABLE = True
     logger.info("tw_bridge.ThreatIntelBridge available")
 except ImportError:
@@ -46,6 +47,7 @@ except ImportError:
 
 try:
     from tw_bridge import EDRBridge
+
     _EDR_BRIDGE_AVAILABLE = True
     logger.info("tw_bridge.EDRBridge available")
 except ImportError:
@@ -53,6 +55,7 @@ except ImportError:
 
 try:
     from tw_bridge import SIEMBridge
+
     _SIEM_BRIDGE_AVAILABLE = True
     logger.info("tw_bridge.SIEMBridge available")
 except ImportError:
@@ -64,6 +67,7 @@ PolicyBridge = None
 
 try:
     from tw_bridge import PolicyBridge
+
     _POLICY_BRIDGE_AVAILABLE = True
     logger.info("tw_bridge.PolicyBridge available")
 except ImportError:
@@ -80,17 +84,17 @@ class ToolResult:
     """Result of a tool execution."""
 
     success: bool
-    data: "dict[str, Any]" = field(default_factory=dict)
-    error: "Optional[str]" = None
+    data: dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
     execution_time_ms: int = 0
 
     @classmethod
-    def ok(cls, data: "dict[str, Any]", execution_time_ms: int = 0) -> "ToolResult":
+    def ok(cls, data: dict[str, Any], execution_time_ms: int = 0) -> ToolResult:
         """Create a successful result."""
         return cls(success=True, data=data, execution_time_ms=execution_time_ms)
 
     @classmethod
-    def fail(cls, error: str, execution_time_ms: int = 0) -> "ToolResult":
+    def fail(cls, error: str, execution_time_ms: int = 0) -> ToolResult:
         """Create a failed result."""
         return cls(success=False, error=error, execution_time_ms=execution_time_ms)
 
@@ -323,7 +327,10 @@ def _mock_check_action(action_type: str, target: str, confidence: float) -> dict
         }
 
     # Low-risk actions with high confidence are allowed
-    if action_type in ("create_ticket", "add_ticket_comment", "send_notification") and confidence >= 0.9:
+    if (
+        action_type in ("create_ticket", "add_ticket_comment", "send_notification")
+        and confidence >= 0.9
+    ):
         return {
             "decision": "allowed",
             "reason": None,
@@ -390,6 +397,7 @@ def _mock_submit_approval_request(action_type: str, target: str, level: str) -> 
     """Mock approval request submission when bridge is unavailable."""
     global _mock_approval_counter
     import uuid
+
     request_id = str(uuid.uuid4())
     _mock_approval_requests[request_id] = {
         "action_type": action_type,
@@ -469,10 +477,12 @@ def _normalize_email_data_for_phishing(email_data: dict[str, Any]) -> dict[str, 
                 urls.append(url_str)
                 display_text = url_item.get("display_text")
                 if display_text:
-                    url_display_texts.append({
-                        "url": url_str,
-                        "display_text": display_text,
-                    })
+                    url_display_texts.append(
+                        {
+                            "url": url_str,
+                            "display_text": display_text,
+                        }
+                    )
 
     normalized["urls"] = urls
     normalized["url_display_texts"] = url_display_texts
@@ -1247,19 +1257,21 @@ def create_triage_tools() -> ToolRegistry:
         """Format detections for LLM readability."""
         formatted = []
         for det in data:
-            formatted.append({
-                "id": det.get("id", ""),
-                "name": det.get("name", "Unknown Detection"),
-                "severity": det.get("severity", "unknown"),
-                "timestamp": det.get("timestamp", ""),
-                "description": det.get("description", ""),
-                "tactic": det.get("tactic", ""),
-                "technique": det.get("technique", ""),
-                "technique_name": det.get("technique_name", ""),
-                "process_name": det.get("process_name", ""),
-                "file_hash": det.get("file_hash", ""),
-                "status": det.get("status", "new"),
-            })
+            formatted.append(
+                {
+                    "id": det.get("id", ""),
+                    "name": det.get("name", "Unknown Detection"),
+                    "severity": det.get("severity", "unknown"),
+                    "timestamp": det.get("timestamp", ""),
+                    "description": det.get("description", ""),
+                    "tactic": det.get("tactic", ""),
+                    "technique": det.get("technique", ""),
+                    "technique_name": det.get("technique_name", ""),
+                    "process_name": det.get("process_name", ""),
+                    "file_hash": det.get("file_hash", ""),
+                    "status": det.get("status", "new"),
+                }
+            )
         return {
             "hostname": hostname,
             "total_count": len(formatted),
@@ -1371,22 +1383,22 @@ def create_triage_tools() -> ToolRegistry:
             "source": "mock",
         }
 
-    def _format_processes_for_llm(
-        data: list[dict], hostname: str, hours: int
-    ) -> dict[str, Any]:
+    def _format_processes_for_llm(data: list[dict], hostname: str, hours: int) -> dict[str, Any]:
         """Format process list for LLM readability."""
         formatted = []
         for proc in data:
-            formatted.append({
-                "pid": proc.get("pid", 0),
-                "name": proc.get("name", "unknown"),
-                "command_line": proc.get("command_line", ""),
-                "user": proc.get("user", ""),
-                "parent_pid": proc.get("parent_pid", 0),
-                "parent_name": proc.get("parent_name", ""),
-                "start_time": proc.get("start_time", ""),
-                "hash": proc.get("hash", ""),
-            })
+            formatted.append(
+                {
+                    "pid": proc.get("pid", 0),
+                    "name": proc.get("name", "unknown"),
+                    "command_line": proc.get("command_line", ""),
+                    "user": proc.get("user", ""),
+                    "parent_pid": proc.get("parent_pid", 0),
+                    "parent_name": proc.get("parent_name", ""),
+                    "start_time": proc.get("start_time", ""),
+                    "hash": proc.get("hash", ""),
+                }
+            )
         return {
             "hostname": hostname,
             "timerange_hours": hours,
@@ -1515,21 +1527,23 @@ def create_triage_tools() -> ToolRegistry:
         """Format network connections for LLM readability."""
         formatted = []
         for conn in data:
-            formatted.append({
-                "timestamp": conn.get("timestamp", ""),
-                "direction": conn.get("direction", "unknown"),
-                "protocol": conn.get("protocol", "TCP"),
-                "local_ip": conn.get("local_ip", ""),
-                "local_port": conn.get("local_port", 0),
-                "remote_ip": conn.get("remote_ip", ""),
-                "remote_port": conn.get("remote_port", 0),
-                "remote_hostname": conn.get("remote_hostname", ""),
-                "process_name": conn.get("process_name", ""),
-                "process_pid": conn.get("process_pid", 0),
-                "bytes_sent": conn.get("bytes_sent", 0),
-                "bytes_received": conn.get("bytes_received", 0),
-                "status": conn.get("status", "unknown"),
-            })
+            formatted.append(
+                {
+                    "timestamp": conn.get("timestamp", ""),
+                    "direction": conn.get("direction", "unknown"),
+                    "protocol": conn.get("protocol", "TCP"),
+                    "local_ip": conn.get("local_ip", ""),
+                    "local_port": conn.get("local_port", 0),
+                    "remote_ip": conn.get("remote_ip", ""),
+                    "remote_port": conn.get("remote_port", 0),
+                    "remote_hostname": conn.get("remote_hostname", ""),
+                    "process_name": conn.get("process_name", ""),
+                    "process_pid": conn.get("process_pid", 0),
+                    "bytes_sent": conn.get("bytes_sent", 0),
+                    "bytes_received": conn.get("bytes_received", 0),
+                    "status": conn.get("status", "unknown"),
+                }
+            )
         return {
             "hostname": hostname,
             "timerange_hours": hours,
@@ -1601,9 +1615,7 @@ def create_triage_tools() -> ToolRegistry:
     # Policy Tools - Check actions against policy engine
     # ========================================================================
 
-    async def check_policy(
-        action_type: str, target: str, confidence: float = 0.9
-    ) -> ToolResult:
+    async def check_policy(action_type: str, target: str, confidence: float = 0.9) -> ToolResult:
         """Check if an action is allowed by the policy engine.
 
         Evaluates the proposed action against the policy engine rules,
@@ -1691,7 +1703,7 @@ def create_triage_tools() -> ToolRegistry:
                     },
                     "confidence": {
                         "type": "number",
-                        "description": "Confidence score from AI analysis (0.0 to 1.0, default 0.9)",
+                        "description": "Confidence score from AI analysis (0.0-1.0)",
                         "default": 0.9,
                     },
                 },
@@ -1701,9 +1713,7 @@ def create_triage_tools() -> ToolRegistry:
         )
     )
 
-    async def submit_approval(
-        action_type: str, target: str, level: str = "analyst"
-    ) -> ToolResult:
+    async def submit_approval(action_type: str, target: str, level: str = "analyst") -> ToolResult:
         """Submit an approval request for an action that requires human approval.
 
         Call this when check_policy returns "requires_approval" to create
@@ -1778,7 +1788,7 @@ def create_triage_tools() -> ToolRegistry:
                     },
                     "level": {
                         "type": "string",
-                        "description": "Required approval level (analyst, senior, manager, executive)",
+                        "description": "Required approval level",
                         "enum": ["analyst", "senior", "manager", "executive"],
                         "default": "analyst",
                     },
@@ -1927,9 +1937,7 @@ def create_triage_tools() -> ToolRegistry:
                     }
                     for att in analysis.attachments
                 ],
-                "received_timestamps": [
-                    ts.isoformat() for ts in analysis.received_timestamps
-                ],
+                "received_timestamps": [ts.isoformat() for ts in analysis.received_timestamps],
                 "authentication": {
                     "spf": analysis.authentication.spf,
                     "dkim": analysis.authentication.dkim,
@@ -2073,9 +2081,7 @@ def create_triage_tools() -> ToolRegistry:
         )
     )
 
-    async def extract_email_urls(
-        text: str, include_html: bool = True
-    ) -> ToolResult:
+    async def extract_email_urls(text: str, include_html: bool = True) -> ToolResult:
         """Extract URLs from email content.
 
         Uses extract_urls() and extract_urls_from_html() from the email
@@ -2286,6 +2292,7 @@ def create_triage_tools() -> ToolRegistry:
 
             # Generate action ID
             import uuid
+
             action_id = f"qe-{uuid.uuid4().hex[:12]}"
 
             # Mock implementation - log the action
@@ -2336,7 +2343,7 @@ def create_triage_tools() -> ToolRegistry:
                     },
                     "reason": {
                         "type": "string",
-                        "description": "Reason for quarantining the email (e.g., 'phishing', 'malware attachment')",
+                        "description": "Reason for quarantining (e.g., phishing, malware)",
                     },
                 },
                 "required": ["message_id", "reason"],
@@ -2346,9 +2353,7 @@ def create_triage_tools() -> ToolRegistry:
         )
     )
 
-    async def block_sender(
-        sender: str, block_type: str, reason: str
-    ) -> ToolResult:
+    async def block_sender(sender: str, block_type: str, reason: str) -> ToolResult:
         """Block an email sender or domain.
 
         Adds the sender or domain to the block list to prevent future emails.
@@ -2381,7 +2386,9 @@ def create_triage_tools() -> ToolRegistry:
 
             if not is_action_allowed(action_type, sender, 0.9):
                 execution_time_ms = int((time.perf_counter() - start_time) * 1000)
-                approval_note = "Domain blocks require senior approval." if block_type == "domain" else ""
+                approval_note = (
+                    "Domain blocks require senior approval." if block_type == "domain" else ""
+                )
                 logger.warning(
                     "block_sender_denied_by_policy",
                     sender=sender,
@@ -2400,6 +2407,7 @@ def create_triage_tools() -> ToolRegistry:
 
             # Generate action ID
             import uuid
+
             action_id = f"bs-{uuid.uuid4().hex[:12]}"
 
             # Mock implementation - log the action
@@ -2456,7 +2464,7 @@ def create_triage_tools() -> ToolRegistry:
                     "block_type": {
                         "type": "string",
                         "enum": ["email", "domain"],
-                        "description": "Type of block: 'email' for single address, 'domain' for entire domain",
+                        "description": "Block type: email for address, domain for entire domain",
                     },
                     "reason": {
                         "type": "string",
@@ -2500,12 +2508,14 @@ def create_triage_tools() -> ToolRegistry:
             if notification_type not in valid_types:
                 execution_time_ms = int((time.perf_counter() - start_time) * 1000)
                 return ToolResult.fail(
-                    error=f"Invalid notification_type: {notification_type}. Must be one of: {valid_types}",
+                    error=f"Invalid notification_type: {notification_type}. "
+                    f"Must be one of: {valid_types}",
                     execution_time_ms=execution_time_ms,
                 )
 
             # Generate notification ID
             import uuid
+
             notification_id = f"notif-{uuid.uuid4().hex[:12]}"
 
             # Mock implementation - log the notification
@@ -2614,6 +2624,7 @@ def create_triage_tools() -> ToolRegistry:
 
             # Generate ticket ID
             import uuid
+
             ticket_id = f"SEC-{uuid.uuid4().hex[:8].upper()}"
             ticket_url = f"https://tickets.example.com/security/{ticket_id}"
 

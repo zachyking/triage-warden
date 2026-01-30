@@ -15,20 +15,19 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Literal, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal
 
 import structlog
 
-from tw_ai.analysis.email import parse_email_alert, EmailAnalysis
-from tw_ai.analysis.phishing import analyze_phishing_indicators, PhishingIndicators
+from tw_ai.analysis.email import EmailAnalysis, parse_email_alert
+from tw_ai.analysis.phishing import PhishingIndicators, analyze_phishing_indicators
 
 # Conditional imports for AI-integrated workflow
 if TYPE_CHECKING:
-    from tw_ai.agents.react import ReActAgent, TriageRequest, AgentResult
-    from tw_ai.agents.tools import ToolRegistry
-    from tw_ai.agents.models import TriageAnalysis
+    pass
 
 logger = structlog.get_logger()
 
@@ -82,11 +81,11 @@ class DecisionThresholds:
     """Configurable thresholds for automated triage decisions.
 
     Attributes:
-        auto_quarantine_score: Minimum risk score for automatic quarantine (default: 80)
-        auto_block_score: Minimum risk score for automatic sender blocking (default: 90)
+        auto_quarantine_score: Minimum risk score for auto quarantine (default: 80)
+        auto_block_score: Minimum risk score for auto sender blocking (default: 90)
         needs_review_score: Minimum risk score requiring human review (default: 40)
-        min_confidence_for_action: Minimum confidence for automated actions (default: 0.85)
-        sender_reputation_low_threshold: Sender reputation score below which is suspicious (default: 30)
+        min_confidence_for_action: Min confidence for automated actions (default: 0.85)
+        sender_reputation_low_threshold: Score below which is suspicious (default: 30)
     """
 
     auto_quarantine_score: int = 80
@@ -124,10 +123,10 @@ class ActionResult:
 
     action_type: str
     success: bool
-    action_id: Optional[str] = None
-    target: Optional[str] = None
-    message: Optional[str] = None
-    error: Optional[str] = None
+    action_id: str | None = None
+    target: str | None = None
+    message: str | None = None
+    error: str | None = None
 
 
 @dataclass
@@ -169,7 +168,7 @@ class SenderReputationResult:
     domain: str
     score: int
     is_known_sender: bool
-    domain_age_days: Optional[int]
+    domain_age_days: int | None
     risk_level: str
     is_mock: bool = True
 
@@ -201,12 +200,12 @@ class WorkflowResult:
     analysis_summary: str
     workflow_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     execution_time_seconds: float = 0.0
-    email_analysis: Optional[dict[str, Any]] = None
-    phishing_indicators: Optional[dict[str, Any]] = None
-    sender_reputation: Optional[SenderReputationResult] = None
+    email_analysis: dict[str, Any] | None = None
+    phishing_indicators: dict[str, Any] | None = None
+    sender_reputation: SenderReputationResult | None = None
     url_checks: list[URLCheckResult] = field(default_factory=list)
     stage: WorkflowStage = WorkflowStage.COMPLETED
-    error: Optional[str] = None
+    error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert result to dictionary for serialization."""
@@ -230,14 +229,18 @@ class WorkflowResult:
             "execution_time_seconds": self.execution_time_seconds,
             "email_analysis": self.email_analysis,
             "phishing_indicators": self.phishing_indicators,
-            "sender_reputation": {
-                "sender_email": self.sender_reputation.sender_email,
-                "domain": self.sender_reputation.domain,
-                "score": self.sender_reputation.score,
-                "is_known_sender": self.sender_reputation.is_known_sender,
-                "domain_age_days": self.sender_reputation.domain_age_days,
-                "risk_level": self.sender_reputation.risk_level,
-            } if self.sender_reputation else None,
+            "sender_reputation": (
+                {
+                    "sender_email": self.sender_reputation.sender_email,
+                    "domain": self.sender_reputation.domain,
+                    "score": self.sender_reputation.score,
+                    "is_known_sender": self.sender_reputation.is_known_sender,
+                    "domain_age_days": self.sender_reputation.domain_age_days,
+                    "risk_level": self.sender_reputation.risk_level,
+                }
+                if self.sender_reputation
+                else None
+            ),
             "url_checks": [
                 {
                     "url": u.url,
@@ -281,22 +284,26 @@ class TriageResult:
 
     verdict: str
     confidence: float
-    analysis: Optional[Any] = None  # TriageAnalysis from agents.models
-    email_analysis: Optional[EmailAnalysis] = None
-    phishing_indicators: Optional[PhishingIndicators] = None
+    analysis: Any | None = None  # TriageAnalysis from agents.models
+    email_analysis: EmailAnalysis | None = None
+    phishing_indicators: PhishingIndicators | None = None
     proposed_actions: list[dict] = field(default_factory=list)
     approved_actions: list[dict] = field(default_factory=list)
     rejected_actions: list[dict] = field(default_factory=list)
     execution_time_seconds: float = 0.0
     stages_completed: list[str] = field(default_factory=list)
-    error: Optional[str] = None
+    error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert result to dictionary for serialization."""
         return {
             "verdict": self.verdict,
             "confidence": self.confidence,
-            "analysis": self.analysis.model_dump() if self.analysis and hasattr(self.analysis, 'model_dump') else None,
+            "analysis": (
+                self.analysis.model_dump()
+                if self.analysis and hasattr(self.analysis, "model_dump")
+                else None
+            ),
             "email_analysis": self._email_analysis_to_dict(),
             "phishing_indicators": self._phishing_indicators_to_dict(),
             "proposed_actions": self.proposed_actions,
@@ -307,7 +314,7 @@ class TriageResult:
             "error": self.error,
         }
 
-    def _email_analysis_to_dict(self) -> Optional[dict[str, Any]]:
+    def _email_analysis_to_dict(self) -> dict[str, Any] | None:
         """Convert EmailAnalysis to dictionary."""
         if self.email_analysis is None:
             return None
@@ -328,7 +335,7 @@ class TriageResult:
             },
         }
 
-    def _phishing_indicators_to_dict(self) -> Optional[dict[str, Any]]:
+    def _phishing_indicators_to_dict(self) -> dict[str, Any] | None:
         """Convert PhishingIndicators to dictionary."""
         if self.phishing_indicators is None:
             return None
@@ -404,14 +411,14 @@ class PhishingTriageWorkflow:
 
     def __init__(
         self,
-        thresholds: Optional[DecisionThresholds] = None,
+        thresholds: DecisionThresholds | None = None,
         enable_actions: bool = True,
         dry_run: bool = False,
         # AI-integrated mode parameters
-        agent: Optional[Any] = None,  # ReActAgent
-        tools: Optional[Any] = None,  # ToolRegistry
-        policy_checker: Optional[Callable[[dict], dict]] = None,
-        on_stage_complete: Optional[Callable[[str, Any], None]] = None,
+        agent: Any | None = None,  # ReActAgent
+        tools: Any | None = None,  # ToolRegistry
+        policy_checker: Callable[[dict], dict] | None = None,
+        on_stage_complete: Callable[[str, Any], None] | None = None,
     ):
         """Initialize the phishing triage workflow.
 
@@ -809,8 +816,14 @@ class PhishingTriageWorkflow:
 
         # Known safe domains
         safe_domains = {
-            "google.com", "microsoft.com", "github.com", "amazon.com",
-            "apple.com", "linkedin.com", "twitter.com", "facebook.com",
+            "google.com",
+            "microsoft.com",
+            "github.com",
+            "amazon.com",
+            "apple.com",
+            "linkedin.com",
+            "twitter.com",
+            "facebook.com",
         }
 
         domain_lower = domain.lower()
@@ -900,9 +913,15 @@ class PhishingTriageWorkflow:
         )
 
         # Make decision based on risk score and thresholds
-        if risk_score >= self.thresholds.auto_block_score and confidence >= self.thresholds.min_confidence_for_action:
+        if (
+            risk_score >= self.thresholds.auto_block_score
+            and confidence >= self.thresholds.min_confidence_for_action
+        ):
             decision = TriageDecision.BLOCK_SENDER
-        elif risk_score >= self.thresholds.auto_quarantine_score and confidence >= self.thresholds.min_confidence_for_action:
+        elif (
+            risk_score >= self.thresholds.auto_quarantine_score
+            and confidence >= self.thresholds.min_confidence_for_action
+        ):
             decision = TriageDecision.QUARANTINE
         elif risk_score >= self.thresholds.needs_review_score:
             decision = TriageDecision.NEEDS_REVIEW
@@ -939,15 +958,17 @@ class PhishingTriageWorkflow:
         confidence_factors: list[float] = []
 
         # Factor 1: Multiple phishing indicators detected
-        indicator_count = sum([
-            len(phishing_indicators.typosquat_domains) > 0,
-            len(phishing_indicators.urgency_phrases) > 0,
-            phishing_indicators.credential_request_detected,
-            len(phishing_indicators.suspicious_urls) > 0,
-            phishing_indicators.url_text_mismatch,
-            phishing_indicators.sender_domain_mismatch,
-            phishing_indicators.attachment_risk_level in ("high", "critical"),
-        ])
+        indicator_count = sum(
+            [
+                len(phishing_indicators.typosquat_domains) > 0,
+                len(phishing_indicators.urgency_phrases) > 0,
+                phishing_indicators.credential_request_detected,
+                len(phishing_indicators.suspicious_urls) > 0,
+                phishing_indicators.url_text_mismatch,
+                phishing_indicators.sender_domain_mismatch,
+                phishing_indicators.attachment_risk_level in ("high", "critical"),
+            ]
+        )
 
         if indicator_count >= 4:
             confidence_factors.append(0.95)
@@ -1303,7 +1324,7 @@ class PhishingTriageWorkflow:
         # Decision summary
         decision_map = {
             TriageDecision.QUARANTINE: "Email quarantined due to high phishing risk",
-            TriageDecision.BLOCK_SENDER: "Email quarantined and sender blocked due to confirmed phishing",
+            TriageDecision.BLOCK_SENDER: "Email quarantined and sender blocked (phishing)",
             TriageDecision.NEEDS_REVIEW: "Email flagged for manual review",
             TriageDecision.BENIGN: "Email classified as benign",
         }
@@ -1437,14 +1458,14 @@ class PhishingTriageWorkflow:
 
         start_time = time.time()
         stages_completed: list[str] = []
-        email_analysis: Optional[EmailAnalysis] = None
-        phishing_indicators: Optional[PhishingIndicators] = None
+        email_analysis: EmailAnalysis | None = None
+        phishing_indicators: PhishingIndicators | None = None
         enrichment_data: dict[str, Any] = {}
-        analysis: Optional[Any] = None  # TriageAnalysis
+        analysis: Any | None = None  # TriageAnalysis
         proposed_actions: list[dict] = []
         approved_actions: list[dict] = []
         rejected_actions: list[dict] = []
-        error: Optional[str] = None
+        error: str | None = None
 
         logger.info(
             "phishing_ai_triage_started",
@@ -1455,12 +1476,15 @@ class PhishingTriageWorkflow:
         try:
             email_analysis = parse_email_alert(alert)
             stages_completed.append(STAGE_PARSE)
-            self._notify_ai_stage_complete(STAGE_PARSE, {
-                "sender": email_analysis.sender,
-                "subject": email_analysis.subject,
-                "url_count": len(email_analysis.urls),
-                "attachment_count": len(email_analysis.attachments),
-            })
+            self._notify_ai_stage_complete(
+                STAGE_PARSE,
+                {
+                    "sender": email_analysis.sender,
+                    "subject": email_analysis.subject,
+                    "url_count": len(email_analysis.urls),
+                    "attachment_count": len(email_analysis.attachments),
+                },
+            )
             logger.debug(
                 "ai_stage_parse_complete",
                 sender=email_analysis.sender,
@@ -1477,12 +1501,15 @@ class PhishingTriageWorkflow:
                 phishing_data = self._build_ai_phishing_data(alert, email_analysis)
                 phishing_indicators = analyze_phishing_indicators(phishing_data)
                 stages_completed.append(STAGE_ANALYZE)
-                self._notify_ai_stage_complete(STAGE_ANALYZE, {
-                    "risk_score": phishing_indicators.overall_risk_score,
-                    "typosquat_count": len(phishing_indicators.typosquat_domains),
-                    "urgency_phrases": len(phishing_indicators.urgency_phrases),
-                    "credential_request": phishing_indicators.credential_request_detected,
-                })
+                self._notify_ai_stage_complete(
+                    STAGE_ANALYZE,
+                    {
+                        "risk_score": phishing_indicators.overall_risk_score,
+                        "typosquat_count": len(phishing_indicators.typosquat_domains),
+                        "urgency_phrases": len(phishing_indicators.urgency_phrases),
+                        "credential_request": phishing_indicators.credential_request_detected,
+                    },
+                )
                 logger.debug(
                     "ai_stage_analyze_complete",
                     risk_score=phishing_indicators.overall_risk_score,
@@ -1508,7 +1535,7 @@ class PhishingTriageWorkflow:
                 error = f"ENRICH stage failed: {str(e)}"
 
         # Stage 4: DECIDE - Run ReAct agent with phishing prompt
-        agent_result: Optional[Any] = None
+        agent_result: Any | None = None
         try:
             agent_result = await self._run_ai_agent(
                 alert, email_analysis, phishing_indicators, enrichment_data
@@ -1517,12 +1544,15 @@ class PhishingTriageWorkflow:
                 analysis = agent_result.analysis
                 proposed_actions = self._extract_ai_proposed_actions(analysis)
             stages_completed.append(STAGE_DECIDE)
-            self._notify_ai_stage_complete(STAGE_DECIDE, {
-                "success": agent_result.success,
-                "verdict": analysis.verdict if analysis else None,
-                "confidence": analysis.confidence if analysis else None,
-                "proposed_actions_count": len(proposed_actions),
-            })
+            self._notify_ai_stage_complete(
+                STAGE_DECIDE,
+                {
+                    "success": agent_result.success,
+                    "verdict": analysis.verdict if analysis else None,
+                    "confidence": analysis.confidence if analysis else None,
+                    "proposed_actions_count": len(proposed_actions),
+                },
+            )
             logger.debug(
                 "ai_stage_decide_complete",
                 success=agent_result.success,
@@ -1540,10 +1570,13 @@ class PhishingTriageWorkflow:
                 analysis.confidence if analysis else 0,
             )
             stages_completed.append(STAGE_APPROVE)
-            self._notify_ai_stage_complete(STAGE_APPROVE, {
-                "approved_count": len(approved_actions),
-                "rejected_count": len(rejected_actions),
-            })
+            self._notify_ai_stage_complete(
+                STAGE_APPROVE,
+                {
+                    "approved_count": len(approved_actions),
+                    "rejected_count": len(rejected_actions),
+                },
+            )
             logger.debug(
                 "ai_stage_approve_complete",
                 approved=len(approved_actions),
@@ -1615,9 +1648,7 @@ class PhishingTriageWorkflow:
             "attachments": [att.filename for att in email_analysis.attachments],
         }
 
-    async def _run_ai_enrichment(
-        self, email_analysis: Optional[EmailAnalysis]
-    ) -> dict[str, Any]:
+    async def _run_ai_enrichment(self, email_analysis: EmailAnalysis | None) -> dict[str, Any]:
         """Run URL and domain lookups via tools for AI mode.
 
         Args:
@@ -1639,9 +1670,7 @@ class PhishingTriageWorkflow:
             domain = email_analysis.sender.split("@")[-1].lower().strip()
             if domain:
                 try:
-                    domain_result = await self.tools.execute(
-                        "lookup_domain", {"domain": domain}
-                    )
+                    domain_result = await self.tools.execute("lookup_domain", {"domain": domain})
                     results["domain_result"] = {
                         "domain": domain,
                         "result": domain_result,
@@ -1658,14 +1687,14 @@ class PhishingTriageWorkflow:
             try:
                 domain = url_info.domain
                 if domain:
-                    url_result = await self.tools.execute(
-                        "lookup_domain", {"domain": domain}
+                    url_result = await self.tools.execute("lookup_domain", {"domain": domain})
+                    results["url_results"].append(
+                        {
+                            "url": url_info.url,
+                            "domain": domain,
+                            "result": url_result,
+                        }
                     )
-                    results["url_results"].append({
-                        "url": url_info.url,
-                        "domain": domain,
-                        "result": url_result,
-                    })
             except Exception as e:
                 logger.warning(
                     "ai_url_lookup_failed",
@@ -1678,8 +1707,8 @@ class PhishingTriageWorkflow:
     async def _run_ai_agent(
         self,
         alert: dict[str, Any],
-        email_analysis: Optional[EmailAnalysis],
-        phishing_indicators: Optional[PhishingIndicators],
+        email_analysis: EmailAnalysis | None,
+        phishing_indicators: PhishingIndicators | None,
         enrichment_data: dict[str, Any],
     ) -> Any:
         """Run the ReAct agent for phishing verdict.
@@ -1697,19 +1726,18 @@ class PhishingTriageWorkflow:
         from tw_ai.agents.react import TriageRequest
 
         # Build context for the agent
-        context = self._build_ai_agent_context(
-            email_analysis, phishing_indicators, enrichment_data
-        )
+        context = self._build_ai_agent_context(email_analysis, phishing_indicators, enrichment_data)
 
         # Create triage request
         request = TriageRequest(
             alert_type="phishing",
             alert_data=alert,
             context=context,
-            priority="high" if (
-                phishing_indicators and
-                phishing_indicators.overall_risk_score >= 70
-            ) else "medium",
+            priority=(
+                "high"
+                if (phishing_indicators and phishing_indicators.overall_risk_score >= 70)
+                else "medium"
+            ),
         )
 
         # Run the agent
@@ -1717,8 +1745,8 @@ class PhishingTriageWorkflow:
 
     def _build_ai_agent_context(
         self,
-        email_analysis: Optional[EmailAnalysis],
-        phishing_indicators: Optional[PhishingIndicators],
+        email_analysis: EmailAnalysis | None,
+        phishing_indicators: PhishingIndicators | None,
         enrichment_data: dict[str, Any],
     ) -> dict[str, Any]:
         """Build context dict for the AI agent."""
@@ -1774,12 +1802,14 @@ class PhishingTriageWorkflow:
         """
         actions = []
         for rec in analysis.recommended_actions:
-            actions.append({
-                "action": rec.action,
-                "priority": rec.priority,
-                "reason": rec.reason,
-                "requires_approval": rec.requires_approval,
-            })
+            actions.append(
+                {
+                    "action": rec.action,
+                    "priority": rec.priority,
+                    "reason": rec.reason,
+                    "requires_approval": rec.requires_approval,
+                }
+            )
         return actions
 
     def _check_ai_actions_against_policy(
@@ -1803,31 +1833,39 @@ class PhishingTriageWorkflow:
             if self.policy_checker:
                 try:
                     # Build policy check request
-                    check_result = self.policy_checker({
-                        "action_type": action.get("action", ""),
-                        "target": "",  # Would need actual target
-                        "confidence": confidence / 100.0,  # Convert to 0-1
-                        "priority": action.get("priority", "low"),
-                    })
+                    check_result = self.policy_checker(
+                        {
+                            "action_type": action.get("action", ""),
+                            "target": "",  # Would need actual target
+                            "confidence": confidence / 100.0,  # Convert to 0-1
+                            "priority": action.get("priority", "low"),
+                        }
+                    )
 
                     decision = check_result.get("decision", "denied")
                     if decision == "allowed":
-                        approved.append({
-                            **action,
-                            "policy_decision": "allowed",
-                        })
+                        approved.append(
+                            {
+                                **action,
+                                "policy_decision": "allowed",
+                            }
+                        )
                     elif decision == "requires_approval":
-                        approved.append({
-                            **action,
-                            "policy_decision": "requires_approval",
-                            "approval_reason": check_result.get("reason"),
-                        })
+                        approved.append(
+                            {
+                                **action,
+                                "policy_decision": "requires_approval",
+                                "approval_reason": check_result.get("reason"),
+                            }
+                        )
                     else:
-                        rejected.append({
-                            **action,
-                            "policy_decision": "denied",
-                            "rejection_reason": check_result.get("reason"),
-                        })
+                        rejected.append(
+                            {
+                                **action,
+                                "policy_decision": "denied",
+                                "rejection_reason": check_result.get("reason"),
+                            }
+                        )
                 except Exception as e:
                     logger.warning(
                         "ai_policy_check_failed",
@@ -1835,30 +1873,36 @@ class PhishingTriageWorkflow:
                         error=str(e),
                     )
                     # Default to requires approval on error
-                    approved.append({
-                        **action,
-                        "policy_decision": "requires_approval",
-                        "approval_reason": "Policy check failed",
-                    })
+                    approved.append(
+                        {
+                            **action,
+                            "policy_decision": "requires_approval",
+                            "approval_reason": "Policy check failed",
+                        }
+                    )
             else:
                 # No policy checker - default behavior
                 if action.get("requires_approval", False):
-                    approved.append({
-                        **action,
-                        "policy_decision": "requires_approval",
-                    })
+                    approved.append(
+                        {
+                            **action,
+                            "policy_decision": "requires_approval",
+                        }
+                    )
                 else:
-                    approved.append({
-                        **action,
-                        "policy_decision": "allowed",
-                    })
+                    approved.append(
+                        {
+                            **action,
+                            "policy_decision": "allowed",
+                        }
+                    )
 
         return approved, rejected
 
     def _determine_ai_verdict(
         self,
-        analysis: Optional[Any],
-        phishing_indicators: Optional[PhishingIndicators],
+        analysis: Any | None,
+        phishing_indicators: PhishingIndicators | None,
         enrichment_data: dict[str, Any],
     ) -> tuple[str, float]:
         """Determine the final verdict and confidence for AI mode.

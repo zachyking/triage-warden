@@ -402,8 +402,7 @@ impl HttpClient {
 
         let oauth_token = OAuthToken {
             access_token: token_response.access_token.clone(),
-            expires_at: std::time::Instant::now()
-                + Duration::from_secs(token_response.expires_in),
+            expires_at: std::time::Instant::now() + Duration::from_secs(token_response.expires_in),
         };
 
         // Store the token
@@ -477,11 +476,7 @@ impl<V: Clone + Send + Sync + 'static> ResponseCache<V> {
     }
 
     /// Tries to get a value or inserts it using a fallible async function.
-    pub async fn get_or_try_insert_with<F, Fut, E>(
-        &self,
-        key: String,
-        f: F,
-    ) -> Result<V, E>
+    pub async fn get_or_try_insert_with<F, Fut, E>(&self, key: String, f: F) -> Result<V, E>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<V, E>>,
@@ -619,7 +614,11 @@ mod tests {
 
         cache.set("key1".to_string(), "value1".to_string()).await;
         cache
-            .set_with_ttl("key2".to_string(), "value2".to_string(), Duration::from_secs(60))
+            .set_with_ttl(
+                "key2".to_string(),
+                "value2".to_string(),
+                Duration::from_secs(60),
+            )
             .await;
 
         tokio::time::sleep(Duration::from_millis(100)).await;

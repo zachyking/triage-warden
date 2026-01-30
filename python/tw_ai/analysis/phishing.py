@@ -16,7 +16,6 @@ from dataclasses import dataclass, field
 from typing import Literal
 from urllib.parse import urlparse
 
-
 # ============================================================================
 # Dataclasses
 # ============================================================================
@@ -145,9 +144,45 @@ CREDENTIAL_PATTERNS = [
 ]
 
 # Attachment extensions and risk levels
-HIGH_RISK_EXTENSIONS = {".exe", ".scr", ".bat", ".cmd", ".ps1", ".vbs", ".js", ".jse", ".wsf", ".msi", ".com", ".pif"}
-MEDIUM_RISK_EXTENSIONS = {".doc", ".docm", ".xls", ".xlsm", ".ppt", ".pptm", ".zip", ".rar", ".7z", ".iso", ".img"}
-LOW_RISK_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".pptx", ".txt", ".csv", ".png", ".jpg", ".jpeg", ".gif"}
+HIGH_RISK_EXTENSIONS = {
+    ".exe",
+    ".scr",
+    ".bat",
+    ".cmd",
+    ".ps1",
+    ".vbs",
+    ".js",
+    ".jse",
+    ".wsf",
+    ".msi",
+    ".com",
+    ".pif",
+}
+MEDIUM_RISK_EXTENSIONS = {
+    ".doc",
+    ".docm",
+    ".xls",
+    ".xlsm",
+    ".ppt",
+    ".pptm",
+    ".zip",
+    ".rar",
+    ".7z",
+    ".iso",
+    ".img",
+}
+LOW_RISK_EXTENSIONS = {
+    ".pdf",
+    ".docx",
+    ".xlsx",
+    ".pptx",
+    ".txt",
+    ".csv",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+}
 
 
 # ============================================================================
@@ -196,7 +231,9 @@ def analyze_phishing_indicators(email_data: dict) -> PhishingIndicators:
         sender_typosquats = check_typosquat(sender_domain, LEGITIMATE_DOMAINS)
         indicators.typosquat_domains.extend(sender_typosquats)
         if sender_typosquats:
-            indicators.risk_factors.append(f"Sender domain '{sender_domain}' appears to be typosquatting")
+            indicators.risk_factors.append(
+                f"Sender domain '{sender_domain}' appears to be typosquatting"
+            )
 
     # 3. Check for sender domain mismatch (display name vs actual domain)
     sender_display = email_data.get("sender_display_name", "")
@@ -289,8 +326,9 @@ def check_typosquat(domain: str, legitimate_domains: list[str]) -> list[Typosqua
             # Check for patterns where legit domain is embedded as subdomain or prefix
             parts = domain_lower.split(".")
             if (len(parts) > 2 and legit_name in parts[:-1]) or (  # paypal.evil.com
-                f"-{legit_name}" in domain_name or  # login-paypal.com
-                f"{legit_name}-" in domain_name):   # paypal-login.com
+                f"-{legit_name}" in domain_name  # login-paypal.com
+                or f"{legit_name}-" in domain_name
+            ):  # paypal-login.com
                 matches.append(
                     TyposquatMatch(
                         suspicious_domain=domain,
@@ -646,7 +684,9 @@ def _check_url_text_mismatch(url_text_mappings: list[dict]) -> bool:
     return False
 
 
-def _assess_attachment_risk(attachments: list[str]) -> Literal["none", "low", "medium", "high", "critical"]:
+def _assess_attachment_risk(
+    attachments: list[str],
+) -> Literal["none", "low", "medium", "high", "critical"]:
     """Assess the risk level of email attachments.
 
     Args:

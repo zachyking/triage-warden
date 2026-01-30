@@ -4,7 +4,7 @@
 //! with Prometheus export support.
 
 use chrono::{DateTime, Duration, Utc};
-use metrics::{counter, gauge, histogram, describe_counter, describe_gauge, describe_histogram};
+use metrics::{counter, describe_counter, describe_gauge, describe_histogram, gauge, histogram};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -93,10 +93,7 @@ impl MetricsCollector {
             "tw_actions_denied_total",
             "Total number of actions denied by policy"
         );
-        describe_counter!(
-            "tw_errors_total",
-            "Total number of errors"
-        );
+        describe_counter!("tw_errors_total", "Total number of errors");
 
         describe_gauge!(
             "tw_incidents_in_progress",
@@ -107,22 +104,13 @@ impl MetricsCollector {
             "Number of pending approval requests"
         );
 
-        describe_histogram!(
-            "tw_triage_duration_seconds",
-            "Time to triage an incident"
-        );
+        describe_histogram!("tw_triage_duration_seconds", "Time to triage an incident");
         describe_histogram!(
             "tw_response_duration_seconds",
             "Time to respond to an incident"
         );
-        describe_histogram!(
-            "tw_llm_latency_seconds",
-            "LLM API call latency"
-        );
-        describe_histogram!(
-            "tw_action_duration_seconds",
-            "Action execution duration"
-        );
+        describe_histogram!("tw_llm_latency_seconds", "LLM API call latency");
+        describe_histogram!("tw_action_duration_seconds", "Action execution duration");
     }
 
     /// Records an alert received.
@@ -131,7 +119,12 @@ impl MetricsCollector {
     }
 
     /// Records an incident created.
-    pub async fn record_incident_created(&self, incident_id: uuid::Uuid, source: &str, severity: &str) {
+    pub async fn record_incident_created(
+        &self,
+        incident_id: uuid::Uuid,
+        source: &str,
+        severity: &str,
+    ) {
         counter!("tw_incidents_created_total", "source" => source.to_string(), "severity" => severity.to_string()).increment(1);
         gauge!("tw_incidents_in_progress").increment(1.0);
 
@@ -182,7 +175,8 @@ impl MetricsCollector {
 
     /// Records an incident resolved.
     pub fn record_incident_resolved(&self, resolution_type: &str) {
-        counter!("tw_incidents_resolved_total", "resolution" => resolution_type.to_string()).increment(1);
+        counter!("tw_incidents_resolved_total", "resolution" => resolution_type.to_string())
+            .increment(1);
         gauge!("tw_incidents_in_progress").decrement(1.0);
     }
 
@@ -212,7 +206,8 @@ impl MetricsCollector {
 
     /// Records action duration.
     pub fn record_action_duration(&self, action_type: &str, duration_secs: f64) {
-        histogram!("tw_action_duration_seconds", "action" => action_type.to_string()).record(duration_secs);
+        histogram!("tw_action_duration_seconds", "action" => action_type.to_string())
+            .record(duration_secs);
     }
 
     /// Records an error.
@@ -222,7 +217,8 @@ impl MetricsCollector {
 
     /// Records LLM latency.
     pub fn record_llm_latency(&self, provider: &str, latency_secs: f64) {
-        histogram!("tw_llm_latency_seconds", "provider" => provider.to_string()).record(latency_secs);
+        histogram!("tw_llm_latency_seconds", "provider" => provider.to_string())
+            .record(latency_secs);
     }
 
     /// Records pending approvals count.
@@ -241,9 +237,7 @@ impl MetricsCollector {
         // Calculate mean time to triage
         let triage_times: Vec<i64> = timings
             .values()
-            .filter_map(|t| {
-                t.triaged_at.map(|ta| (ta - t.received_at).num_seconds())
-            })
+            .filter_map(|t| t.triaged_at.map(|ta| (ta - t.received_at).num_seconds()))
             .collect();
 
         let mttt = if !triage_times.is_empty() {
@@ -256,9 +250,7 @@ impl MetricsCollector {
         // Calculate mean time to respond
         let response_times: Vec<i64> = timings
             .values()
-            .filter_map(|t| {
-                t.responded_at.map(|ra| (ra - t.received_at).num_seconds())
-            })
+            .filter_map(|t| t.responded_at.map(|ra| (ra - t.received_at).num_seconds()))
             .collect();
 
         let mttr = if !response_times.is_empty() {
@@ -357,7 +349,9 @@ mod tests {
         let id2 = uuid::Uuid::new_v4();
 
         collector.record_incident_created(id1, "test", "high").await;
-        collector.record_incident_created(id2, "test", "medium").await;
+        collector
+            .record_incident_created(id2, "test", "medium")
+            .await;
 
         collector.record_response_complete(id1, true).await; // auto-resolved
         collector.record_response_complete(id2, false).await; // manual

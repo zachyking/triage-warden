@@ -2,7 +2,9 @@
 //!
 //! This action isolates a host from the network using the configured EDR connector.
 
-use crate::registry::{Action, ActionContext, ActionError, ActionResult, ParameterDef, ParameterType};
+use crate::registry::{
+    Action, ActionContext, ActionError, ActionResult, ParameterDef, ParameterType,
+};
 use async_trait::async_trait;
 use chrono::Utc;
 use std::collections::HashMap;
@@ -88,7 +90,10 @@ impl Action for IsolateHostAction {
         let mut output = HashMap::new();
         output.insert("hostname".to_string(), serde_json::json!(hostname));
         output.insert("host_id".to_string(), serde_json::json!(host_info.host_id));
-        output.insert("action_id".to_string(), serde_json::json!(edr_result.action_id));
+        output.insert(
+            "action_id".to_string(),
+            serde_json::json!(edr_result.action_id),
+        );
 
         let rollback_data = serde_json::json!({
             "hostname": hostname,
@@ -107,11 +112,14 @@ impl Action for IsolateHostAction {
     }
 
     #[instrument(skip(self, rollback_data))]
-    async fn rollback(&self, rollback_data: serde_json::Value) -> Result<ActionResult, ActionError> {
+    async fn rollback(
+        &self,
+        rollback_data: serde_json::Value,
+    ) -> Result<ActionResult, ActionError> {
         let started_at = Utc::now();
-        let hostname = rollback_data["hostname"]
-            .as_str()
-            .ok_or_else(|| ActionError::InvalidParameters("Missing hostname in rollback data".to_string()))?;
+        let hostname = rollback_data["hostname"].as_str().ok_or_else(|| {
+            ActionError::InvalidParameters("Missing hostname in rollback data".to_string())
+        })?;
 
         info!("Rolling back isolation for host: {}", hostname);
 
@@ -127,7 +135,10 @@ impl Action for IsolateHostAction {
 
         let mut output = HashMap::new();
         output.insert("hostname".to_string(), serde_json::json!(hostname));
-        output.insert("action_id".to_string(), serde_json::json!(edr_result.action_id));
+        output.insert(
+            "action_id".to_string(),
+            serde_json::json!(edr_result.action_id),
+        );
 
         info!("Isolation rolled back for host: {}", hostname);
 

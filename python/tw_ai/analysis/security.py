@@ -7,7 +7,6 @@ from typing import Literal
 
 from tw_ai.agents.models import Indicator
 
-
 # ============================================================================
 # Regex Patterns for Indicator Extraction
 # ============================================================================
@@ -34,7 +33,9 @@ IPV6_PATTERN = re.compile(
     r"(?:[0-9a-fA-F]{1,4}:){1,2}(?::[0-9a-fA-F]{1,4}){1,5}|"
     r"[0-9a-fA-F]{1,4}:(?::[0-9a-fA-F]{1,4}){1,6}|"
     r":(?::[0-9a-fA-F]{1,4}){1,7}|"  # Leading ::
-    r"::(?:[fF]{4}:)?(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)"  # IPv4-mapped
+    r"::(?:[fF]{4}:)?"  # IPv4-mapped prefix
+    r"(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}"
+    r"(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)"
     r")\b",
     re.IGNORECASE,
 )
@@ -46,8 +47,7 @@ SHA256_PATTERN = re.compile(r"\b[a-fA-F0-9]{64}\b")
 
 # Domain pattern - handles defanged formats (evil[.]com, evil[dot]com)
 DOMAIN_PATTERN = re.compile(
-    r"\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?"
-    r"(?:\[\.\]|\[dot\]|\.))+[a-zA-Z]{2,}\b",
+    r"\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?" r"(?:\[\.\]|\[dot\]|\.))+[a-zA-Z]{2,}\b",
     re.IGNORECASE,
 )
 
@@ -59,8 +59,7 @@ EMAIL_PATTERN = re.compile(
 
 # URL pattern - handles defanged formats (hxxp, hxxps, [://])
 URL_PATTERN = re.compile(
-    r"(?:hxxps?|https?|ftp)(?:\[:\]|:)(?://|\[//\])"
-    r"[a-zA-Z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+",
+    r"(?:hxxps?|https?|ftp)(?:\[:\]|:)(?://|\[//\])" r"[a-zA-Z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+",
     re.IGNORECASE,
 )
 
@@ -110,7 +109,9 @@ def extract_indicators(text: str) -> list[Indicator]:
     seen_values: set[str] = set()
 
     def add_indicator(
-        indicator_type: Literal["ip", "domain", "url", "hash", "email", "file", "registry", "process", "other"],
+        indicator_type: Literal[
+            "ip", "domain", "url", "hash", "email", "file", "registry", "process", "other"
+        ],
         raw_value: str,
     ) -> None:
         """Add an indicator if not already seen."""
@@ -122,7 +123,7 @@ def extract_indicators(text: str) -> list[Indicator]:
                     type=indicator_type,
                     value=normalized,
                     verdict="unknown",
-                    context=f"Extracted from text",
+                    context="Extracted from text",
                 )
             )
 
@@ -165,9 +166,7 @@ def extract_indicators(text: str) -> list[Indicator]:
 
         # Skip if this domain is already part of a URL or email
         is_part_of_other = any(
-            normalized in seen_val
-            for seen_val in seen_values
-            if normalized != seen_val
+            normalized in seen_val for seen_val in seen_values if normalized != seen_val
         )
         if not is_part_of_other:
             add_indicator("domain", raw_domain)
@@ -363,7 +362,8 @@ def identify_attack_pattern(events: list[dict]) -> dict:
 def _detect_brute_force(events: list[dict]) -> dict:
     """Detect brute force attack pattern."""
     auth_failures = [
-        e for e in events
+        e
+        for e in events
         if e.get("event_type") in ("auth_failure", "login_failure", "authentication_failed")
     ]
 
@@ -421,7 +421,8 @@ def _detect_brute_force(events: list[dict]) -> dict:
 def _detect_lateral_movement(events: list[dict]) -> dict:
     """Detect lateral movement pattern."""
     network_events = [
-        e for e in events
+        e
+        for e in events
         if e.get("event_type") in ("network", "connection", "smb", "rdp", "ssh", "wmi", "psexec")
     ]
 
@@ -441,9 +442,7 @@ def _detect_lateral_movement(events: list[dict]) -> dict:
 
     # Find sources connecting to multiple destinations
     lateral_sources = {
-        source: dests
-        for source, dests in source_to_destinations.items()
-        if len(dests) >= 3
+        source: dests for source, dests in source_to_destinations.items() if len(dests) >= 3
     }
 
     if not lateral_sources:
@@ -468,11 +467,7 @@ def _detect_lateral_movement(events: list[dict]) -> dict:
 
     # Check for use of admin tools
     admin_tools = {"psexec", "wmi", "rdp", "ssh", "smb"}
-    tools_used = {
-        e.get("event_type")
-        for e in network_events
-        if e.get("event_type") in admin_tools
-    }
+    tools_used = {e.get("event_type") for e in network_events if e.get("event_type") in admin_tools}
     if tools_used:
         indicators.append(f"Admin tools detected: {', '.join(tools_used)}")
         confidence = min(confidence + 10, 98)
@@ -487,7 +482,8 @@ def _detect_lateral_movement(events: list[dict]) -> dict:
 def _detect_data_exfiltration(events: list[dict]) -> dict:
     """Detect data exfiltration pattern."""
     data_events = [
-        e for e in events
+        e
+        for e in events
         if e.get("event_type") in ("network", "upload", "transfer", "dns")
         and e.get("bytes_transferred", 0) > 0
     ]
@@ -500,27 +496,28 @@ def _detect_data_exfiltration(events: list[dict]) -> dict:
 
     # Check for external destinations
     external_transfers = [
-        e for e in data_events
+        e
+        for e in data_events
         if e.get("destination_external", False) or _is_external_ip(e.get("destination", ""))
     ]
 
     external_bytes = sum(e.get("bytes_transferred", 0) for e in external_transfers)
 
     # Thresholds for suspicious data volumes
-    MB = 1024 * 1024
-    GB = 1024 * MB
+    mb = 1024 * 1024
+    gb = 1024 * mb
 
-    if external_bytes < 10 * MB:  # Less than 10MB to external
+    if external_bytes < 10 * mb:  # Less than 10MB to external
         return {"detected": False, "confidence": 0, "indicators": []}
 
     # Calculate confidence based on volume
-    if external_bytes >= GB:
+    if external_bytes >= gb:
         confidence = 95
-    elif external_bytes >= 500 * MB:
+    elif external_bytes >= 500 * mb:
         confidence = 90
-    elif external_bytes >= 100 * MB:
+    elif external_bytes >= 100 * mb:
         confidence = 80
-    elif external_bytes >= 50 * MB:
+    elif external_bytes >= 50 * mb:
         confidence = 70
     else:
         confidence = 55
@@ -529,8 +526,8 @@ def _detect_data_exfiltration(events: list[dict]) -> dict:
     destinations = list({e.get("destination") for e in external_transfers if e.get("destination")})
 
     indicators = [
-        f"External data transfer: {external_bytes / MB:.2f} MB",
-        f"Total data transfer: {total_bytes / MB:.2f} MB",
+        f"External data transfer: {external_bytes / mb:.2f} MB",
+        f"Total data transfer: {total_bytes / mb:.2f} MB",
         f"External destinations: {len(destinations)}",
     ]
 
@@ -553,7 +550,8 @@ def _detect_data_exfiltration(events: list[dict]) -> dict:
 def _detect_credential_theft(events: list[dict]) -> dict:
     """Detect credential theft pattern."""
     credential_events = [
-        e for e in events
+        e
+        for e in events
         if (
             e.get("event_type") in ("process", "file_access", "registry")
             and _is_credential_related(e)
@@ -568,7 +566,8 @@ def _detect_credential_theft(events: list[dict]) -> dict:
 
     # Check for LSASS access
     lsass_events = [
-        e for e in credential_events
+        e
+        for e in credential_events
         if "lsass" in str(e.get("target_process", "")).lower()
         or "lsass" in str(e.get("process_name", "")).lower()
     ]
@@ -578,10 +577,10 @@ def _detect_credential_theft(events: list[dict]) -> dict:
 
     # Check for SAM/SECURITY hive access
     hive_events = [
-        e for e in credential_events
+        e
+        for e in credential_events
         if any(
-            hive in str(e.get("file_path", "")).upper()
-            for hive in ("SAM", "SECURITY", "SYSTEM")
+            hive in str(e.get("file_path", "")).upper() for hive in ("SAM", "SECURITY", "SYSTEM")
         )
     ]
     if hive_events:
@@ -591,7 +590,8 @@ def _detect_credential_theft(events: list[dict]) -> dict:
     # Check for credential dumping tools
     dump_tools = {"mimikatz", "procdump", "comsvcs", "secretsdump", "lazagne"}
     tool_events = [
-        e for e in credential_events
+        e
+        for e in credential_events
         if any(
             tool in str(e.get("process_name", "")).lower()
             or tool in str(e.get("command_line", "")).lower()
@@ -602,13 +602,18 @@ def _detect_credential_theft(events: list[dict]) -> dict:
         tools_found = set()
         for e in tool_events:
             for tool in dump_tools:
-                if tool in str(e.get("process_name", "")).lower() or tool in str(e.get("command_line", "")).lower():
+                if (
+                    tool in str(e.get("process_name", "")).lower()
+                    or tool in str(e.get("command_line", "")).lower()
+                ):
                     tools_found.add(tool)
         indicators.append(f"Credential dumping tools detected: {', '.join(tools_found)}")
         confidence += 25
 
     if not indicators:
-        indicators.append(f"Suspicious credential-related activity ({len(credential_events)} events)")
+        indicators.append(
+            f"Suspicious credential-related activity ({len(credential_events)} events)"
+        )
 
     return {
         "detected": True,
@@ -647,10 +652,22 @@ def _is_external_ip(ip: str) -> bool:
     # Simple check for private IP ranges
     private_prefixes = [
         "10.",
-        "172.16.", "172.17.", "172.18.", "172.19.",
-        "172.20.", "172.21.", "172.22.", "172.23.",
-        "172.24.", "172.25.", "172.26.", "172.27.",
-        "172.28.", "172.29.", "172.30.", "172.31.",
+        "172.16.",
+        "172.17.",
+        "172.18.",
+        "172.19.",
+        "172.20.",
+        "172.21.",
+        "172.22.",
+        "172.23.",
+        "172.24.",
+        "172.25.",
+        "172.26.",
+        "172.27.",
+        "172.28.",
+        "172.29.",
+        "172.30.",
+        "172.31.",
         "192.168.",
         "127.",
         "169.254.",

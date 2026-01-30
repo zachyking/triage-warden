@@ -41,10 +41,7 @@ impl Default for ServeConfig {
 
 /// Runs the API server.
 pub async fn run_server(config: ServeConfig, _app_config: AppConfig) -> Result<()> {
-    println!(
-        "{} Starting Triage Warden API Server...",
-        "[server]".cyan()
-    );
+    println!("{} Starting Triage Warden API Server...", "[server]".cyan());
 
     // Create database connection pool
     println!("  {} Database: {}", "→".green(), config.database_url);

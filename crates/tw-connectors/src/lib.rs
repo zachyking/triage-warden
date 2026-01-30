@@ -15,18 +15,41 @@ pub mod traits;
 
 // Re-export traits
 pub use traits::{
-    Connector, ConnectorConfig, ConnectorError, ConnectorHealth, ConnectorResult,
+    ActionResult,
+    Connector,
+    ConnectorConfig,
+    ConnectorError,
+    ConnectorHealth,
+    ConnectorResult,
     // Ticketing
-    CreateTicketRequest, Ticket, TicketPriority, TicketingConnector, UpdateTicketRequest,
-    // Threat Intel
-    ThreatIntelConnector, ThreatIntelResult, ThreatVerdict, IndicatorType,
-    // SIEM
-    SIEMConnector, SIEMAlert, SIEMEvent, SearchResults, TimeRange,
+    CreateTicketRequest,
+    Detection,
     // EDR
-    EDRConnector, HostInfo, HostStatus, Detection, ActionResult,
+    EDRConnector,
+    EmailAttachment,
     // Email Gateway
-    EmailGatewayConnector, EmailMessage, EmailSearchQuery, EmailAttachment,
-    EmailThreatData, ThreatAssessment,
+    EmailGatewayConnector,
+    EmailMessage,
+    EmailSearchQuery,
+    EmailThreatData,
+    HostInfo,
+    HostStatus,
+    IndicatorType,
+    SIEMAlert,
+    // SIEM
+    SIEMConnector,
+    SIEMEvent,
+    SearchResults,
+    ThreatAssessment,
+    // Threat Intel
+    ThreatIntelConnector,
+    ThreatIntelResult,
+    ThreatVerdict,
+    Ticket,
+    TicketPriority,
+    TicketingConnector,
+    TimeRange,
+    UpdateTicketRequest,
 };
 
 // Re-export connector implementations

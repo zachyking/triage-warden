@@ -327,12 +327,10 @@ impl IncidentRepository for SqliteIncidentRepository {
         query_builder = query_builder.bind(&id_str);
         query_builder.execute(&self.pool).await?;
 
-        self.get(id)
-            .await?
-            .ok_or_else(|| DbError::NotFound {
-                entity: "Incident".to_string(),
-                id: id.to_string(),
-            })
+        self.get(id).await?.ok_or_else(|| DbError::NotFound {
+            entity: "Incident".to_string(),
+            id: id.to_string(),
+        })
     }
 
     async fn save(&self, incident: &Incident) -> Result<Incident, DbError> {
@@ -531,20 +529,34 @@ impl IncidentRepository for PgIncidentRepository {
             "#,
         )
         .bind(id)
-        .bind(update.status.as_ref().map(|s| format!("{:?}", s).to_lowercase()))
-        .bind(update.severity.as_ref().map(|s| format!("{:?}", s).to_lowercase()))
+        .bind(
+            update
+                .status
+                .as_ref()
+                .map(|s| format!("{:?}", s).to_lowercase()),
+        )
+        .bind(
+            update
+                .severity
+                .as_ref()
+                .map(|s| format!("{:?}", s).to_lowercase()),
+        )
         .bind(&update.analysis)
         .bind(&update.ticket_id)
-        .bind(update.tags.as_ref().map(|t| serde_json::to_value(t).ok()).flatten())
+        .bind(
+            update
+                .tags
+                .as_ref()
+                .map(|t| serde_json::to_value(t).ok())
+                .flatten(),
+        )
         .execute(&self.pool)
         .await?;
 
-        self.get(id)
-            .await?
-            .ok_or_else(|| DbError::NotFound {
-                entity: "Incident".to_string(),
-                id: id.to_string(),
-            })
+        self.get(id).await?.ok_or_else(|| DbError::NotFound {
+            entity: "Incident".to_string(),
+            id: id.to_string(),
+        })
     }
 
     async fn save(&self, incident: &Incident) -> Result<Incident, DbError> {
@@ -567,7 +579,13 @@ impl IncidentRepository for PgIncidentRepository {
         .bind(&status)
         .bind(&incident.alert_data)
         .bind(serde_json::to_value(&incident.enrichments)?)
-        .bind(incident.analysis.as_ref().map(|a| serde_json::to_value(a)).transpose()?)
+        .bind(
+            incident
+                .analysis
+                .as_ref()
+                .map(|a| serde_json::to_value(a))
+                .transpose()?,
+        )
         .bind(serde_json::to_value(&incident.proposed_actions)?)
         .bind(&incident.ticket_id)
         .bind(serde_json::to_value(&incident.tags)?)
@@ -626,8 +644,7 @@ impl TryFrom<IncidentRow> for Incident {
         use std::collections::HashMap;
 
         Ok(Incident {
-            id: Uuid::parse_str(&row.id)
-                .map_err(|e| DbError::Serialization(e.to_string()))?,
+            id: Uuid::parse_str(&row.id).map_err(|e| DbError::Serialization(e.to_string()))?,
             source: serde_json::from_str(&row.source)?,
             severity: serde_json::from_str(&row.severity)?,
             status: serde_json::from_str(&row.status)?,
@@ -681,7 +698,12 @@ impl TryFrom<PgIncidentRow> for Incident {
             "medium" => Severity::Medium,
             "high" => Severity::High,
             "critical" => Severity::Critical,
-            _ => return Err(DbError::Serialization(format!("Unknown severity: {}", row.severity))),
+            _ => {
+                return Err(DbError::Serialization(format!(
+                    "Unknown severity: {}",
+                    row.severity
+                )))
+            }
         };
 
         // Parse status from string
@@ -696,7 +718,12 @@ impl TryFrom<PgIncidentRow> for Incident {
             "false_positive" => IncidentStatus::FalsePositive,
             "escalated" => IncidentStatus::Escalated,
             "closed" => IncidentStatus::Closed,
-            _ => return Err(DbError::Serialization(format!("Unknown status: {}", row.status))),
+            _ => {
+                return Err(DbError::Serialization(format!(
+                    "Unknown status: {}",
+                    row.status
+                )))
+            }
         };
 
         Ok(Incident {
@@ -706,7 +733,10 @@ impl TryFrom<PgIncidentRow> for Incident {
             status,
             alert_data: row.alert_data,
             enrichments: serde_json::from_value(row.enrichments)?,
-            analysis: row.analysis.map(|a| serde_json::from_value(a)).transpose()?,
+            analysis: row
+                .analysis
+                .map(|a| serde_json::from_value(a))
+                .transpose()?,
             proposed_actions: serde_json::from_value(row.proposed_actions)?,
             audit_log: Vec::new(),
             created_at: row.created_at,
@@ -730,7 +760,10 @@ mod tests {
         assert_eq!(p.offset(), 0);
         assert_eq!(p.limit(), 20);
 
-        let p = Pagination { page: 3, per_page: 10 };
+        let p = Pagination {
+            page: 3,
+            per_page: 10,
+        };
         assert_eq!(p.offset(), 20);
         assert_eq!(p.limit(), 10);
     }

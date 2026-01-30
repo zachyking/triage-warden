@@ -127,8 +127,7 @@ impl ApiServer {
         // Add Swagger UI if enabled
         if self.config.enable_swagger {
             app = app.merge(
-                SwaggerUi::new("/swagger-ui")
-                    .url("/api-docs/openapi.json", ApiDoc::openapi()),
+                SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()),
             );
         }
 

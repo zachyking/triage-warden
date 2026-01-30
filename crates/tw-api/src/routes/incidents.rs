@@ -19,12 +19,10 @@ use crate::dto::{
 use crate::error::ApiError;
 use crate::state::AppState;
 use tw_core::db::{
-    create_incident_repository, IncidentFilter, IncidentRepository, Pagination,
-    create_audit_repository, AuditRepository,
+    create_audit_repository, create_incident_repository, AuditRepository, IncidentFilter,
+    IncidentRepository, Pagination,
 };
-use tw_core::incident::{
-    ApprovalStatus, Incident, IncidentStatus, ProposedAction, Severity,
-};
+use tw_core::incident::{ApprovalStatus, Incident, IncidentStatus, ProposedAction, Severity};
 
 /// Creates incident routes.
 pub fn routes() -> Router<AppState> {
@@ -164,8 +162,9 @@ async fn execute_action(
         .ok_or_else(|| ApiError::NotFound(format!("Incident {} not found", id)))?;
 
     // Parse action type
-    let action_type = parse_action_type(&request.action_type)
-        .ok_or_else(|| ApiError::BadRequest(format!("Unknown action type: {}", request.action_type)))?;
+    let action_type = parse_action_type(&request.action_type).ok_or_else(|| {
+        ApiError::BadRequest(format!("Unknown action type: {}", request.action_type))
+    })?;
 
     // Create proposed action
     let action_id = Uuid::new_v4();
@@ -173,11 +172,7 @@ async fn execute_action(
     let parameters = request
         .parameters
         .and_then(|p| p.as_object().cloned())
-        .map(|obj| {
-            obj.into_iter()
-                .map(|(k, v)| (k, v))
-                .collect()
-        })
+        .map(|obj| obj.into_iter().map(|(k, v)| (k, v)).collect())
         .unwrap_or_default();
 
     // TODO: Evaluate policy engine
@@ -203,15 +198,18 @@ async fn execute_action(
     };
 
     // Publish event
-    let _ = state.event_bus.publish(tw_core::TriageEvent::ActionsProposed {
-        incident_id: id,
-        actions: vec![ProposedAction::new(
-            action_type,
-            target,
-            request.reason,
-            parameters,
-        )],
-    }).await;
+    let _ = state
+        .event_bus
+        .publish(tw_core::TriageEvent::ActionsProposed {
+            incident_id: id,
+            actions: vec![ProposedAction::new(
+                action_type,
+                target,
+                request.reason,
+                parameters,
+            )],
+        })
+        .await;
 
     Ok((StatusCode::ACCEPTED, Json(response)))
 }
@@ -263,18 +261,26 @@ async fn approve_action(
 
     // Publish approval event
     if request.approved {
-        let _ = state.event_bus.publish(tw_core::TriageEvent::ActionApproved {
-            incident_id,
-            action_id: request.action_id,
-            approved_by: "api_user".to_string(), // TODO: Get from auth
-        }).await;
+        let _ = state
+            .event_bus
+            .publish(tw_core::TriageEvent::ActionApproved {
+                incident_id,
+                action_id: request.action_id,
+                approved_by: "api_user".to_string(), // TODO: Get from auth
+            })
+            .await;
     } else {
-        let _ = state.event_bus.publish(tw_core::TriageEvent::ActionDenied {
-            incident_id,
-            action_id: request.action_id,
-            denied_by: "api_user".to_string(),
-            reason: request.reason.unwrap_or_else(|| "No reason provided".to_string()),
-        }).await;
+        let _ = state
+            .event_bus
+            .publish(tw_core::TriageEvent::ActionDenied {
+                incident_id,
+                action_id: request.action_id,
+                denied_by: "api_user".to_string(),
+                reason: request
+                    .reason
+                    .unwrap_or_else(|| "No reason provided".to_string()),
+            })
+            .await;
     }
 
     let status = if request.approved {
@@ -310,10 +316,14 @@ fn incident_to_response(incident: Incident) -> IncidentResponse {
         .unwrap_or((None, None, None));
 
     // Extract title and alert_type from alert_data
-    let title = incident.alert_data.get("title")
+    let title = incident
+        .alert_data
+        .get("title")
         .and_then(|v| v.as_str())
         .map(String::from);
-    let alert_type = incident.alert_data.get("alert_type")
+    let alert_type = incident
+        .alert_data
+        .get("alert_type")
         .and_then(|v| v.as_str())
         .map(String::from);
 

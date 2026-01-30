@@ -2,7 +2,9 @@
 //!
 //! This action disables a user account (placeholder - requires identity provider connector).
 
-use crate::registry::{Action, ActionContext, ActionError, ActionResult, ParameterDef, ParameterType};
+use crate::registry::{
+    Action, ActionContext, ActionError, ActionResult, ParameterDef, ParameterType,
+};
 use async_trait::async_trait;
 use chrono::Utc;
 use std::collections::HashMap;
@@ -90,7 +92,10 @@ impl Action for DisableUserAction {
 
         let mut output = HashMap::new();
         output.insert("username".to_string(), serde_json::json!(username));
-        output.insert("revoke_sessions".to_string(), serde_json::json!(revoke_sessions));
+        output.insert(
+            "revoke_sessions".to_string(),
+            serde_json::json!(revoke_sessions),
+        );
         output.insert("status".to_string(), serde_json::json!("simulated"));
 
         let rollback_data = serde_json::json!({
@@ -108,11 +113,14 @@ impl Action for DisableUserAction {
     }
 
     #[instrument(skip(self, rollback_data))]
-    async fn rollback(&self, rollback_data: serde_json::Value) -> Result<ActionResult, ActionError> {
+    async fn rollback(
+        &self,
+        rollback_data: serde_json::Value,
+    ) -> Result<ActionResult, ActionError> {
         let started_at = Utc::now();
-        let username = rollback_data["username"]
-            .as_str()
-            .ok_or_else(|| ActionError::InvalidParameters("Missing username in rollback data".to_string()))?;
+        let username = rollback_data["username"].as_str().ok_or_else(|| {
+            ActionError::InvalidParameters("Missing username in rollback data".to_string())
+        })?;
 
         info!("Rolling back user disable for: {}", username);
 
