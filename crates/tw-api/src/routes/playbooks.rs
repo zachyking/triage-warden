@@ -23,12 +23,12 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_playbooks).post(create_playbook))
         .route(
-            "/{id}",
+            "/:id",
             get(get_playbook)
                 .put(update_playbook)
                 .delete(delete_playbook),
         )
-        .route("/{id}/toggle", post(toggle_playbook))
+        .route("/:id/toggle", post(toggle_playbook))
 }
 
 /// List all playbooks.
@@ -413,5 +413,1371 @@ fn step_dto_to_step(dto: PlaybookStepDto) -> PlaybookStep {
         output: dto.output,
         requires_approval: dto.requires_approval,
         conditions: dto.conditions,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        http::{header, Request, StatusCode},
+    };
+    use tower::ServiceExt;
+    use tw_core::{db::DbPool, EventBus};
+
+    use crate::state::AppState;
+
+    /// SQL to create the playbooks table for testing.
+    const CREATE_PLAYBOOKS_TABLE: &str = r#"
+        CREATE TABLE IF NOT EXISTS playbooks (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            trigger_type TEXT NOT NULL,
+            trigger_condition TEXT,
+            stages TEXT NOT NULL DEFAULT '[]',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            execution_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_playbooks_name ON playbooks(name);
+        CREATE INDEX IF NOT EXISTS idx_playbooks_trigger_type ON playbooks(trigger_type);
+        CREATE INDEX IF NOT EXISTS idx_playbooks_enabled ON playbooks(enabled);
+    "#;
+
+    /// Creates an in-memory SQLite database and returns the test app router.
+    /// Returns both the router and the underlying SQLite pool for direct database access.
+    async fn setup_test_app() -> (axum::Router, sqlx::SqlitePool) {
+        // Use a unique UUID for complete database isolation
+        let unique_id = uuid::Uuid::new_v4();
+        let temp_dir = std::env::temp_dir();
+        let db_path = temp_dir.join(format!("tw_api_playbook_test_{}.db", unique_id));
+        let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(&db_url)
+            .await
+            .expect("Failed to create SQLite pool");
+
+        // Create tables directly
+        sqlx::raw_sql(CREATE_PLAYBOOKS_TABLE)
+            .execute(&pool)
+            .await
+            .expect("Failed to create tables");
+
+        let db = DbPool::Sqlite(pool.clone());
+        let event_bus = EventBus::new(100);
+        let state = AppState::new(db, event_bus);
+
+        // Create router with playbooks routes
+        let router = axum::Router::new()
+            .nest("/api/playbooks", routes())
+            .with_state(state);
+
+        (router, pool)
+    }
+
+    /// Helper to create a playbook directly in the database for testing.
+    async fn create_playbook_in_db(
+        pool: &sqlx::SqlitePool,
+        name: &str,
+        trigger_type: &str,
+    ) -> Uuid {
+        use tw_core::db::create_playbook_repository;
+        use tw_core::playbook::Playbook;
+
+        let db = DbPool::Sqlite(pool.clone());
+        let repo = create_playbook_repository(&db);
+        let playbook = Playbook::new(name, trigger_type);
+        let created = repo
+            .create(&playbook)
+            .await
+            .expect("Failed to create test playbook");
+        created.id
+    }
+
+    /// Helper to create a playbook with description.
+    async fn create_playbook_with_description(
+        pool: &sqlx::SqlitePool,
+        name: &str,
+        trigger_type: &str,
+        description: &str,
+    ) -> Uuid {
+        use tw_core::db::create_playbook_repository;
+        use tw_core::playbook::Playbook;
+
+        let db = DbPool::Sqlite(pool.clone());
+        let repo = create_playbook_repository(&db);
+        let playbook = Playbook::new(name, trigger_type).with_description(description);
+        let created = repo
+            .create(&playbook)
+            .await
+            .expect("Failed to create test playbook");
+        created.id
+    }
+
+    // ========================================================================
+    // GET /api/playbooks - List Playbooks
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_list_playbooks_empty() {
+        let (app, _pool) = setup_test_app().await;
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/api/playbooks")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let playbooks: Vec<PlaybookResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(playbooks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_playbooks_returns_json() {
+        let (app, pool) = setup_test_app().await;
+
+        // Create some playbooks
+        create_playbook_in_db(&pool, "playbook-1", "alert").await;
+        create_playbook_in_db(&pool, "playbook-2", "scheduled").await;
+        create_playbook_in_db(&pool, "playbook-3", "webhook").await;
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/api/playbooks")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify content type is JSON
+        let content_type = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .expect("Content-Type header should be present");
+        assert!(content_type.to_str().unwrap().contains("application/json"));
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let playbooks: Vec<PlaybookResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(playbooks.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_list_playbooks_contains_expected_fields() {
+        let (app, pool) = setup_test_app().await;
+
+        create_playbook_with_description(&pool, "test-playbook", "alert", "Test description").await;
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/api/playbooks")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let playbooks: Vec<PlaybookResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(playbooks.len(), 1);
+        let playbook = &playbooks[0];
+
+        assert_eq!(playbook.name, "test-playbook");
+        assert_eq!(playbook.trigger_type, "alert");
+        assert_eq!(playbook.description, Some("Test description".to_string()));
+        assert!(playbook.enabled);
+        assert_eq!(playbook.execution_count, 0);
+    }
+
+    // ========================================================================
+    // GET /api/playbooks/{id} - Get Single Playbook
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_get_playbook_success() {
+        let (app, pool) = setup_test_app().await;
+
+        let playbook_id = create_playbook_with_description(
+            &pool,
+            "single-playbook",
+            "alert",
+            "A single playbook",
+        )
+        .await;
+
+        let request = Request::builder()
+            .method("GET")
+            .uri(format!("/api/playbooks/{}", playbook_id))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let playbook: PlaybookResponse = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(playbook.id, playbook_id);
+        assert_eq!(playbook.name, "single-playbook");
+        assert_eq!(playbook.trigger_type, "alert");
+        assert_eq!(playbook.description, Some("A single playbook".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_get_playbook_not_found() {
+        let (app, _pool) = setup_test_app().await;
+
+        let non_existent_id = Uuid::new_v4();
+
+        let request = Request::builder()
+            .method("GET")
+            .uri(format!("/api/playbooks/{}", non_existent_id))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(error["code"], "NOT_FOUND");
+    }
+
+    // ========================================================================
+    // POST /api/playbooks - Create Playbook
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_create_playbook_success() {
+        let (app, _pool) = setup_test_app().await;
+
+        let form_data = serde_urlencoded::to_string([
+            ("name", "new-playbook"),
+            ("trigger_type", "alert"),
+            ("description", "A new playbook"),
+        ])
+        .unwrap();
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/playbooks")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(form_data))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Check HX-Trigger header for HTMX integration
+        let hx_trigger = response
+            .headers()
+            .get("hx-trigger")
+            .expect("HX-Trigger header should be present");
+
+        let trigger_value: serde_json::Value =
+            serde_json::from_str(hx_trigger.to_str().unwrap()).unwrap();
+        assert_eq!(trigger_value["showToast"]["type"], "success");
+        assert_eq!(trigger_value["showToast"]["title"], "Playbook Created");
+    }
+
+    #[tokio::test]
+    async fn test_create_playbook_with_enabled_false() {
+        let (app, pool) = setup_test_app().await;
+
+        let form_data = serde_urlencoded::to_string([
+            ("name", "disabled-playbook"),
+            ("trigger_type", "scheduled"),
+            ("enabled", "false"),
+        ])
+        .unwrap();
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/playbooks")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(form_data))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify the playbook was created with enabled=false
+        use tw_core::db::create_playbook_repository;
+        let db = DbPool::Sqlite(pool.clone());
+        let repo = create_playbook_repository(&db);
+        let playbook = repo
+            .get_by_name("disabled-playbook")
+            .await
+            .unwrap()
+            .expect("Playbook should exist");
+
+        assert!(!playbook.enabled);
+    }
+
+    #[tokio::test]
+    async fn test_create_playbook_duplicate_name_conflict() {
+        let (app, pool) = setup_test_app().await;
+
+        // Create a playbook first
+        create_playbook_in_db(&pool, "duplicate-name", "alert").await;
+
+        // Try to create another with the same name
+        let form_data =
+            serde_urlencoded::to_string([("name", "duplicate-name"), ("trigger_type", "webhook")])
+                .unwrap();
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/playbooks")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(form_data))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(error["code"], "CONFLICT");
+        assert!(error["message"]
+            .as_str()
+            .unwrap()
+            .contains("duplicate-name"));
+    }
+
+    #[tokio::test]
+    async fn test_create_playbook_with_stages() {
+        let (app, pool) = setup_test_app().await;
+
+        let stages_json = r#"[{"name":"extraction","description":"Extract indicators","parallel":true,"steps":[{"action":"parse_email"}]}]"#;
+
+        let form_data = serde_urlencoded::to_string([
+            ("name", "playbook-with-stages"),
+            ("trigger_type", "alert"),
+            ("stages", stages_json),
+        ])
+        .unwrap();
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/playbooks")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(form_data))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify stages were saved
+        use tw_core::db::create_playbook_repository;
+        let db = DbPool::Sqlite(pool.clone());
+        let repo = create_playbook_repository(&db);
+        let playbook = repo
+            .get_by_name("playbook-with-stages")
+            .await
+            .unwrap()
+            .expect("Playbook should exist");
+
+        assert_eq!(playbook.stages.len(), 1);
+        assert_eq!(playbook.stages[0].name, "extraction");
+        assert!(playbook.stages[0].parallel);
+    }
+
+    // ========================================================================
+    // PUT /api/playbooks/{id} - Update Playbook
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_update_playbook_success() {
+        let (app, pool) = setup_test_app().await;
+
+        let playbook_id = create_playbook_in_db(&pool, "original-name", "alert").await;
+
+        let form_data = serde_urlencoded::to_string([
+            ("name", "updated-name"),
+            ("description", "Updated description"),
+        ])
+        .unwrap();
+
+        let request = Request::builder()
+            .method("PUT")
+            .uri(format!("/api/playbooks/{}", playbook_id))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(form_data))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Check HX-Trigger header
+        let hx_trigger = response
+            .headers()
+            .get("hx-trigger")
+            .expect("HX-Trigger header should be present");
+
+        let trigger_value: serde_json::Value =
+            serde_json::from_str(hx_trigger.to_str().unwrap()).unwrap();
+        assert_eq!(trigger_value["showToast"]["type"], "success");
+        assert_eq!(trigger_value["showToast"]["title"], "Playbook Updated");
+
+        // Verify the update was applied
+        use tw_core::db::create_playbook_repository;
+        let db = DbPool::Sqlite(pool.clone());
+        let repo = create_playbook_repository(&db);
+        let playbook = repo
+            .get(playbook_id)
+            .await
+            .unwrap()
+            .expect("Playbook should exist");
+
+        assert_eq!(playbook.name, "updated-name");
+        assert_eq!(
+            playbook.description,
+            Some("Updated description".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_playbook_not_found() {
+        let (app, _pool) = setup_test_app().await;
+
+        let non_existent_id = Uuid::new_v4();
+
+        let form_data = serde_urlencoded::to_string([("name", "updated-name")]).unwrap();
+
+        let request = Request::builder()
+            .method("PUT")
+            .uri(format!("/api/playbooks/{}", non_existent_id))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(form_data))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(error["code"], "NOT_FOUND");
+    }
+
+    #[tokio::test]
+    async fn test_update_playbook_name_conflict() {
+        let (app, pool) = setup_test_app().await;
+
+        // Create two playbooks
+        let playbook_id = create_playbook_in_db(&pool, "playbook-a", "alert").await;
+        create_playbook_in_db(&pool, "playbook-b", "alert").await;
+
+        // Try to rename playbook-a to playbook-b
+        let form_data = serde_urlencoded::to_string([("name", "playbook-b")]).unwrap();
+
+        let request = Request::builder()
+            .method("PUT")
+            .uri(format!("/api/playbooks/{}", playbook_id))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(form_data))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(error["code"], "CONFLICT");
+    }
+
+    #[tokio::test]
+    async fn test_update_playbook_toggle_enabled() {
+        let (app, pool) = setup_test_app().await;
+
+        let playbook_id = create_playbook_in_db(&pool, "toggle-test", "alert").await;
+
+        let form_data = serde_urlencoded::to_string([("enabled", "false")]).unwrap();
+
+        let request = Request::builder()
+            .method("PUT")
+            .uri(format!("/api/playbooks/{}", playbook_id))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(form_data))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify the update was applied
+        use tw_core::db::create_playbook_repository;
+        let db = DbPool::Sqlite(pool.clone());
+        let repo = create_playbook_repository(&db);
+        let playbook = repo
+            .get(playbook_id)
+            .await
+            .unwrap()
+            .expect("Playbook should exist");
+
+        assert!(!playbook.enabled);
+    }
+
+    // ========================================================================
+    // DELETE /api/playbooks/{id} - Delete Playbook
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_delete_playbook_success() {
+        let (app, pool) = setup_test_app().await;
+
+        let playbook_id = create_playbook_in_db(&pool, "to-delete", "alert").await;
+
+        let request = Request::builder()
+            .method("DELETE")
+            .uri(format!("/api/playbooks/{}", playbook_id))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Check HX-Trigger header
+        let hx_trigger = response
+            .headers()
+            .get("hx-trigger")
+            .expect("HX-Trigger header should be present");
+
+        let trigger_value: serde_json::Value =
+            serde_json::from_str(hx_trigger.to_str().unwrap()).unwrap();
+        assert_eq!(trigger_value["showToast"]["type"], "success");
+        assert_eq!(trigger_value["showToast"]["title"], "Playbook Deleted");
+
+        // Verify the playbook was deleted
+        use tw_core::db::create_playbook_repository;
+        let db = DbPool::Sqlite(pool.clone());
+        let repo = create_playbook_repository(&db);
+        let playbook = repo.get(playbook_id).await.unwrap();
+
+        assert!(playbook.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_delete_playbook_not_found() {
+        let (app, _pool) = setup_test_app().await;
+
+        let non_existent_id = Uuid::new_v4();
+
+        let request = Request::builder()
+            .method("DELETE")
+            .uri(format!("/api/playbooks/{}", non_existent_id))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(error["code"], "NOT_FOUND");
+    }
+
+    // ========================================================================
+    // POST /api/playbooks/{id}/toggle - Toggle Playbook Enabled Status
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_toggle_playbook_enabled_to_disabled() {
+        let (app, pool) = setup_test_app().await;
+
+        // Create an enabled playbook (default)
+        let playbook_id = create_playbook_in_db(&pool, "toggle-playbook", "alert").await;
+
+        // Verify it starts enabled
+        {
+            use tw_core::db::create_playbook_repository;
+            let db = DbPool::Sqlite(pool.clone());
+            let repo = create_playbook_repository(&db);
+            let playbook = repo
+                .get(playbook_id)
+                .await
+                .unwrap()
+                .expect("Playbook should exist");
+            assert!(playbook.enabled);
+        }
+
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("/api/playbooks/{}/toggle", playbook_id))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Check HX-Trigger header
+        let hx_trigger = response
+            .headers()
+            .get("hx-trigger")
+            .expect("HX-Trigger header should be present");
+
+        let trigger_value: serde_json::Value =
+            serde_json::from_str(hx_trigger.to_str().unwrap()).unwrap();
+        assert_eq!(trigger_value["showToast"]["type"], "success");
+        assert!(trigger_value["showToast"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("disabled"));
+
+        // Verify it's now disabled
+        use tw_core::db::create_playbook_repository;
+        let db = DbPool::Sqlite(pool.clone());
+        let repo = create_playbook_repository(&db);
+        let playbook = repo
+            .get(playbook_id)
+            .await
+            .unwrap()
+            .expect("Playbook should exist");
+
+        assert!(!playbook.enabled);
+    }
+
+    #[tokio::test]
+    async fn test_toggle_playbook_disabled_to_enabled() {
+        let (app, pool) = setup_test_app().await;
+
+        // Create a disabled playbook
+        use tw_core::db::create_playbook_repository;
+        use tw_core::playbook::Playbook;
+
+        let db = DbPool::Sqlite(pool.clone());
+        let repo = create_playbook_repository(&db);
+        let playbook = Playbook::new("disabled-toggle", "alert").with_enabled(false);
+        let created = repo
+            .create(&playbook)
+            .await
+            .expect("Failed to create playbook");
+        let playbook_id = created.id;
+
+        // Verify it starts disabled
+        assert!(!created.enabled);
+
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("/api/playbooks/{}/toggle", playbook_id))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Check the toast message indicates it's now enabled
+        let hx_trigger = response
+            .headers()
+            .get("hx-trigger")
+            .expect("HX-Trigger header should be present");
+
+        let trigger_value: serde_json::Value =
+            serde_json::from_str(hx_trigger.to_str().unwrap()).unwrap();
+        assert!(trigger_value["showToast"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("enabled"));
+
+        // Verify it's now enabled
+        let db = DbPool::Sqlite(pool.clone());
+        let repo = create_playbook_repository(&db);
+        let playbook = repo
+            .get(playbook_id)
+            .await
+            .unwrap()
+            .expect("Playbook should exist");
+
+        assert!(playbook.enabled);
+    }
+
+    #[tokio::test]
+    async fn test_toggle_playbook_not_found() {
+        let (app, _pool) = setup_test_app().await;
+
+        let non_existent_id = Uuid::new_v4();
+
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("/api/playbooks/{}/toggle", non_existent_id))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(error["code"], "NOT_FOUND");
+    }
+
+    #[tokio::test]
+    async fn test_toggle_playbook_multiple_times() {
+        let (app, pool) = setup_test_app().await;
+
+        let playbook_id = create_playbook_in_db(&pool, "multi-toggle", "alert").await;
+
+        // Toggle 1: enabled -> disabled
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("/api/playbooks/{}/toggle", playbook_id))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        {
+            use tw_core::db::create_playbook_repository;
+            let db = DbPool::Sqlite(pool.clone());
+            let repo = create_playbook_repository(&db);
+            let playbook = repo
+                .get(playbook_id)
+                .await
+                .unwrap()
+                .expect("Playbook should exist");
+            assert!(!playbook.enabled);
+        }
+
+        // Toggle 2: disabled -> enabled
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("/api/playbooks/{}/toggle", playbook_id))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        {
+            use tw_core::db::create_playbook_repository;
+            let db = DbPool::Sqlite(pool.clone());
+            let repo = create_playbook_repository(&db);
+            let playbook = repo
+                .get(playbook_id)
+                .await
+                .unwrap()
+                .expect("Playbook should exist");
+            assert!(playbook.enabled);
+        }
+
+        // Toggle 3: enabled -> disabled
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("/api/playbooks/{}/toggle", playbook_id))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        use tw_core::db::create_playbook_repository;
+        let db = DbPool::Sqlite(pool.clone());
+        let repo = create_playbook_repository(&db);
+        let playbook = repo
+            .get(playbook_id)
+            .await
+            .unwrap()
+            .expect("Playbook should exist");
+        assert!(!playbook.enabled);
+    }
+
+    // ========================================================================
+    // Additional Edge Case Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_create_playbook_invalid_stages_json() {
+        let (app, _pool) = setup_test_app().await;
+
+        // Malformed JSON in stages
+        let form_data = serde_urlencoded::to_string([
+            ("name", "bad-stages-playbook"),
+            ("trigger_type", "alert"),
+            ("stages", "this is not valid json"),
+        ])
+        .unwrap();
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/playbooks")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(form_data))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(error["code"], "BAD_REQUEST");
+        assert!(error["message"]
+            .as_str()
+            .unwrap()
+            .contains("Invalid stages JSON"));
+    }
+
+    #[tokio::test]
+    async fn test_update_playbook_invalid_stages_json() {
+        let (app, pool) = setup_test_app().await;
+
+        let playbook_id = create_playbook_in_db(&pool, "update-bad-stages", "alert").await;
+
+        // Malformed JSON in stages
+        let form_data = serde_urlencoded::to_string([("stages", "[{invalid json}]")]).unwrap();
+
+        let request = Request::builder()
+            .method("PUT")
+            .uri(format!("/api/playbooks/{}", playbook_id))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(form_data))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(error["code"], "BAD_REQUEST");
+        assert!(error["message"]
+            .as_str()
+            .unwrap()
+            .contains("Invalid stages JSON"));
+    }
+
+    #[tokio::test]
+    async fn test_update_playbook_same_name_no_conflict() {
+        let (app, pool) = setup_test_app().await;
+
+        let playbook_id = create_playbook_in_db(&pool, "keep-same-name", "alert").await;
+
+        // Update with the same name should not cause a conflict
+        let form_data = serde_urlencoded::to_string([
+            ("name", "keep-same-name"),
+            ("description", "Updated description"),
+        ])
+        .unwrap();
+
+        let request = Request::builder()
+            .method("PUT")
+            .uri(format!("/api/playbooks/{}", playbook_id))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(form_data))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify the description was updated
+        use tw_core::db::create_playbook_repository;
+        let db = DbPool::Sqlite(pool.clone());
+        let repo = create_playbook_repository(&db);
+        let playbook = repo
+            .get(playbook_id)
+            .await
+            .unwrap()
+            .expect("Playbook should exist");
+
+        assert_eq!(playbook.name, "keep-same-name");
+        assert_eq!(
+            playbook.description,
+            Some("Updated description".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_playbook_clear_description() {
+        let (app, pool) = setup_test_app().await;
+
+        let playbook_id = create_playbook_with_description(
+            &pool,
+            "clear-description",
+            "alert",
+            "Original description",
+        )
+        .await;
+
+        // Update with empty description to clear it
+        let form_data = serde_urlencoded::to_string([("description", "")]).unwrap();
+
+        let request = Request::builder()
+            .method("PUT")
+            .uri(format!("/api/playbooks/{}", playbook_id))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(form_data))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify the description was cleared
+        use tw_core::db::create_playbook_repository;
+        let db = DbPool::Sqlite(pool.clone());
+        let repo = create_playbook_repository(&db);
+        let playbook = repo
+            .get(playbook_id)
+            .await
+            .unwrap()
+            .expect("Playbook should exist");
+
+        assert!(playbook.description.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_update_playbook_clear_trigger_condition() {
+        let (app, pool) = setup_test_app().await;
+
+        // Create a playbook with trigger condition
+        use tw_core::db::create_playbook_repository;
+        use tw_core::playbook::Playbook;
+
+        let db = DbPool::Sqlite(pool.clone());
+        let repo = create_playbook_repository(&db);
+        let playbook =
+            Playbook::new("clear-condition", "alert").with_trigger_condition("severity == 'high'");
+        let created = repo
+            .create(&playbook)
+            .await
+            .expect("Failed to create playbook");
+        let playbook_id = created.id;
+
+        // Verify initial condition
+        assert!(created.trigger_condition.is_some());
+
+        // Update with empty trigger_condition to clear it
+        let form_data = serde_urlencoded::to_string([("trigger_condition", "")]).unwrap();
+
+        let request = Request::builder()
+            .method("PUT")
+            .uri(format!("/api/playbooks/{}", playbook_id))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(form_data))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify the trigger_condition was cleared
+        let db = DbPool::Sqlite(pool.clone());
+        let repo = create_playbook_repository(&db);
+        let playbook = repo
+            .get(playbook_id)
+            .await
+            .unwrap()
+            .expect("Playbook should exist");
+
+        assert!(playbook.trigger_condition.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_update_playbook_change_trigger_type() {
+        let (app, pool) = setup_test_app().await;
+
+        let playbook_id = create_playbook_in_db(&pool, "change-trigger", "alert").await;
+
+        // Update trigger type
+        let form_data = serde_urlencoded::to_string([("trigger_type", "scheduled")]).unwrap();
+
+        let request = Request::builder()
+            .method("PUT")
+            .uri(format!("/api/playbooks/{}", playbook_id))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(form_data))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify the trigger_type was updated
+        use tw_core::db::create_playbook_repository;
+        let db = DbPool::Sqlite(pool.clone());
+        let repo = create_playbook_repository(&db);
+        let playbook = repo
+            .get(playbook_id)
+            .await
+            .unwrap()
+            .expect("Playbook should exist");
+
+        assert_eq!(playbook.trigger_type, "scheduled");
+    }
+
+    #[tokio::test]
+    async fn test_update_playbook_stages() {
+        let (app, pool) = setup_test_app().await;
+
+        let playbook_id = create_playbook_in_db(&pool, "update-stages", "alert").await;
+
+        // Update with new stages
+        let stages_json = r#"[{"name":"new-stage","description":"New stage description","parallel":false,"steps":[{"action":"notify"}]}]"#;
+        let form_data = serde_urlencoded::to_string([("stages", stages_json)]).unwrap();
+
+        let request = Request::builder()
+            .method("PUT")
+            .uri(format!("/api/playbooks/{}", playbook_id))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(form_data))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify the stages were updated
+        use tw_core::db::create_playbook_repository;
+        let db = DbPool::Sqlite(pool.clone());
+        let repo = create_playbook_repository(&db);
+        let playbook = repo
+            .get(playbook_id)
+            .await
+            .unwrap()
+            .expect("Playbook should exist");
+
+        assert_eq!(playbook.stages.len(), 1);
+        assert_eq!(playbook.stages[0].name, "new-stage");
+        assert_eq!(
+            playbook.stages[0].description,
+            Some("New stage description".to_string())
+        );
+        assert!(!playbook.stages[0].parallel);
+        assert_eq!(playbook.stages[0].steps.len(), 1);
+        assert_eq!(playbook.stages[0].steps[0].action, "notify");
+    }
+
+    #[tokio::test]
+    async fn test_create_playbook_with_trigger_condition() {
+        let (app, pool) = setup_test_app().await;
+
+        let form_data = serde_urlencoded::to_string([
+            ("name", "conditional-playbook"),
+            ("trigger_type", "alert"),
+            ("trigger_condition", "severity == 'critical'"),
+        ])
+        .unwrap();
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/playbooks")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(form_data))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify the playbook was created with the trigger condition
+        use tw_core::db::create_playbook_repository;
+        let db = DbPool::Sqlite(pool.clone());
+        let repo = create_playbook_repository(&db);
+        let playbook = repo
+            .get_by_name("conditional-playbook")
+            .await
+            .unwrap()
+            .expect("Playbook should exist");
+
+        assert_eq!(
+            playbook.trigger_condition,
+            Some("severity == 'critical'".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_playbook_with_stages() {
+        let (app, pool) = setup_test_app().await;
+
+        // Create a playbook with stages via the repository directly
+        use tw_core::db::create_playbook_repository;
+        use tw_core::playbook::{Playbook, PlaybookStage, PlaybookStep};
+
+        let db = DbPool::Sqlite(pool.clone());
+        let repo = create_playbook_repository(&db);
+
+        let stage = PlaybookStage {
+            name: "enrichment".to_string(),
+            description: Some("Enrich the alert data".to_string()),
+            parallel: true,
+            steps: vec![
+                PlaybookStep {
+                    action: "lookup_ip".to_string(),
+                    parameters: Some(serde_json::json!({"service": "virustotal"})),
+                    input: None,
+                    output: Some(vec!["ip_reputation".to_string()]),
+                    requires_approval: false,
+                    conditions: None,
+                },
+                PlaybookStep {
+                    action: "lookup_domain".to_string(),
+                    parameters: None,
+                    input: None,
+                    output: None,
+                    requires_approval: true,
+                    conditions: Some(serde_json::json!({"if": "domain_present"})),
+                },
+            ],
+        };
+
+        let playbook = Playbook::new("playbook-with-stages", "alert").with_stages(vec![stage]);
+        let created = repo
+            .create(&playbook)
+            .await
+            .expect("Failed to create playbook");
+
+        // Now fetch via the API
+        let request = Request::builder()
+            .method("GET")
+            .uri(format!("/api/playbooks/{}", created.id))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let playbook_resp: PlaybookResponse = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(playbook_resp.stages.len(), 1);
+        let stage = &playbook_resp.stages[0];
+        assert_eq!(stage.name, "enrichment");
+        assert_eq!(stage.description, Some("Enrich the alert data".to_string()));
+        assert!(stage.parallel);
+        assert_eq!(stage.steps.len(), 2);
+
+        // Check first step
+        assert_eq!(stage.steps[0].action, "lookup_ip");
+        assert!(stage.steps[0].parameters.is_some());
+        assert_eq!(
+            stage.steps[0].output,
+            Some(vec!["ip_reputation".to_string()])
+        );
+        assert!(!stage.steps[0].requires_approval);
+
+        // Check second step
+        assert_eq!(stage.steps[1].action, "lookup_domain");
+        assert!(stage.steps[1].requires_approval);
+        assert!(stage.steps[1].conditions.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_get_playbook_invalid_uuid() {
+        let (app, _pool) = setup_test_app().await;
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/api/playbooks/not-a-valid-uuid")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        // Axum returns 400 Bad Request for invalid path parameters
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_delete_playbook_invalid_uuid() {
+        let (app, _pool) = setup_test_app().await;
+
+        let request = Request::builder()
+            .method("DELETE")
+            .uri("/api/playbooks/invalid-uuid")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_toggle_playbook_invalid_uuid() {
+        let (app, _pool) = setup_test_app().await;
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/playbooks/xyz-not-uuid/toggle")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_create_playbook_empty_stages_string_ignored() {
+        let (app, pool) = setup_test_app().await;
+
+        // Empty stages string should be ignored (not cause an error)
+        let form_data = serde_urlencoded::to_string([
+            ("name", "empty-stages-playbook"),
+            ("trigger_type", "alert"),
+            ("stages", ""),
+        ])
+        .unwrap();
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/playbooks")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(form_data))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify the playbook was created with empty stages
+        use tw_core::db::create_playbook_repository;
+        let db = DbPool::Sqlite(pool.clone());
+        let repo = create_playbook_repository(&db);
+        let playbook = repo
+            .get_by_name("empty-stages-playbook")
+            .await
+            .unwrap()
+            .expect("Playbook should exist");
+
+        assert!(playbook.stages.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_create_playbook_empty_description_not_set() {
+        let (app, pool) = setup_test_app().await;
+
+        // Empty description should not be set
+        let form_data = serde_urlencoded::to_string([
+            ("name", "no-description-playbook"),
+            ("trigger_type", "alert"),
+            ("description", ""),
+        ])
+        .unwrap();
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/playbooks")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(form_data))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify the playbook was created without description
+        use tw_core::db::create_playbook_repository;
+        let db = DbPool::Sqlite(pool.clone());
+        let repo = create_playbook_repository(&db);
+        let playbook = repo
+            .get_by_name("no-description-playbook")
+            .await
+            .unwrap()
+            .expect("Playbook should exist");
+
+        assert!(playbook.description.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_create_playbook_empty_trigger_condition_not_set() {
+        let (app, pool) = setup_test_app().await;
+
+        // Empty trigger_condition should not be set
+        let form_data = serde_urlencoded::to_string([
+            ("name", "no-condition-playbook"),
+            ("trigger_type", "alert"),
+            ("trigger_condition", ""),
+        ])
+        .unwrap();
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/playbooks")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(form_data))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify the playbook was created without trigger_condition
+        use tw_core::db::create_playbook_repository;
+        let db = DbPool::Sqlite(pool.clone());
+        let repo = create_playbook_repository(&db);
+        let playbook = repo
+            .get_by_name("no-condition-playbook")
+            .await
+            .unwrap()
+            .expect("Playbook should exist");
+
+        assert!(playbook.trigger_condition.is_none());
     }
 }

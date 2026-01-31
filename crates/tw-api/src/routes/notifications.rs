@@ -20,11 +20,11 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_channels).post(create_channel))
         .route(
-            "/{id}",
+            "/:id",
             get(get_channel).put(update_channel).delete(delete_channel),
         )
-        .route("/{id}/toggle", post(toggle_channel))
-        .route("/{id}/test", post(test_channel))
+        .route("/:id/toggle", post(toggle_channel))
+        .route("/:id/test", post(test_channel))
 }
 
 /// Request for creating a new notification channel.
@@ -108,7 +108,7 @@ pub struct UpdateChannelRequest {
 }
 
 /// Response for a notification channel.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ChannelResponse {
     pub id: Uuid,
     pub name: String,
@@ -121,7 +121,7 @@ pub struct ChannelResponse {
 }
 
 /// Response for test notification.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TestNotificationResponse {
     pub success: bool,
     pub message: String,
@@ -680,5 +680,1416 @@ async fn send_test_notification(channel: &NotificationChannel) -> Result<String,
                     .to_string(),
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use sqlx::Executor;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use tower::ServiceExt;
+    use tw_core::db::DbPool;
+    use tw_core::EventBus;
+
+    // Counter to ensure unique database names across tests
+    static DB_COUNTER: AtomicU64 = AtomicU64::new(5_000_000);
+
+    /// Creates an in-memory SQLite database pool with all required migrations.
+    async fn setup_test_pool() -> sqlx::SqlitePool {
+        let db_id = DB_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let unique_id = uuid::Uuid::new_v4();
+        let db_url = format!(
+            "sqlite:file:notification_test_{}_{}?mode=memory&cache=shared",
+            db_id, unique_id
+        );
+
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(&db_url)
+            .await
+            .expect("Failed to create pool");
+
+        // Run migrations using Executor::execute for multi-statement SQL
+        pool.execute(include_str!(
+            "../../../tw-core/src/db/migrations/sqlite/20240101_000001_initial_schema.sql"
+        ))
+        .await
+        .expect("Failed to create initial schema");
+
+        pool.execute(include_str!(
+            "../../../tw-core/src/db/migrations/sqlite/20240130_000001_create_playbooks.sql"
+        ))
+        .await
+        .expect("Failed to create playbooks table");
+
+        pool.execute(include_str!(
+            "../../../tw-core/src/db/migrations/sqlite/20240130_000002_create_connectors.sql"
+        ))
+        .await
+        .expect("Failed to create connectors table");
+
+        pool.execute(include_str!(
+            "../../../tw-core/src/db/migrations/sqlite/20240130_000003_create_policies.sql"
+        ))
+        .await
+        .expect("Failed to create policies table");
+
+        pool.execute(include_str!(
+            "../../../tw-core/src/db/migrations/sqlite/20240130_000004_create_notification_channels.sql"
+        ))
+        .await
+        .expect("Failed to create notification_channels table");
+
+        pool.execute(include_str!(
+            "../../../tw-core/src/db/migrations/sqlite/20240130_000005_create_settings.sql"
+        ))
+        .await
+        .expect("Failed to create settings table");
+
+        pool
+    }
+
+    /// Creates a test app router with the notification routes.
+    async fn setup_test_app() -> axum::Router {
+        let pool = setup_test_pool().await;
+        let db = DbPool::Sqlite(pool);
+        let event_bus = EventBus::new(100);
+        let state = AppState::new(db, event_bus);
+
+        axum::Router::new()
+            .nest("/api/notifications", routes())
+            .with_state(state)
+    }
+
+    // =========================================================================
+    // GET /api/notifications - List channels
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_list_channels_empty() {
+        let app = setup_test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/notifications")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let channels: Vec<ChannelResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert!(channels.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_channels_with_data() {
+        let pool = setup_test_pool().await;
+        let db = DbPool::Sqlite(pool);
+
+        // Insert a channel directly
+        let repo = tw_core::db::create_notification_repository(&db);
+        let channel = NotificationChannel::new(
+            "Test Slack".to_string(),
+            ChannelType::Slack,
+            serde_json::json!({"webhook_url": "https://hooks.slack.com/test"}),
+            vec!["incident.created".to_string()],
+        );
+        repo.create(&channel).await.unwrap();
+
+        let event_bus = EventBus::new(100);
+        let state = AppState::new(db, event_bus);
+        let app = axum::Router::new()
+            .nest("/api/notifications", routes())
+            .with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/notifications")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let channels: Vec<ChannelResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(channels.len(), 1);
+        assert_eq!(channels[0].name, "Test Slack");
+        assert_eq!(channels[0].channel_type, "slack");
+    }
+
+    // =========================================================================
+    // GET /api/notifications/{id} - Get single channel
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_get_channel_success() {
+        let pool = setup_test_pool().await;
+        let db = DbPool::Sqlite(pool);
+
+        // Insert a channel
+        let repo = tw_core::db::create_notification_repository(&db);
+        let channel = NotificationChannel::new(
+            "Teams Channel".to_string(),
+            ChannelType::Teams,
+            serde_json::json!({"webhook_url": "https://outlook.office.com/webhook/test"}),
+            vec!["action.approved".to_string()],
+        );
+        let created = repo.create(&channel).await.unwrap();
+
+        let event_bus = EventBus::new(100);
+        let state = AppState::new(db, event_bus);
+        let app = axum::Router::new()
+            .nest("/api/notifications", routes())
+            .with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(&format!("/api/notifications/{}", created.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let resp: ChannelResponse = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(resp.id, created.id);
+        assert_eq!(resp.name, "Teams Channel");
+        assert_eq!(resp.channel_type, "teams");
+    }
+
+    #[tokio::test]
+    async fn test_get_channel_not_found() {
+        let app = setup_test_app().await;
+
+        let non_existent_id = Uuid::new_v4();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(&format!("/api/notifications/{}", non_existent_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    // =========================================================================
+    // POST /api/notifications - Create channel
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_create_channel_slack() {
+        let app = setup_test_app().await;
+
+        // Note: Not including events[] in form as serde_urlencoded Vec handling is tricky
+        let form_body = "name=Alerts+Slack&channel_type=slack&webhook_url=https%3A%2F%2Fhooks.slack.com%2Fservices%2FT00%2FB00%2Fxxxx&enabled=on";
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/notifications")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(form_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let channel: ChannelResponse = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(channel.name, "Alerts Slack");
+        assert_eq!(channel.channel_type, "slack");
+        assert!(channel.enabled);
+    }
+
+    #[tokio::test]
+    async fn test_create_channel_webhook() {
+        let app = setup_test_app().await;
+
+        let form_body = "name=Custom+Webhook&channel_type=webhook&webhook_url=https%3A%2F%2Fexample.com%2Fwebhook";
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/notifications")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(form_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let channel: ChannelResponse = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(channel.name, "Custom Webhook");
+        assert_eq!(channel.channel_type, "webhook");
+        assert!(!channel.enabled); // Not enabled by default
+    }
+
+    #[tokio::test]
+    async fn test_create_channel_teams() {
+        let app = setup_test_app().await;
+
+        let form_body = "name=Security+Teams&channel_type=teams&webhook_url=https%3A%2F%2Foutlook.office.com%2Fwebhook%2Fabc123&enabled=on";
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/notifications")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(form_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let channel: ChannelResponse = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(channel.name, "Security Teams");
+        assert_eq!(channel.channel_type, "teams");
+    }
+
+    #[tokio::test]
+    async fn test_create_channel_missing_name() {
+        let app = setup_test_app().await;
+
+        let form_body = "name=&channel_type=slack&webhook_url=https://hooks.slack.com/test";
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/notifications")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(form_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_create_channel_invalid_type() {
+        let app = setup_test_app().await;
+
+        let form_body =
+            "name=Test&channel_type=invalid_type&webhook_url=https://example.com/webhook";
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/notifications")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(form_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_create_channel_slack_missing_webhook() {
+        let app = setup_test_app().await;
+
+        let form_body = "name=Missing+Webhook&channel_type=slack";
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/notifications")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(form_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_create_channel_email() {
+        let app = setup_test_app().await;
+
+        let form_body = "name=Email+Alerts&channel_type=email&recipients=admin%40example.com%2Csecurity%40example.com&smtp_host=smtp.example.com&smtp_port=587&enabled=on";
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/notifications")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(form_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let channel: ChannelResponse = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(channel.name, "Email Alerts");
+        assert_eq!(channel.channel_type, "email");
+        assert!(channel.config.get("recipients").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_create_channel_email_missing_recipients() {
+        let app = setup_test_app().await;
+
+        let form_body = "name=Email+No+Recipients&channel_type=email";
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/notifications")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(form_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_create_channel_pagerduty() {
+        let app = setup_test_app().await;
+
+        let form_body = "name=PagerDuty+Critical&channel_type=pagerduty&integration_key=abc123def456&pd_severity=critical&enabled=on";
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/notifications")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(form_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let channel: ChannelResponse = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(channel.name, "PagerDuty Critical");
+        assert_eq!(channel.channel_type, "pagerduty");
+        assert!(channel.config.get("integration_key").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_create_channel_pagerduty_missing_key() {
+        let app = setup_test_app().await;
+
+        let form_body = "name=PagerDuty+No+Key&channel_type=pagerduty";
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/notifications")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(form_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // =========================================================================
+    // PUT /api/notifications/{id} - Update channel
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_update_channel_name() {
+        let pool = setup_test_pool().await;
+        let db = DbPool::Sqlite(pool);
+
+        // Create a channel
+        let repo = tw_core::db::create_notification_repository(&db);
+        let channel = NotificationChannel::new(
+            "Original Name".to_string(),
+            ChannelType::Slack,
+            serde_json::json!({"webhook_url": "https://hooks.slack.com/test"}),
+            vec!["incident.created".to_string()],
+        );
+        let created = repo.create(&channel).await.unwrap();
+
+        let event_bus = EventBus::new(100);
+        let state = AppState::new(db, event_bus);
+        let app = axum::Router::new()
+            .nest("/api/notifications", routes())
+            .with_state(state);
+
+        let form_body = "name=Updated+Name";
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(&format!("/api/notifications/{}", created.id))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(form_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let updated: ChannelResponse = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(updated.name, "Updated Name");
+    }
+
+    #[tokio::test]
+    async fn test_update_channel_not_found() {
+        let app = setup_test_app().await;
+
+        let non_existent_id = Uuid::new_v4();
+        let form_body = "name=New+Name";
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(&format!("/api/notifications/{}", non_existent_id))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(form_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    // =========================================================================
+    // DELETE /api/notifications/{id} - Delete channel
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_delete_channel_success() {
+        let pool = setup_test_pool().await;
+        let pool_clone = pool.clone();
+        let db = DbPool::Sqlite(pool);
+
+        // Create a channel
+        let repo = tw_core::db::create_notification_repository(&db);
+        let channel = NotificationChannel::new(
+            "To Delete".to_string(),
+            ChannelType::Webhook,
+            serde_json::json!({"webhook_url": "https://example.com/delete"}),
+            vec![],
+        );
+        let created = repo.create(&channel).await.unwrap();
+
+        let event_bus = EventBus::new(100);
+        let state = AppState::new(db, event_bus);
+        let app = axum::Router::new()
+            .nest("/api/notifications", routes())
+            .with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(&format!("/api/notifications/{}", created.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Verify channel is deleted using the cloned pool
+        let db_verify = DbPool::Sqlite(pool_clone);
+        let verify_repo = tw_core::db::create_notification_repository(&db_verify);
+        let deleted = verify_repo.get(created.id).await.unwrap();
+        assert!(deleted.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_delete_channel_not_found() {
+        let app = setup_test_app().await;
+
+        let non_existent_id = Uuid::new_v4();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(&format!("/api/notifications/{}", non_existent_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    // =========================================================================
+    // POST /api/notifications/{id}/toggle - Toggle enabled status
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_toggle_channel_enable() {
+        let pool = setup_test_pool().await;
+        let db = DbPool::Sqlite(pool);
+
+        // Create a disabled channel
+        let repo = tw_core::db::create_notification_repository(&db);
+        let mut channel = NotificationChannel::new(
+            "Toggle Test".to_string(),
+            ChannelType::Teams,
+            serde_json::json!({"webhook_url": "https://outlook.office.com/webhook/toggle"}),
+            vec!["incident.resolved".to_string()],
+        );
+        channel.enabled = false;
+        let created = repo.create(&channel).await.unwrap();
+
+        assert!(!created.enabled);
+
+        let event_bus = EventBus::new(100);
+        let state = AppState::new(db, event_bus);
+        let app = axum::Router::new()
+            .nest("/api/notifications", routes())
+            .with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&format!("/api/notifications/{}/toggle", created.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let toggled: ChannelResponse = serde_json::from_slice(&body).unwrap();
+
+        assert!(toggled.enabled);
+    }
+
+    #[tokio::test]
+    async fn test_toggle_channel_disable() {
+        let pool = setup_test_pool().await;
+        let db = DbPool::Sqlite(pool);
+
+        // Create an enabled channel
+        let repo = tw_core::db::create_notification_repository(&db);
+        let mut channel = NotificationChannel::new(
+            "Toggle Test".to_string(),
+            ChannelType::Slack,
+            serde_json::json!({"webhook_url": "https://hooks.slack.com/toggle"}),
+            vec![],
+        );
+        channel.enabled = true;
+        let created = repo.create(&channel).await.unwrap();
+
+        assert!(created.enabled);
+
+        let event_bus = EventBus::new(100);
+        let state = AppState::new(db, event_bus);
+        let app = axum::Router::new()
+            .nest("/api/notifications", routes())
+            .with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&format!("/api/notifications/{}/toggle", created.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let toggled: ChannelResponse = serde_json::from_slice(&body).unwrap();
+
+        assert!(!toggled.enabled);
+    }
+
+    #[tokio::test]
+    async fn test_toggle_channel_not_found() {
+        let app = setup_test_app().await;
+
+        let non_existent_id = Uuid::new_v4();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&format!("/api/notifications/{}/toggle", non_existent_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // toggle_enabled returns a DbError for not found, which may map to 500 or 404
+        assert!(
+            response.status() == StatusCode::NOT_FOUND
+                || response.status() == StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    // =========================================================================
+    // POST /api/notifications/{id}/test - Test notification channel
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_test_channel_email_success() {
+        let pool = setup_test_pool().await;
+        let db = DbPool::Sqlite(pool);
+
+        // Create an email channel (does not require network)
+        let repo = tw_core::db::create_notification_repository(&db);
+        let channel = NotificationChannel::new(
+            "Test Email Channel".to_string(),
+            ChannelType::Email,
+            serde_json::json!({"recipients": "test@example.com"}),
+            vec!["incident.created".to_string()],
+        );
+        let created = repo.create(&channel).await.unwrap();
+
+        let event_bus = EventBus::new(100);
+        let state = AppState::new(db, event_bus);
+        let app = axum::Router::new()
+            .nest("/api/notifications", routes())
+            .with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&format!("/api/notifications/{}/test", created.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let test_response: TestNotificationResponse = serde_json::from_slice(&body).unwrap();
+
+        assert!(test_response.success);
+        assert!(test_response.message.contains("test@example.com"));
+    }
+
+    #[tokio::test]
+    async fn test_test_channel_pagerduty_success() {
+        let pool = setup_test_pool().await;
+        let db = DbPool::Sqlite(pool);
+
+        // Create a PagerDuty channel (does not require network)
+        let repo = tw_core::db::create_notification_repository(&db);
+        let channel = NotificationChannel::new(
+            "Test PD Channel".to_string(),
+            ChannelType::PagerDuty,
+            serde_json::json!({"integration_key": "test123"}),
+            vec!["incident.created".to_string()],
+        );
+        let created = repo.create(&channel).await.unwrap();
+
+        let event_bus = EventBus::new(100);
+        let state = AppState::new(db, event_bus);
+        let app = axum::Router::new()
+            .nest("/api/notifications", routes())
+            .with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&format!("/api/notifications/{}/test", created.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let test_response: TestNotificationResponse = serde_json::from_slice(&body).unwrap();
+
+        assert!(test_response.success);
+        assert!(test_response.message.contains("PagerDuty"));
+    }
+
+    #[tokio::test]
+    async fn test_test_channel_not_found() {
+        let app = setup_test_app().await;
+
+        let non_existent_id = Uuid::new_v4();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&format!("/api/notifications/{}/test", non_existent_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_test_channel_webhook_missing_url() {
+        let pool = setup_test_pool().await;
+        let db = DbPool::Sqlite(pool);
+
+        // Create a webhook channel without webhook_url in config
+        let repo = tw_core::db::create_notification_repository(&db);
+        let channel = NotificationChannel::new(
+            "Broken Webhook".to_string(),
+            ChannelType::Webhook,
+            serde_json::json!({}), // Missing webhook_url
+            vec![],
+        );
+        let created = repo.create(&channel).await.unwrap();
+
+        let event_bus = EventBus::new(100);
+        let state = AppState::new(db, event_bus);
+        let app = axum::Router::new()
+            .nest("/api/notifications", routes())
+            .with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&format!("/api/notifications/{}/test", created.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let test_response: TestNotificationResponse = serde_json::from_slice(&body).unwrap();
+
+        assert!(!test_response.success);
+        assert!(test_response.message.contains("No webhook URL configured"));
+    }
+
+    // =========================================================================
+    // HX-Trigger header tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_create_channel_returns_hx_trigger() {
+        let app = setup_test_app().await;
+
+        let form_body = "name=HX+Trigger+Test&channel_type=slack&webhook_url=https%3A%2F%2Fhooks.slack.com%2Ftest";
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/notifications")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(form_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let hx_trigger = response.headers().get("hx-trigger");
+        assert!(hx_trigger.is_some());
+
+        let trigger_value = hx_trigger.unwrap().to_str().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(trigger_value).unwrap();
+
+        assert_eq!(parsed["showToast"]["type"], "success");
+        assert_eq!(parsed["showToast"]["title"], "Channel Created");
+    }
+
+    #[tokio::test]
+    async fn test_delete_channel_returns_hx_trigger() {
+        let pool = setup_test_pool().await;
+        let db = DbPool::Sqlite(pool);
+
+        let repo = tw_core::db::create_notification_repository(&db);
+        let channel = NotificationChannel::new(
+            "Delete HX Test".to_string(),
+            ChannelType::Webhook,
+            serde_json::json!({"webhook_url": "https://example.com/hx"}),
+            vec![],
+        );
+        let created = repo.create(&channel).await.unwrap();
+
+        let event_bus = EventBus::new(100);
+        let state = AppState::new(db, event_bus);
+        let app = axum::Router::new()
+            .nest("/api/notifications", routes())
+            .with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(&format!("/api/notifications/{}", created.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let hx_trigger = response.headers().get("hx-trigger");
+        assert!(hx_trigger.is_some());
+
+        let trigger_value = hx_trigger.unwrap().to_str().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(trigger_value).unwrap();
+
+        assert_eq!(parsed["showToast"]["type"], "success");
+        assert_eq!(parsed["showToast"]["title"], "Channel Deleted");
+    }
+
+    #[tokio::test]
+    async fn test_toggle_channel_returns_hx_trigger() {
+        let pool = setup_test_pool().await;
+        let db = DbPool::Sqlite(pool);
+
+        let repo = tw_core::db::create_notification_repository(&db);
+        let channel = NotificationChannel::new(
+            "Toggle HX Test".to_string(),
+            ChannelType::Slack,
+            serde_json::json!({"webhook_url": "https://hooks.slack.com/hx"}),
+            vec![],
+        );
+        let created = repo.create(&channel).await.unwrap();
+
+        let event_bus = EventBus::new(100);
+        let state = AppState::new(db, event_bus);
+        let app = axum::Router::new()
+            .nest("/api/notifications", routes())
+            .with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&format!("/api/notifications/{}/toggle", created.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let hx_trigger = response.headers().get("hx-trigger");
+        assert!(hx_trigger.is_some());
+
+        let trigger_value = hx_trigger.unwrap().to_str().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(trigger_value).unwrap();
+
+        assert_eq!(parsed["showToast"]["type"], "success");
+        assert_eq!(parsed["showToast"]["title"], "Channel Updated");
+    }
+
+    // =========================================================================
+    // Additional update tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_update_channel_webhook_url() {
+        let pool = setup_test_pool().await;
+        let db = DbPool::Sqlite(pool);
+
+        let repo = tw_core::db::create_notification_repository(&db);
+        let channel = NotificationChannel::new(
+            "Update Config Test".to_string(),
+            ChannelType::Slack,
+            serde_json::json!({"webhook_url": "https://hooks.slack.com/old"}),
+            vec![],
+        );
+        let created = repo.create(&channel).await.unwrap();
+
+        let event_bus = EventBus::new(100);
+        let state = AppState::new(db, event_bus);
+        let app = axum::Router::new()
+            .nest("/api/notifications", routes())
+            .with_state(state);
+
+        let form_body = "webhook_url=https%3A%2F%2Fhooks.slack.com%2Fnew";
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(&format!("/api/notifications/{}", created.id))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(form_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let updated: ChannelResponse = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(
+            updated.config.get("webhook_url").unwrap().as_str(),
+            Some("https://hooks.slack.com/new")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_channel_enabled_status() {
+        let pool = setup_test_pool().await;
+        let db = DbPool::Sqlite(pool);
+
+        let repo = tw_core::db::create_notification_repository(&db);
+        let mut channel = NotificationChannel::new(
+            "Enabled Status Test".to_string(),
+            ChannelType::Teams,
+            serde_json::json!({"webhook_url": "https://outlook.office.com/webhook/test"}),
+            vec![],
+        );
+        channel.enabled = false;
+        let created = repo.create(&channel).await.unwrap();
+
+        assert!(!created.enabled);
+
+        let event_bus = EventBus::new(100);
+        let state = AppState::new(db, event_bus);
+        let app = axum::Router::new()
+            .nest("/api/notifications", routes())
+            .with_state(state);
+
+        // Update with enabled=on
+        let form_body = "enabled=on";
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(&format!("/api/notifications/{}", created.id))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(form_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let updated: ChannelResponse = serde_json::from_slice(&body).unwrap();
+
+        assert!(updated.enabled);
+    }
+
+    #[tokio::test]
+    async fn test_update_channel_change_type() {
+        let pool = setup_test_pool().await;
+        let db = DbPool::Sqlite(pool);
+
+        let repo = tw_core::db::create_notification_repository(&db);
+        let channel = NotificationChannel::new(
+            "Type Change Test".to_string(),
+            ChannelType::Slack,
+            serde_json::json!({"webhook_url": "https://hooks.slack.com/test"}),
+            vec![],
+        );
+        let created = repo.create(&channel).await.unwrap();
+
+        let event_bus = EventBus::new(100);
+        let state = AppState::new(db, event_bus);
+        let app = axum::Router::new()
+            .nest("/api/notifications", routes())
+            .with_state(state);
+
+        // Change from slack to teams with new webhook URL
+        let form_body =
+            "channel_type=teams&webhook_url=https%3A%2F%2Foutlook.office.com%2Fwebhook%2Fnew";
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(&format!("/api/notifications/{}", created.id))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(form_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let updated: ChannelResponse = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(updated.channel_type, "teams");
+    }
+
+    #[tokio::test]
+    async fn test_update_channel_invalid_type() {
+        let pool = setup_test_pool().await;
+        let db = DbPool::Sqlite(pool);
+
+        let repo = tw_core::db::create_notification_repository(&db);
+        let channel = NotificationChannel::new(
+            "Invalid Type Update".to_string(),
+            ChannelType::Slack,
+            serde_json::json!({"webhook_url": "https://hooks.slack.com/test"}),
+            vec![],
+        );
+        let created = repo.create(&channel).await.unwrap();
+
+        let event_bus = EventBus::new(100);
+        let state = AppState::new(db, event_bus);
+        let app = axum::Router::new()
+            .nest("/api/notifications", routes())
+            .with_state(state);
+
+        let form_body = "channel_type=invalid_type";
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(&format!("/api/notifications/{}", created.id))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(form_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // =========================================================================
+    // Edge case tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_create_channel_whitespace_name() {
+        let app = setup_test_app().await;
+
+        let form_body =
+            "name=+++&channel_type=slack&webhook_url=https%3A%2F%2Fhooks.slack.com%2Ftest";
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/notifications")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(form_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_create_channel_slack_with_channel_override() {
+        let app = setup_test_app().await;
+
+        let form_body = "name=Slack+With+Channel&channel_type=slack&webhook_url=https%3A%2F%2Fhooks.slack.com%2Ftest&channel=%23alerts";
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/notifications")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(form_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let channel: ChannelResponse = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(
+            channel.config.get("channel").unwrap().as_str(),
+            Some("#alerts")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_channel_webhook_with_auth_header() {
+        let app = setup_test_app().await;
+
+        let form_body = "name=Auth+Webhook&channel_type=webhook&webhook_url=https%3A%2F%2Fexample.com%2Fhook&auth_header=Bearer+token123";
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/notifications")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(form_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let channel: ChannelResponse = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(
+            channel.config.get("auth_header").unwrap().as_str(),
+            Some("Bearer token123")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_channel_invalid_uuid() {
+        let app = setup_test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/notifications/not-a-valid-uuid")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Axum returns 400 for invalid path parameters
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_list_channels_multiple() {
+        let pool = setup_test_pool().await;
+        let db = DbPool::Sqlite(pool);
+
+        // Insert multiple channels
+        let repo = tw_core::db::create_notification_repository(&db);
+
+        let channel1 = NotificationChannel::new(
+            "Slack Channel".to_string(),
+            ChannelType::Slack,
+            serde_json::json!({"webhook_url": "https://hooks.slack.com/test1"}),
+            vec!["incident.created".to_string()],
+        );
+        repo.create(&channel1).await.unwrap();
+
+        let channel2 = NotificationChannel::new(
+            "Teams Channel".to_string(),
+            ChannelType::Teams,
+            serde_json::json!({"webhook_url": "https://outlook.office.com/webhook/test2"}),
+            vec!["action.approved".to_string()],
+        );
+        repo.create(&channel2).await.unwrap();
+
+        let channel3 = NotificationChannel::new(
+            "Email Channel".to_string(),
+            ChannelType::Email,
+            serde_json::json!({"recipients": "admin@test.com"}),
+            vec![],
+        );
+        repo.create(&channel3).await.unwrap();
+
+        let event_bus = EventBus::new(100);
+        let state = AppState::new(db, event_bus);
+        let app = axum::Router::new()
+            .nest("/api/notifications", routes())
+            .with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/notifications")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let channels: Vec<ChannelResponse> = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(channels.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_channel_response_fields() {
+        let pool = setup_test_pool().await;
+        let db = DbPool::Sqlite(pool);
+
+        let repo = tw_core::db::create_notification_repository(&db);
+        let channel = NotificationChannel::new(
+            "Full Response Test".to_string(),
+            ChannelType::Slack,
+            serde_json::json!({"webhook_url": "https://hooks.slack.com/full"}),
+            vec![
+                "incident.created".to_string(),
+                "action.approved".to_string(),
+            ],
+        );
+        let created = repo.create(&channel).await.unwrap();
+
+        let event_bus = EventBus::new(100);
+        let state = AppState::new(db, event_bus);
+        let app = axum::Router::new()
+            .nest("/api/notifications", routes())
+            .with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(&format!("/api/notifications/{}", created.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let resp: ChannelResponse = serde_json::from_slice(&body).unwrap();
+
+        // Verify all fields are present and correct
+        assert_eq!(resp.id, created.id);
+        assert_eq!(resp.name, "Full Response Test");
+        assert_eq!(resp.channel_type, "slack");
+        assert!(!resp.config.is_null());
+        assert_eq!(resp.events.len(), 2);
+        assert!(resp.events.contains(&"incident.created".to_string()));
+        assert!(resp.events.contains(&"action.approved".to_string()));
+        assert!(resp.enabled); // Default is true
+        assert!(!resp.created_at.is_empty());
+        assert!(!resp.updated_at.is_empty());
     }
 }
