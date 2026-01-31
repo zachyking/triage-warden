@@ -13,7 +13,22 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
-use tracing::{info, instrument, warn};
+use tracing::{debug, info, instrument, warn};
+
+/// Default timeout for RTR command polling (30 seconds).
+const RTR_COMMAND_TIMEOUT_SECS: u64 = 30;
+
+/// Poll interval for RTR command results (500ms).
+const RTR_POLL_INTERVAL_MS: u64 = 500;
+
+/// Represents an active RTR (Real Time Response) session.
+#[derive(Debug, Clone)]
+pub struct RTRSession {
+    /// The session ID returned by CrowdStrike.
+    pub session_id: String,
+    /// The device ID (AID) this session is connected to.
+    pub device_id: String,
+}
 
 /// CrowdStrike-specific configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -188,6 +203,339 @@ impl CrowdStrikeConnector {
             tags: device.tags.clone().unwrap_or_default(),
         }
     }
+
+    // ========================================================================
+    // RTR (Real Time Response) Session Management
+    // ========================================================================
+
+    /// Initializes an RTR session with a device.
+    ///
+    /// # Arguments
+    /// * `device_id` - The CrowdStrike Agent ID (AID) of the target device.
+    ///
+    /// # Returns
+    /// An `RTRSession` containing the session ID and device ID.
+    #[instrument(skip(self), fields(device_id = %device_id))]
+    async fn init_rtr_session(&self, device_id: &str) -> ConnectorResult<RTRSession> {
+        let body = serde_json::json!({
+            "device_id": device_id,
+            "queue_offline": false
+        });
+
+        let response = self
+            .client
+            .post("/real-time-response/entities/sessions/v1", &body)
+            .await?;
+
+        if !response.status().is_success() {
+            let error = response.text().await.unwrap_or_default();
+            return Err(ConnectorError::RequestFailed(format!(
+                "Failed to init RTR session: {}",
+                error
+            )));
+        }
+
+        let result: RTRSessionResponse = response.json().await.map_err(|e| {
+            ConnectorError::InvalidResponse(format!("Failed to parse RTR session response: {}", e))
+        })?;
+
+        let session =
+            result.resources.into_iter().next().ok_or_else(|| {
+                ConnectorError::InvalidResponse("No session returned".to_string())
+            })?;
+
+        info!(
+            "RTR session initialized: {} for device {}",
+            session.session_id, device_id
+        );
+
+        Ok(RTRSession {
+            session_id: session.session_id,
+            device_id: device_id.to_string(),
+        })
+    }
+
+    /// Closes an RTR session.
+    ///
+    /// # Arguments
+    /// * `session` - The RTR session to close.
+    #[instrument(skip(self), fields(session_id = %session.session_id))]
+    async fn close_rtr_session(&self, session: &RTRSession) -> ConnectorResult<()> {
+        let path = format!(
+            "/real-time-response/entities/sessions/v1?session_id={}",
+            urlencoding::encode(&session.session_id)
+        );
+
+        let response = self.client.delete(&path).await?;
+
+        if !response.status().is_success() {
+            let error = response.text().await.unwrap_or_default();
+            warn!(
+                "Failed to close RTR session {}: {}",
+                session.session_id, error
+            );
+            // Don't return error - session cleanup is best effort
+        } else {
+            info!("RTR session closed: {}", session.session_id);
+        }
+
+        Ok(())
+    }
+
+    /// Runs an RTR admin command and waits for the result.
+    ///
+    /// # Arguments
+    /// * `session` - The active RTR session.
+    /// * `base_command` - The base command (e.g., "ps", "netstat").
+    /// * `command_string` - The full command string.
+    ///
+    /// # Returns
+    /// The stdout output from the command.
+    #[instrument(skip(self), fields(session_id = %session.session_id, command = %base_command))]
+    async fn run_rtr_command(
+        &self,
+        session: &RTRSession,
+        base_command: &str,
+        command_string: &str,
+    ) -> ConnectorResult<String> {
+        // Execute the command
+        let body = serde_json::json!({
+            "device_id": session.device_id,
+            "session_id": session.session_id,
+            "base_command": base_command,
+            "command_string": command_string
+        });
+
+        let response = self
+            .client
+            .post("/real-time-response/entities/admin-command/v1", &body)
+            .await?;
+
+        if !response.status().is_success() {
+            let error = response.text().await.unwrap_or_default();
+            return Err(ConnectorError::RequestFailed(format!(
+                "Failed to execute RTR command: {}",
+                error
+            )));
+        }
+
+        let result: RTRCommandResponse = response.json().await.map_err(|e| {
+            ConnectorError::InvalidResponse(format!("Failed to parse RTR command response: {}", e))
+        })?;
+
+        let command_result = result.resources.into_iter().next().ok_or_else(|| {
+            ConnectorError::InvalidResponse("No command result returned".to_string())
+        })?;
+
+        let cloud_request_id = command_result.cloud_request_id;
+        debug!(
+            "RTR command submitted, cloud_request_id: {}",
+            cloud_request_id
+        );
+
+        // Poll for command completion
+        self.poll_rtr_command_result(&cloud_request_id).await
+    }
+
+    /// Polls for RTR command result until complete or timeout.
+    #[instrument(skip(self), fields(cloud_request_id = %cloud_request_id))]
+    async fn poll_rtr_command_result(&self, cloud_request_id: &str) -> ConnectorResult<String> {
+        let start = std::time::Instant::now();
+        let timeout = Duration::from_secs(RTR_COMMAND_TIMEOUT_SECS);
+        let poll_interval = Duration::from_millis(RTR_POLL_INTERVAL_MS);
+
+        loop {
+            if start.elapsed() > timeout {
+                return Err(ConnectorError::Timeout(format!(
+                    "RTR command timed out after {} seconds",
+                    RTR_COMMAND_TIMEOUT_SECS
+                )));
+            }
+
+            let path = format!(
+                "/real-time-response/entities/admin-command/v1?cloud_request_id={}&sequence_id=0",
+                urlencoding::encode(cloud_request_id)
+            );
+
+            let response = self.client.get(&path).await?;
+
+            if !response.status().is_success() {
+                let error = response.text().await.unwrap_or_default();
+                return Err(ConnectorError::RequestFailed(format!(
+                    "Failed to get RTR command result: {}",
+                    error
+                )));
+            }
+
+            let result: RTRCommandResultResponse = response.json().await.map_err(|e| {
+                ConnectorError::InvalidResponse(format!(
+                    "Failed to parse RTR command result response: {}",
+                    e
+                ))
+            })?;
+
+            if let Some(resource) = result.resources.into_iter().next() {
+                if resource.complete {
+                    debug!("RTR command completed successfully");
+
+                    // Check for errors in the command output
+                    if let Some(stderr) = &resource.stderr {
+                        if !stderr.is_empty() {
+                            warn!("RTR command stderr: {}", stderr);
+                        }
+                    }
+
+                    return Ok(resource.stdout.unwrap_or_default());
+                }
+            }
+
+            tokio::time::sleep(poll_interval).await;
+        }
+    }
+
+    /// Executes an RTR command with automatic session management.
+    /// Ensures the session is always closed even on error.
+    #[instrument(skip(self), fields(hostname = %hostname, command = %base_command))]
+    async fn execute_rtr_command(
+        &self,
+        hostname: &str,
+        base_command: &str,
+        command_string: &str,
+    ) -> ConnectorResult<String> {
+        let aid = self.find_host_id(hostname).await?;
+        let session = self.init_rtr_session(&aid).await?;
+
+        // Use scopeguard pattern to ensure session cleanup
+        let result = self
+            .run_rtr_command(&session, base_command, command_string)
+            .await;
+
+        // Always close the session, even if the command failed
+        if let Err(e) = self.close_rtr_session(&session).await {
+            warn!("Error closing RTR session: {}", e);
+        }
+
+        result
+    }
+
+    // ========================================================================
+    // Output Parsing
+    // ========================================================================
+
+    /// Parses the output of the RTR `ps` command into ProcessInfo structs.
+    fn parse_ps_output(&self, output: &str) -> Vec<ProcessInfo> {
+        let mut processes = Vec::new();
+
+        for line in output.lines().skip(1) {
+            // Skip header line
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            if let Some(proc) = self.parse_ps_line(line) {
+                processes.push(proc);
+            }
+        }
+
+        processes
+    }
+
+    /// Parses a single line from `ps` output.
+    /// CrowdStrike RTR ps output format is typically:
+    /// PID PPID Name CommandLine User StartTime FilePath
+    fn parse_ps_line(&self, line: &str) -> Option<ProcessInfo> {
+        // Use regex to parse the ps output line
+        // Format: PID | PPID | Name | User | StartTime | CommandLine/FilePath
+        let parts: Vec<&str> = line.split_whitespace().collect();
+
+        if parts.len() < 5 {
+            return None;
+        }
+
+        let pid: u32 = parts.first()?.parse().ok()?;
+        let parent_pid: Option<u32> = parts.get(1).and_then(|s| s.parse().ok());
+        let name = parts.get(2)?.to_string();
+        let user = parts.get(3).unwrap_or(&"").to_string();
+
+        // Try to parse start time - it may be in various formats
+        let start_time = parts
+            .get(4)
+            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(Utc::now);
+
+        // Command line and file path are typically the rest
+        let command_line = if parts.len() > 5 {
+            parts[5..].join(" ")
+        } else {
+            name.clone()
+        };
+
+        Some(ProcessInfo {
+            pid,
+            name,
+            command_line: command_line.clone(),
+            parent_pid,
+            user,
+            start_time,
+            file_hash: None,
+            file_path: Some(command_line),
+        })
+    }
+
+    /// Parses the output of the RTR `netstat` command into NetworkConnection structs.
+    fn parse_netstat_output(&self, output: &str) -> Vec<NetworkConnection> {
+        let mut connections = Vec::new();
+
+        for line in output.lines().skip(1) {
+            // Skip header line
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            if let Some(conn) = self.parse_netstat_line(line) {
+                connections.push(conn);
+            }
+        }
+
+        connections
+    }
+
+    /// Parses a single line from `netstat` output.
+    /// CrowdStrike RTR netstat output format is typically:
+    /// Protocol LocalAddress LocalPort RemoteAddress RemotePort State PID ProcessName
+    fn parse_netstat_line(&self, line: &str) -> Option<NetworkConnection> {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+
+        if parts.len() < 7 {
+            return None;
+        }
+
+        let protocol = parts.first()?.to_string();
+        let local_address = parts.get(1)?.to_string();
+        let local_port: u16 = parts.get(2)?.parse().ok()?;
+        let remote_address = parts.get(3)?.to_string();
+        let remote_port: u16 = parts.get(4)?.parse().ok()?;
+        let state = parts.get(5)?.to_string();
+        let pid: u32 = parts.get(6)?.parse().ok()?;
+        let process_name = parts.get(7).unwrap_or(&"").to_string();
+
+        Some(NetworkConnection {
+            pid,
+            process_name,
+            local_address,
+            local_port,
+            remote_address,
+            remote_port,
+            protocol,
+            state,
+            timestamp: Utc::now(),
+        })
+    }
+
+    // ========================================================================
+    // Detection Parsing
+    // ========================================================================
 
     /// Parses a CrowdStrike detection into Detection.
     fn parse_detection(&self, det: &CSDetection) -> Detection {
@@ -480,15 +828,13 @@ impl EDRConnector for CrowdStrikeConnector {
         hostname: &str,
         _timerange: TimeRange,
     ) -> ConnectorResult<Vec<ProcessInfo>> {
-        // Note: Full process listing requires Real Time Response (RTR) API
-        // which involves session management. For now, we return an empty list
-        // and log a warning.
-        warn!(
-            "Process listing for {} requires RTR session (not implemented)",
-            hostname
-        );
+        info!("Getting processes for host {} via RTR", hostname);
 
-        Ok(Vec::new())
+        let output = self.execute_rtr_command(hostname, "ps", "ps").await?;
+        let processes = self.parse_ps_output(&output);
+
+        info!("Retrieved {} processes from {}", processes.len(), hostname);
+        Ok(processes)
     }
 
     #[instrument(skip(self), fields(hostname = %hostname))]
@@ -497,15 +843,19 @@ impl EDRConnector for CrowdStrikeConnector {
         hostname: &str,
         _timerange: TimeRange,
     ) -> ConnectorResult<Vec<NetworkConnection>> {
-        // Note: Network connection listing requires Real Time Response (RTR) API
-        // which involves session management. For now, we return an empty list
-        // and log a warning.
-        warn!(
-            "Network connection listing for {} requires RTR session (not implemented)",
+        info!("Getting network connections for host {} via RTR", hostname);
+
+        let output = self
+            .execute_rtr_command(hostname, "netstat", "netstat")
+            .await?;
+        let connections = self.parse_netstat_output(&output);
+
+        info!(
+            "Retrieved {} network connections from {}",
+            connections.len(),
             hostname
         );
-
-        Ok(Vec::new())
+        Ok(connections)
     }
 }
 
@@ -574,6 +924,64 @@ struct CSBehavior {
     cmdline: Option<String>,
 }
 
+// RTR (Real Time Response) API response types
+
+/// Response from RTR session initialization.
+#[derive(Debug, Deserialize)]
+struct RTRSessionResponse {
+    #[serde(default)]
+    resources: Vec<RTRSessionResource>,
+}
+
+/// A single RTR session resource.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)] // Fields are populated via deserialization
+struct RTRSessionResource {
+    session_id: String,
+    #[serde(default)]
+    scripts: Vec<serde_json::Value>,
+}
+
+/// Response from RTR command execution.
+#[derive(Debug, Deserialize)]
+struct RTRCommandResponse {
+    #[serde(default)]
+    resources: Vec<RTRCommandResource>,
+}
+
+/// A single RTR command resource.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)] // Fields are populated via deserialization
+struct RTRCommandResource {
+    cloud_request_id: String,
+    session_id: String,
+    #[serde(default)]
+    complete: bool,
+    stdout: Option<String>,
+    stderr: Option<String>,
+}
+
+/// Response from RTR command result polling.
+#[derive(Debug, Deserialize)]
+struct RTRCommandResultResponse {
+    #[serde(default)]
+    resources: Vec<RTRCommandResultResource>,
+}
+
+/// A single RTR command result resource.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)] // Fields are populated via deserialization
+struct RTRCommandResultResource {
+    session_id: String,
+    cloud_request_id: String,
+    #[serde(default)]
+    complete: bool,
+    stdout: Option<String>,
+    stderr: Option<String>,
+    #[serde(default)]
+    sequence_id: i32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -636,5 +1044,225 @@ mod tests {
         let config = create_test_config();
         let connector = CrowdStrikeConnector::new(config);
         assert!(connector.is_ok());
+    }
+
+    // RTR Output Parsing Tests
+
+    #[test]
+    fn test_parse_ps_output() {
+        let config = create_test_config();
+        let connector = CrowdStrikeConnector::new(config).unwrap();
+
+        let ps_output = r#"PID PPID Name User StartTime CommandLine
+1234 1 chrome.exe DOMAIN\user 2024-01-15T10:30:00Z C:\Program Files\Chrome\chrome.exe --flag
+5678 1234 notepad.exe DOMAIN\user 2024-01-15T10:31:00Z C:\Windows\System32\notepad.exe
+9012 0 System SYSTEM 2024-01-15T08:00:00Z System"#;
+
+        let processes = connector.parse_ps_output(ps_output);
+
+        assert_eq!(processes.len(), 3);
+
+        let chrome = &processes[0];
+        assert_eq!(chrome.pid, 1234);
+        assert_eq!(chrome.parent_pid, Some(1));
+        assert_eq!(chrome.name, "chrome.exe");
+        assert_eq!(chrome.user, "DOMAIN\\user");
+
+        let notepad = &processes[1];
+        assert_eq!(notepad.pid, 5678);
+        assert_eq!(notepad.parent_pid, Some(1234));
+        assert_eq!(notepad.name, "notepad.exe");
+
+        let system = &processes[2];
+        assert_eq!(system.pid, 9012);
+        assert_eq!(system.parent_pid, Some(0));
+        assert_eq!(system.name, "System");
+    }
+
+    #[test]
+    fn test_parse_ps_output_empty() {
+        let config = create_test_config();
+        let connector = CrowdStrikeConnector::new(config).unwrap();
+
+        let ps_output = "PID PPID Name User StartTime CommandLine\n";
+        let processes = connector.parse_ps_output(ps_output);
+        assert!(processes.is_empty());
+    }
+
+    #[test]
+    fn test_parse_ps_output_malformed_lines() {
+        let config = create_test_config();
+        let connector = CrowdStrikeConnector::new(config).unwrap();
+
+        let ps_output = r#"PID PPID Name User StartTime CommandLine
+1234 1 chrome.exe DOMAIN\user 2024-01-15T10:30:00Z C:\Chrome\chrome.exe
+invalid line
+5678 abc notepad.exe"#;
+
+        let processes = connector.parse_ps_output(ps_output);
+        // Should skip invalid lines but parse valid ones
+        assert_eq!(processes.len(), 1);
+        assert_eq!(processes[0].pid, 1234);
+    }
+
+    #[test]
+    fn test_parse_netstat_output() {
+        let config = create_test_config();
+        let connector = CrowdStrikeConnector::new(config).unwrap();
+
+        let netstat_output = r#"Protocol LocalAddress LocalPort RemoteAddress RemotePort State PID ProcessName
+TCP 192.168.1.100 52341 142.250.190.78 443 ESTABLISHED 1234 chrome.exe
+TCP 0.0.0.0 80 0.0.0.0 0 LISTENING 4 System
+UDP 192.168.1.100 53 8.8.8.8 53 ESTABLISHED 5678 dns.exe"#;
+
+        let connections = connector.parse_netstat_output(netstat_output);
+
+        assert_eq!(connections.len(), 3);
+
+        let chrome_conn = &connections[0];
+        assert_eq!(chrome_conn.protocol, "TCP");
+        assert_eq!(chrome_conn.local_address, "192.168.1.100");
+        assert_eq!(chrome_conn.local_port, 52341);
+        assert_eq!(chrome_conn.remote_address, "142.250.190.78");
+        assert_eq!(chrome_conn.remote_port, 443);
+        assert_eq!(chrome_conn.state, "ESTABLISHED");
+        assert_eq!(chrome_conn.pid, 1234);
+        assert_eq!(chrome_conn.process_name, "chrome.exe");
+
+        let system_conn = &connections[1];
+        assert_eq!(system_conn.protocol, "TCP");
+        assert_eq!(system_conn.local_port, 80);
+        assert_eq!(system_conn.state, "LISTENING");
+        assert_eq!(system_conn.pid, 4);
+    }
+
+    #[test]
+    fn test_parse_netstat_output_empty() {
+        let config = create_test_config();
+        let connector = CrowdStrikeConnector::new(config).unwrap();
+
+        let netstat_output =
+            "Protocol LocalAddress LocalPort RemoteAddress RemotePort State PID ProcessName\n";
+        let connections = connector.parse_netstat_output(netstat_output);
+        assert!(connections.is_empty());
+    }
+
+    #[test]
+    fn test_parse_netstat_output_malformed_lines() {
+        let config = create_test_config();
+        let connector = CrowdStrikeConnector::new(config).unwrap();
+
+        let netstat_output = r#"Protocol LocalAddress LocalPort RemoteAddress RemotePort State PID ProcessName
+TCP 192.168.1.100 52341 142.250.190.78 443 ESTABLISHED 1234 chrome.exe
+invalid
+TCP short"#;
+
+        let connections = connector.parse_netstat_output(netstat_output);
+        // Should skip invalid lines but parse valid ones
+        assert_eq!(connections.len(), 1);
+        assert_eq!(connections[0].pid, 1234);
+    }
+
+    #[test]
+    fn test_parse_ps_line_minimal() {
+        let config = create_test_config();
+        let connector = CrowdStrikeConnector::new(config).unwrap();
+
+        // Test with minimal valid data (5 fields)
+        let line = "100 0 init root 2024-01-15T00:00:00Z";
+        let proc = connector.parse_ps_line(line);
+        assert!(proc.is_some());
+
+        let proc = proc.unwrap();
+        assert_eq!(proc.pid, 100);
+        assert_eq!(proc.parent_pid, Some(0));
+        assert_eq!(proc.name, "init");
+        assert_eq!(proc.user, "root");
+    }
+
+    #[test]
+    fn test_parse_netstat_line_minimal() {
+        let config = create_test_config();
+        let connector = CrowdStrikeConnector::new(config).unwrap();
+
+        // Test with minimal valid data (7 fields - no process name)
+        let line = "TCP 127.0.0.1 8080 0.0.0.0 0 LISTENING 1000";
+        let conn = connector.parse_netstat_line(line);
+        assert!(conn.is_some());
+
+        let conn = conn.unwrap();
+        assert_eq!(conn.protocol, "TCP");
+        assert_eq!(conn.local_address, "127.0.0.1");
+        assert_eq!(conn.local_port, 8080);
+        assert_eq!(conn.remote_address, "0.0.0.0");
+        assert_eq!(conn.remote_port, 0);
+        assert_eq!(conn.state, "LISTENING");
+        assert_eq!(conn.pid, 1000);
+        assert_eq!(conn.process_name, ""); // No process name provided
+    }
+
+    // RTR Response Parsing Tests
+
+    #[test]
+    fn test_rtr_session_response_deserialization() {
+        let json = r#"{
+            "resources": [{
+                "session_id": "abc-123-def-456",
+                "scripts": []
+            }]
+        }"#;
+
+        let response: RTRSessionResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.resources.len(), 1);
+        assert_eq!(response.resources[0].session_id, "abc-123-def-456");
+    }
+
+    #[test]
+    fn test_rtr_command_response_deserialization() {
+        let json = r#"{
+            "resources": [{
+                "cloud_request_id": "cloud-req-123",
+                "session_id": "session-456",
+                "complete": false,
+                "stdout": null,
+                "stderr": null
+            }]
+        }"#;
+
+        let response: RTRCommandResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.resources.len(), 1);
+        assert_eq!(response.resources[0].cloud_request_id, "cloud-req-123");
+        assert!(!response.resources[0].complete);
+    }
+
+    #[test]
+    fn test_rtr_command_result_response_deserialization() {
+        let json = r#"{
+            "resources": [{
+                "session_id": "session-456",
+                "cloud_request_id": "cloud-req-123",
+                "complete": true,
+                "stdout": "PID PPID Name\n1234 1 test.exe",
+                "stderr": "",
+                "sequence_id": 0
+            }]
+        }"#;
+
+        let response: RTRCommandResultResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.resources.len(), 1);
+        assert!(response.resources[0].complete);
+        assert!(response.resources[0].stdout.is_some());
+        assert!(response.resources[0]
+            .stdout
+            .as_ref()
+            .unwrap()
+            .contains("test.exe"));
+    }
+
+    #[test]
+    fn test_rtr_session_response_empty_resources() {
+        let json = r#"{"resources": []}"#;
+        let response: RTRSessionResponse = serde_json::from_str(json).unwrap();
+        assert!(response.resources.is_empty());
     }
 }
