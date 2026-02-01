@@ -1,5 +1,7 @@
 """Local LLM provider for self-hosted models (vLLM, Ollama, etc.)."""
 
+from __future__ import annotations
+
 import json
 from typing import Any
 
