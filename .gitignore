@@ -70,3 +70,7 @@ run-stage*.sh
 docs/stage*-plan.md
 research.md
 triage-warden.db
+
+# Claude Code
+.claude/
+.claude-design/
