@@ -16,6 +16,7 @@ tracing.workspace = true
 async-trait.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+regex = "1"
 
 tw-connectors = { path = "../tw-connectors" }
 

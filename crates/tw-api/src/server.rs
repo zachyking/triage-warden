@@ -1,6 +1,7 @@
 //! API server implementation.
 
 use axum::{middleware, Router};
+use metrics_exporter_prometheus::PrometheusBuilder;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -12,7 +13,7 @@ use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tower_sessions::{cookie::SameSite, Expiry, SessionManagerLayer};
 use tower_sessions_sqlx_store::SqliteStore;
-use tracing::info;
+use tracing::{info, warn};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -134,6 +135,29 @@ impl ApiServer {
     /// Creates a new API server with default configuration.
     pub fn with_state(state: AppState) -> Self {
         Self::new(state, ApiServerConfig::default())
+    }
+
+    /// Initializes Prometheus metrics exporter and registers metrics.
+    /// Returns Self with the Prometheus handle configured in AppState.
+    pub fn with_prometheus(mut self) -> Self {
+        match PrometheusBuilder::new().install_recorder() {
+            Ok(handle) => {
+                // Register metric descriptions
+                routes::metrics::register_metrics();
+
+                // Store the handle in AppState
+                self.state = self.state.with_prometheus_handle(handle);
+
+                info!("Prometheus metrics exporter initialized");
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to initialize Prometheus exporter: {}. Metrics will not be available.",
+                    e
+                );
+            }
+        }
+        self
     }
 
     /// Sets up the session store. Must be called before running the server.

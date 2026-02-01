@@ -25,6 +25,7 @@ use tw_core::db::{
 use tw_core::incident::{
     ApprovalStatus, AuditAction, AuditEntry, Incident, IncidentStatus, ProposedAction, Severity,
 };
+use tw_policy::engine::{ActionContext, ActionTarget as PolicyActionTarget};
 
 /// Creates incident routes.
 pub fn routes() -> Router<AppState> {
@@ -174,18 +175,84 @@ async fn execute_action(
     // Create proposed action
     let action_id = Uuid::new_v4();
     let target = request.target.into();
-    let parameters = request
+
+    // Extract parameters as a HashMap (used for both policy context and action parameters)
+    let parameters: std::collections::HashMap<String, serde_json::Value> = request
         .parameters
+        .as_ref()
         .and_then(|p| p.as_object().cloned())
         .map(|obj| obj.into_iter().collect())
         .unwrap_or_default();
 
-    // TODO: Evaluate policy engine
-    // For now, we'll mark as auto-approved for low-risk actions
+    // Evaluate policy engine for action approval
     let approval_status = if request.skip_policy_check {
+        tracing::info!(
+            incident_id = %id,
+            action_type = %request.action_type,
+            "Policy check skipped by request"
+        );
         ApprovalStatus::AutoApproved
     } else {
-        ApprovalStatus::Pending
+        // Build ActionContext for policy evaluation
+        let policy_target = build_policy_target(&target);
+        let incident_severity = format!("{:?}", _incident.severity).to_lowercase();
+        let confidence = _incident
+            .analysis
+            .as_ref()
+            .map(|a| a.confidence)
+            .unwrap_or(0.5);
+
+        let context = ActionContext {
+            action_type: request.action_type.clone(),
+            target: policy_target,
+            incident_severity,
+            confidence,
+            proposer: "api".to_string(),
+            metadata: parameters.clone(),
+        };
+
+        // Evaluate the policy
+        match state.policy_engine.evaluate(&context).await {
+            Ok(tw_policy::PolicyDecision::Allowed) => {
+                tracing::info!(
+                    incident_id = %id,
+                    action_type = %request.action_type,
+                    "Policy decision: auto-approved"
+                );
+                ApprovalStatus::AutoApproved
+            }
+            Ok(tw_policy::PolicyDecision::Denied(reason)) => {
+                tracing::warn!(
+                    incident_id = %id,
+                    action_type = %request.action_type,
+                    rule = %reason.rule_name,
+                    message = %reason.message,
+                    "Policy decision: denied"
+                );
+                return Err(ApiError::Forbidden(format!(
+                    "Action denied by policy '{}': {}",
+                    reason.rule_name, reason.message
+                )));
+            }
+            Ok(tw_policy::PolicyDecision::RequiresApproval(level)) => {
+                tracing::info!(
+                    incident_id = %id,
+                    action_type = %request.action_type,
+                    approval_level = ?level,
+                    "Policy decision: requires approval"
+                );
+                ApprovalStatus::Pending
+            }
+            Err(e) => {
+                tracing::error!(
+                    incident_id = %id,
+                    action_type = %request.action_type,
+                    error = %e,
+                    "Policy evaluation failed, defaulting to pending approval"
+                );
+                ApprovalStatus::Pending
+            }
+        }
     };
 
     let response = ActionExecutionResponse {
@@ -772,6 +839,56 @@ fn parse_action_type(s: &str) -> Option<tw_core::incident::ActionType> {
         "run_search" => Some(ActionType::RunSearch),
         "collect_forensics" => Some(ActionType::CollectForensics),
         _ => Some(ActionType::Custom(s.to_string())),
+    }
+}
+
+/// Converts a tw_core ActionTarget to a tw_policy ActionTarget for policy evaluation.
+fn build_policy_target(target: &tw_core::incident::ActionTarget) -> PolicyActionTarget {
+    use tw_core::incident::ActionTarget;
+
+    match target {
+        ActionTarget::Host { hostname, ip: _ } => PolicyActionTarget {
+            target_type: "host".to_string(),
+            identifier: hostname.clone(),
+            criticality: None,
+            tags: vec![],
+        },
+        ActionTarget::User { username, email: _ } => PolicyActionTarget {
+            target_type: "user".to_string(),
+            identifier: username.clone(),
+            criticality: None,
+            tags: vec![],
+        },
+        ActionTarget::IpAddress(ip) => PolicyActionTarget {
+            target_type: "ip".to_string(),
+            identifier: ip.clone(),
+            criticality: None,
+            tags: vec![],
+        },
+        ActionTarget::Domain(domain) => PolicyActionTarget {
+            target_type: "domain".to_string(),
+            identifier: domain.clone(),
+            criticality: None,
+            tags: vec![],
+        },
+        ActionTarget::Email { message_id } => PolicyActionTarget {
+            target_type: "email".to_string(),
+            identifier: message_id.clone(),
+            criticality: None,
+            tags: vec![],
+        },
+        ActionTarget::Ticket { ticket_id } => PolicyActionTarget {
+            target_type: "ticket".to_string(),
+            identifier: ticket_id.clone(),
+            criticality: None,
+            tags: vec![],
+        },
+        ActionTarget::None => PolicyActionTarget {
+            target_type: "none".to_string(),
+            identifier: String::new(),
+            criticality: None,
+            tags: vec![],
+        },
     }
 }
 

@@ -1,5 +1,6 @@
 //! Application state shared across handlers.
 
+use metrics_exporter_prometheus::PrometheusHandle;
 use std::sync::Arc;
 use tracing::info;
 use tw_core::db::DbPool;
@@ -17,6 +18,8 @@ pub struct AppState {
     pub webhook_secrets: Arc<WebhookSecrets>,
     /// Policy engine for evaluating actions against rules and guardrails.
     pub policy_engine: Arc<PolicyEngine>,
+    /// Prometheus metrics handle for rendering metrics.
+    pub prometheus_handle: Option<Arc<PrometheusHandle>>,
 }
 
 impl AppState {
@@ -33,12 +36,19 @@ impl AppState {
             event_bus: Arc::new(event_bus),
             webhook_secrets: Arc::new(WebhookSecrets::default()),
             policy_engine: Arc::new(policy_engine),
+            prometheus_handle: None,
         }
     }
 
     /// Creates a new application state with webhook secrets.
     pub fn with_webhook_secrets(mut self, secrets: WebhookSecrets) -> Self {
         self.webhook_secrets = Arc::new(secrets);
+        self
+    }
+
+    /// Creates a new application state with Prometheus handle.
+    pub fn with_prometheus_handle(mut self, handle: PrometheusHandle) -> Self {
+        self.prometheus_handle = Some(Arc::new(handle));
         self
     }
 }

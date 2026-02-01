@@ -1,6 +1,13 @@
 //! Metrics endpoints.
 
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{
+    extract::State,
+    http::{header, StatusCode},
+    response::IntoResponse,
+    routing::get,
+    Json, Router,
+};
+use metrics::{counter, describe_counter, describe_histogram, histogram};
 use std::collections::HashMap;
 
 use crate::dto::{ActionMetrics, IncidentMetrics, MetricsResponse, PerformanceMetrics};
@@ -23,34 +30,28 @@ pub fn routes() -> Router<AppState> {
     ),
     tag = "Metrics"
 )]
-async fn prometheus_metrics(State(_state): State<AppState>) -> String {
-    // TODO: Export actual metrics
-    // This would integrate with metrics-exporter-prometheus
-
-    let mut output = String::new();
-
-    output.push_str("# HELP triage_warden_incidents_total Total number of incidents\n");
-    output.push_str("# TYPE triage_warden_incidents_total counter\n");
-    output.push_str("triage_warden_incidents_total 0\n\n");
-
-    output.push_str("# HELP triage_warden_incidents_active Current active incidents\n");
-    output.push_str("# TYPE triage_warden_incidents_active gauge\n");
-    output.push_str("triage_warden_incidents_active 0\n\n");
-
-    output.push_str("# HELP triage_warden_actions_total Total actions executed\n");
-    output.push_str("# TYPE triage_warden_actions_total counter\n");
-    output.push_str("triage_warden_actions_total 0\n\n");
-
-    output.push_str("# HELP triage_warden_triage_duration_seconds Time to triage incidents\n");
-    output.push_str("# TYPE triage_warden_triage_duration_seconds histogram\n");
-    output.push_str("triage_warden_triage_duration_seconds_bucket{le=\"60\"} 0\n");
-    output.push_str("triage_warden_triage_duration_seconds_bucket{le=\"300\"} 0\n");
-    output.push_str("triage_warden_triage_duration_seconds_bucket{le=\"900\"} 0\n");
-    output.push_str("triage_warden_triage_duration_seconds_bucket{le=\"+Inf\"} 0\n");
-    output.push_str("triage_warden_triage_duration_seconds_sum 0\n");
-    output.push_str("triage_warden_triage_duration_seconds_count 0\n");
-
-    output
+pub async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse {
+    match &state.prometheus_handle {
+        Some(handle) => {
+            let metrics = handle.render();
+            (
+                StatusCode::OK,
+                [(
+                    header::CONTENT_TYPE,
+                    "text/plain; version=0.0.4; charset=utf-8",
+                )],
+                metrics,
+            )
+        }
+        None => {
+            // Fallback if Prometheus is not initialized
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+                "Prometheus metrics not initialized".to_string(),
+            )
+        }
+    }
 }
 
 /// JSON metrics endpoint for dashboard.
@@ -107,4 +108,51 @@ async fn json_metrics(State(_state): State<AppState>) -> Result<Json<MetricsResp
             auto_resolution_rate: None,
         },
     }))
+}
+
+/// Registers metric descriptions for Triage Warden.
+/// This should be called once during server initialization.
+pub fn register_metrics() {
+    // Incident counter with labels for severity and status
+    describe_counter!(
+        "triage_warden_incidents_total",
+        "Total number of incidents processed by Triage Warden"
+    );
+
+    // Actions counter with labels for action_type and status
+    describe_counter!(
+        "triage_warden_actions_total",
+        "Total number of actions executed by Triage Warden"
+    );
+
+    // Triage duration histogram
+    describe_histogram!(
+        "triage_warden_triage_duration_seconds",
+        "Time taken to triage incidents in seconds"
+    );
+}
+
+/// Records an incident with the given severity and status.
+pub fn record_incident(severity: &str, status: &str) {
+    counter!(
+        "triage_warden_incidents_total",
+        "severity" => severity.to_string(),
+        "status" => status.to_string()
+    )
+    .increment(1);
+}
+
+/// Records an action with the given action type and status.
+pub fn record_action(action_type: &str, status: &str) {
+    counter!(
+        "triage_warden_actions_total",
+        "action_type" => action_type.to_string(),
+        "status" => status.to_string()
+    )
+    .increment(1);
+}
+
+/// Records triage duration in seconds.
+pub fn record_triage_duration(duration_seconds: f64) {
+    histogram!("triage_warden_triage_duration_seconds").record(duration_seconds);
 }
