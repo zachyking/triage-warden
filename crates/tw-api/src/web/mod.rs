@@ -101,6 +101,7 @@ async fn dashboard(State(state): State<AppState>) -> impl IntoResponse {
         open_count,
         approval_count,
         system_healthy: true,
+        current_user: None, // TODO: Get from session
         metrics,
         recent_incidents,
     };
@@ -188,6 +189,7 @@ async fn incidents_list(
         open_count: nav.open_count,
         approval_count: nav.approval_count,
         system_healthy: true,
+        current_user: None, // TODO: Get from session
         incidents,
         total_count,
         severity_filter: query.severity,
@@ -233,6 +235,7 @@ async fn incident_detail(State(state): State<AppState>, Path(id): Path<Uuid>) ->
                 open_count: nav.open_count,
                 approval_count: nav.approval_count,
                 system_healthy: true,
+                current_user: None, // TODO: Get from session
                 incident: detail,
             };
 
@@ -290,6 +293,7 @@ async fn approvals(State(state): State<AppState>) -> impl IntoResponse {
         open_count: nav.open_count,
         approval_count: pending_actions.len() as u32,
         system_healthy: true,
+        current_user: None, // TODO: Get from session
         pending_actions,
         recent_approvals: vec![],
     };
@@ -334,6 +338,7 @@ async fn playbooks(State(state): State<AppState>) -> impl IntoResponse {
         open_count: nav.open_count,
         approval_count: nav.approval_count,
         system_healthy: true,
+        current_user: None, // TODO: Get from session
         playbooks: playbooks_list,
     };
 
@@ -401,6 +406,7 @@ async fn playbook_detail(State(state): State<AppState>, Path(id): Path<Uuid>) ->
                 open_count: nav.open_count,
                 approval_count: nav.approval_count,
                 system_healthy: true,
+                current_user: None, // TODO: Get from session
                 playbook: detail,
             };
 
@@ -482,6 +488,7 @@ async fn settings(
         open_count: nav.open_count,
         approval_count: nav.approval_count,
         system_healthy: true,
+        current_user: None, // TODO: Get from session
         tab: query.tab,
         settings: settings_data,
         connectors,
@@ -1092,7 +1099,7 @@ fn format_time_ago(dt: chrono::DateTime<chrono::Utc>) -> String {
 // Template Response Wrapper
 // ============================================
 
-struct HtmlTemplate<T>(T);
+pub struct HtmlTemplate<T>(pub T);
 
 impl<T> IntoResponse for HtmlTemplate<T>
 where

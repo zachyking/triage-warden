@@ -5,6 +5,7 @@
 //! This crate provides the central orchestration loop, incident data models,
 //! workflow state machine, and event bus for the Triage Warden system.
 
+pub mod auth;
 pub mod connector;
 pub mod events;
 pub mod incident;
@@ -30,3 +31,9 @@ pub use orchestrator::Orchestrator;
 pub use playbook::{Playbook, PlaybookStage, PlaybookStep};
 pub use policy::{ApprovalLevel, Policy, PolicyAction};
 pub use workflow::{WorkflowEngine, WorkflowState, WorkflowTransition};
+
+// Auth exports
+pub use auth::password::{
+    hash_password, validate_password_strength, verify_password, PasswordError,
+};
+pub use auth::{ApiKey, Role, SessionData, User, UserFilter, UserUpdate};

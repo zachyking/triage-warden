@@ -55,6 +55,22 @@ pub enum ApiError {
     /// Service unavailable (e.g., during shutdown).
     #[error("Service unavailable: {0}")]
     ServiceUnavailable(String),
+
+    /// Invalid login credentials.
+    #[error("Invalid username or password")]
+    InvalidCredentials,
+
+    /// Session expired or invalid.
+    #[error("Session expired")]
+    SessionExpired,
+
+    /// CSRF token validation failed.
+    #[error("CSRF validation failed")]
+    CsrfValidationFailed,
+
+    /// Account is disabled.
+    #[error("Account disabled")]
+    AccountDisabled,
 }
 
 /// JSON error response body.
@@ -87,6 +103,10 @@ impl ApiError {
             ApiError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::InvalidSignature => StatusCode::UNAUTHORIZED,
             ApiError::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+            ApiError::InvalidCredentials => StatusCode::UNAUTHORIZED,
+            ApiError::SessionExpired => StatusCode::UNAUTHORIZED,
+            ApiError::CsrfValidationFailed => StatusCode::FORBIDDEN,
+            ApiError::AccountDisabled => StatusCode::FORBIDDEN,
         }
     }
 
@@ -104,6 +124,10 @@ impl ApiError {
             ApiError::Database(_) => "DATABASE_ERROR",
             ApiError::InvalidSignature => "INVALID_SIGNATURE",
             ApiError::ServiceUnavailable(_) => "SERVICE_UNAVAILABLE",
+            ApiError::InvalidCredentials => "INVALID_CREDENTIALS",
+            ApiError::SessionExpired => "SESSION_EXPIRED",
+            ApiError::CsrfValidationFailed => "CSRF_VALIDATION_FAILED",
+            ApiError::AccountDisabled => "ACCOUNT_DISABLED",
         }
     }
 }

@@ -4,11 +4,14 @@ use axum::{middleware, Router};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
+use time::Duration as TimeDuration;
 use tokio::net::TcpListener;
 use tokio::signal;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
+use tower_sessions::{cookie::SameSite, Expiry, SessionManagerLayer};
+use tower_sessions_sqlx_store::SqliteStore;
 use tracing::info;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -32,6 +35,12 @@ pub struct ApiServerConfig {
     pub enable_swagger: bool,
     /// Shutdown timeout for graceful shutdown.
     pub shutdown_timeout: Duration,
+    /// Session cookie name.
+    pub session_cookie_name: String,
+    /// Session expiry in seconds.
+    pub session_expiry_seconds: i64,
+    /// Whether to require secure cookies (HTTPS only).
+    pub session_secure: bool,
 }
 
 impl Default for ApiServerConfig {
@@ -41,6 +50,9 @@ impl Default for ApiServerConfig {
             request_timeout: Duration::from_secs(30),
             enable_swagger: true,
             shutdown_timeout: Duration::from_secs(30),
+            session_cookie_name: "tw_session".to_string(),
+            session_expiry_seconds: 24 * 60 * 60, // 24 hours
+            session_secure: false,                // Set to true in production with HTTPS
         }
     }
 }
@@ -106,17 +118,42 @@ pub struct ApiDoc;
 pub struct ApiServer {
     config: ApiServerConfig,
     state: AppState,
+    session_store: Option<SqliteStore>,
 }
 
 impl ApiServer {
     /// Creates a new API server.
     pub fn new(state: AppState, config: ApiServerConfig) -> Self {
-        Self { config, state }
+        Self {
+            config,
+            state,
+            session_store: None,
+        }
     }
 
     /// Creates a new API server with default configuration.
     pub fn with_state(state: AppState) -> Self {
         Self::new(state, ApiServerConfig::default())
+    }
+
+    /// Sets up the session store. Must be called before running the server.
+    pub async fn with_session_store(mut self) -> Result<Self, Box<dyn std::error::Error>> {
+        // Get the SQLite pool from DbPool
+        let sqlite_pool = match &*self.state.db {
+            tw_core::db::DbPool::Sqlite(pool) => pool.clone(),
+            tw_core::db::DbPool::Postgres(_) => {
+                return Err("Session store only supports SQLite currently".into());
+            }
+        };
+
+        // Create the session store
+        let session_store = SqliteStore::new(sqlite_pool);
+
+        // Run migrations to create the sessions table
+        session_store.migrate().await?;
+
+        self.session_store = Some(session_store);
+        Ok(self)
     }
 
     /// Builds the router.
@@ -144,7 +181,7 @@ impl ApiServer {
         app = app.nest_service("/static", ServeDir::new(static_path));
 
         // Apply middleware (order matters: innermost first)
-        app
+        app = app
             // Security headers
             .layer(middleware::from_fn(security_headers))
             // Request logging
@@ -156,7 +193,24 @@ impl ApiServer {
             // CORS
             .layer(cors_layer())
             // Catch panics and return 500
-            .layer(CatchPanicLayer::new())
+            .layer(CatchPanicLayer::new());
+
+        // Add session layer if session store is configured
+        if let Some(session_store) = &self.session_store {
+            let cookie_name = self.config.session_cookie_name.clone();
+            let session_layer = SessionManagerLayer::new(session_store.clone())
+                .with_name(cookie_name)
+                .with_expiry(Expiry::OnInactivity(TimeDuration::seconds(
+                    self.config.session_expiry_seconds,
+                )))
+                .with_same_site(SameSite::Lax)
+                .with_secure(self.config.session_secure)
+                .with_http_only(true);
+
+            app = app.layer(session_layer);
+        }
+
+        app
     }
 
     /// Runs the server.

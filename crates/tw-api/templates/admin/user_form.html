@@ -1,0 +1,184 @@
+<!-- Add/Edit User Modal -->
+<div class="modal-backdrop" onclick="if (event.target === this) this.remove()">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 class="modal-title">{% if is_edit %}Edit User{% else %}Add User{% endif %}</h2>
+      <button class="modal-close" onclick="this.closest('.modal-backdrop').remove()" aria-label="Close">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <form
+      {% if is_edit %}
+      hx-put="/api/admin/users/{{ user_id.unwrap() }}"
+      {% else %}
+      hx-post="/api/admin/users"
+      {% endif %}
+      hx-target="#users-table-container"
+      hx-swap="innerHTML"
+    >
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+      <div class="modal-body">
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="username" class="form-label">Username</label>
+            <input
+              type="text"
+              id="username"
+              name="username"
+              class="form-input"
+              placeholder="johndoe"
+              value="{{ username.as_deref().unwrap_or("") }}"
+              required
+              minlength="3"
+              maxlength="50"
+            >
+          </div>
+
+          <div class="form-group">
+            <label for="email" class="form-label">Email</label>
+            <input
+              type="email"
+              id="email"
+              name="email"
+              class="form-input"
+              placeholder="john@example.com"
+              value="{{ email.as_deref().unwrap_or("") }}"
+              required
+            >
+          </div>
+
+          <div class="form-group">
+            <label for="display_name" class="form-label">Display Name</label>
+            <input
+              type="text"
+              id="display_name"
+              name="display_name"
+              class="form-input"
+              placeholder="John Doe"
+              value="{{ display_name.as_deref().unwrap_or("") }}"
+            >
+          </div>
+
+          <div class="form-group">
+            <label for="role" class="form-label">Role</label>
+            <select id="role" name="role" class="form-select" required>
+              <option value="viewer" {% if role.as_deref() == Some("viewer") %}selected{% endif %}>Viewer</option>
+              <option value="analyst" {% if role.as_deref() == Some("analyst") %}selected{% endif %}>Analyst</option>
+              <option value="admin" {% if role.as_deref() == Some("admin") %}selected{% endif %}>Admin</option>
+            </select>
+            <div class="form-help">
+              <strong>Viewer:</strong> Read-only access<br>
+              <strong>Analyst:</strong> Can act on incidents<br>
+              <strong>Admin:</strong> Full system access
+            </div>
+          </div>
+
+          {% if !is_edit %}
+          <div class="form-group form-group-full">
+            <label for="password" class="form-label">Password</label>
+            <input
+              type="password"
+              id="password"
+              name="password"
+              class="form-input"
+              placeholder="Min 8 characters, mixed case + number"
+              required
+              minlength="8"
+            >
+            <div class="form-help">
+              Must be at least 8 characters with uppercase, lowercase, and a digit.
+            </div>
+          </div>
+          {% endif %}
+
+          {% if is_edit %}
+          <div class="form-group">
+            <label class="form-label">Status</label>
+            <label class="toggle">
+              <input type="checkbox" name="enabled" value="true" {% if enabled.unwrap_or(true) %}checked{% endif %}>
+              <span class="toggle-slider"></span>
+              <span class="toggle-label">Account Enabled</span>
+            </label>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="this.closest('.modal-backdrop').remove()">
+          Cancel
+        </button>
+        <button type="submit" class="btn btn-primary">
+          {% if is_edit %}Save Changes{% else %}Create User{% endif %}
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<style>
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+}
+
+.form-group-full {
+  grid-column: 1 / -1;
+}
+
+.form-help {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  margin-top: 0.5rem;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  cursor: pointer;
+}
+
+.toggle input {
+  display: none;
+}
+
+.toggle-slider {
+  width: 44px;
+  height: 24px;
+  background: var(--bg-tertiary);
+  border-radius: 9999px;
+  position: relative;
+  transition: background-color 0.2s;
+}
+
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: white;
+  top: 3px;
+  left: 3px;
+  transition: transform 0.2s;
+}
+
+.toggle input:checked + .toggle-slider {
+  background: var(--accent-primary);
+}
+
+.toggle input:checked + .toggle-slider::before {
+  transform: translateX(20px);
+}
+
+.toggle-label {
+  font-size: 0.875rem;
+  color: var(--text-primary);
+}
+</style>

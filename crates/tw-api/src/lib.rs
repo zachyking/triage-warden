@@ -5,6 +5,7 @@
 //! This crate provides the HTTP API for incident management, webhook ingestion,
 //! and real-time updates via WebSocket.
 
+pub mod auth;
 pub mod dto;
 pub mod error;
 pub mod middleware;

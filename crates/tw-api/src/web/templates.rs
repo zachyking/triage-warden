@@ -4,6 +4,18 @@ use askama::Template;
 use uuid::Uuid;
 
 // ============================================
+// User Info (for navigation display)
+// ============================================
+
+/// User information for template display.
+#[derive(Clone)]
+pub struct CurrentUserInfo {
+    pub username: String,
+    pub display_name: Option<String>,
+    pub role: String,
+}
+
+// ============================================
 // Dashboard
 // ============================================
 
@@ -15,6 +27,7 @@ pub struct DashboardTemplate {
     pub open_count: u32,
     pub approval_count: u32,
     pub system_healthy: bool,
+    pub current_user: Option<CurrentUserInfo>,
     pub metrics: DashboardMetrics,
     pub recent_incidents: Vec<IncidentRow>,
 }
@@ -44,6 +57,7 @@ pub struct IncidentsListTemplate {
     pub open_count: u32,
     pub approval_count: u32,
     pub system_healthy: bool,
+    pub current_user: Option<CurrentUserInfo>,
     pub incidents: Vec<IncidentRow>,
     pub total_count: u32,
     pub severity_filter: String,
@@ -76,6 +90,7 @@ pub struct IncidentDetailTemplate {
     pub open_count: u32,
     pub approval_count: u32,
     pub system_healthy: bool,
+    pub current_user: Option<CurrentUserInfo>,
     pub incident: IncidentDetail,
 }
 
@@ -149,6 +164,7 @@ pub struct ApprovalsTemplate {
     pub open_count: u32,
     pub approval_count: u32,
     pub system_healthy: bool,
+    pub current_user: Option<CurrentUserInfo>,
     pub pending_actions: Vec<PendingAction>,
     pub recent_approvals: Vec<RecentApproval>,
 }
@@ -188,6 +204,7 @@ pub struct PlaybooksTemplate {
     pub open_count: u32,
     pub approval_count: u32,
     pub system_healthy: bool,
+    pub current_user: Option<CurrentUserInfo>,
     pub playbooks: Vec<PlaybookData>,
 }
 
@@ -209,6 +226,7 @@ pub struct PlaybookDetailTemplate {
     pub open_count: u32,
     pub approval_count: u32,
     pub system_healthy: bool,
+    pub current_user: Option<CurrentUserInfo>,
     pub playbook: PlaybookDetailData,
 }
 
@@ -252,6 +270,7 @@ pub struct SettingsTemplate {
     pub open_count: u32,
     pub approval_count: u32,
     pub system_healthy: bool,
+    pub current_user: Option<CurrentUserInfo>,
     pub tab: String,
     pub settings: SettingsData,
     pub connectors: Vec<ConnectorData>,

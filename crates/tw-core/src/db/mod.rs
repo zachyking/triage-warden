@@ -13,7 +13,9 @@ pub mod incident_repo;
 pub mod notification_repo;
 pub mod playbook_repo;
 pub mod policy_repo;
+pub mod seed;
 pub mod settings_repo;
+pub mod user_repo;
 
 pub use error::DbError;
 pub use pool::{create_pool, create_pool_with_options, DbPool, PoolOptions};
@@ -27,6 +29,7 @@ pub use notification_repo::NotificationChannelRepository;
 pub use playbook_repo::{PlaybookFilter, PlaybookRepository, PlaybookUpdate};
 pub use policy_repo::{PolicyRepository, PolicyUpdate};
 pub use settings_repo::{GeneralSettings, RateLimits, SettingsRepository};
+pub use user_repo::UserRepository;
 
 // Re-export factory functions
 pub use audit_repo::create_audit_repository;
@@ -36,3 +39,6 @@ pub use notification_repo::create_notification_repository;
 pub use playbook_repo::create_playbook_repository;
 pub use policy_repo::create_policy_repository;
 pub use settings_repo::create_settings_repository;
+pub use user_repo::create_user_repository;
+
+pub use seed::ensure_admin_user;

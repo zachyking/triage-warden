@@ -1,5 +1,6 @@
 //! API routes.
 
+pub mod auth;
 pub mod connectors;
 pub mod health;
 pub mod incidents;
@@ -8,6 +9,7 @@ pub mod notifications;
 pub mod playbooks;
 pub mod policies;
 pub mod settings;
+pub mod users;
 pub mod webhooks;
 
 use crate::state::AppState;
@@ -19,12 +21,14 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api", api_routes())
         .merge(health::routes())
         .merge(metrics::routes())
+        .merge(auth::routes())
         .with_state(state)
 }
 
 /// API routes under /api prefix.
 fn api_routes() -> Router<AppState> {
     Router::new()
+        .nest("/admin/users", users::routes())
         .nest("/connectors", connectors::routes())
         .nest("/incidents", incidents::routes())
         .nest("/notifications", notifications::routes())
