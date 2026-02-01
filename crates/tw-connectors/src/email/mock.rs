@@ -441,6 +441,7 @@ impl EmailGatewayConnector for MockEmailGatewayConnector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TimeRange;
 
     #[tokio::test]
     async fn test_search_emails() {
