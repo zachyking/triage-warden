@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use tw_api::{ApiServer, ApiServerConfig, AppState};
-use tw_core::db::{create_pool, run_migrations};
+use tw_core::db::{create_pool, run_migrations, seed::ensure_admin_user};
 use tw_core::EventBus;
 
 use crate::config::AppConfig;
@@ -54,6 +54,27 @@ pub async fn run_server(config: ServeConfig, _app_config: AppConfig) -> Result<(
         .context("Failed to run database migrations")?;
 
     println!("  {} Migrations complete", "✓".green());
+
+    // Seed admin user if needed
+    match ensure_admin_user(&db_pool).await {
+        Ok(Some(password)) => {
+            println!();
+            println!("  {} Created default admin user", "✓".green());
+            println!("  {} Username: {}", "→".cyan(), "admin".bold());
+            println!("  {} Password: {}", "→".cyan(), password.yellow().bold());
+            println!(
+                "  {} (Set TW_ADMIN_PASSWORD env var to use a specific password)",
+                "ℹ".blue()
+            );
+            println!();
+        }
+        Ok(None) => {
+            // Admin already exists, nothing to do
+        }
+        Err(e) => {
+            println!("  {} Failed to seed admin user: {}", "⚠".yellow(), e);
+        }
+    }
 
     // Create event bus
     let event_bus = EventBus::new(1024);
@@ -107,8 +128,16 @@ pub async fn run_server(config: ServeConfig, _app_config: AppConfig) -> Result<(
     println!();
 
     // Create and run server
-    let server = ApiServer::new(state, server_config);
-    server.run().await.context("Server error")?;
+    let server = ApiServer::new(state, server_config)
+        .with_prometheus()
+        .with_session_store()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to initialize session store: {}", e))?;
+
+    server
+        .run()
+        .await
+        .map_err(|e| anyhow::anyhow!("Server error: {}", e))?;
 
     println!();
     println!("{} Server stopped", "[server]".cyan());
