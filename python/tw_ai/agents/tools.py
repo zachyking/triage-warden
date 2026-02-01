@@ -952,7 +952,7 @@ def create_triage_tools() -> ToolRegistry:
     # SIEM Tools
     # ========================================================================
 
-    async def search_siem(query: str, hours: int = 24, limit: int = 100) -> dict[str, Any]:
+    async def search_siem(query: str, hours: int = 24, limit: int = 100) -> ToolResult:
         """Search SIEM logs using the bridge or mock fallback.
 
         Args:
@@ -961,17 +961,18 @@ def create_triage_tools() -> ToolRegistry:
             limit: Maximum number of events to return (default: 100)
 
         Returns:
-            dict containing:
+            ToolResult with data containing:
                 - events: List of matching events (formatted for LLM readability)
                 - events_raw: List of raw event data
                 - total_count: Total number of matching events
                 - search_stats: Search execution statistics
-                - source: Data source identifier
+                - is_mock: Whether mock data was used
         """
+        start_time = time.perf_counter()
         bridge = get_siem_bridge()
 
-        if bridge is not None:
-            try:
+        try:
+            if bridge is not None:
                 logger.debug("search_siem_bridge", query=query, hours=hours, limit=limit)
                 result = bridge.search(query, hours)
 
@@ -993,34 +994,46 @@ def create_triage_tools() -> ToolRegistry:
                     "events_returned": len(raw_events),
                 }
 
-                return {
-                    "events": formatted_events,
-                    "events_raw": raw_events,
-                    "total_count": total_count,
-                    "search_stats": search_stats,
-                    "source": "siem_bridge",
-                }
-            except Exception as e:
-                logger.error("search_siem_bridge_error", error=str(e), query=query)
-                # Fall through to mock
+                execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                return ToolResult.ok(
+                    data={
+                        "events": formatted_events,
+                        "events_raw": raw_events,
+                        "total_count": total_count,
+                        "search_stats": search_stats,
+                        "is_mock": False,
+                    },
+                    execution_time_ms=execution_time_ms,
+                )
 
-        # Mock fallback
-        logger.debug("search_siem_mock", query=query, hours=hours, limit=limit)
-        return {
-            "events": [],
-            "events_raw": [],
-            "total_count": 0,
-            "search_stats": {
-                "search_id": "mock-search",
-                "execution_time_ms": 0,
-                "events_scanned": 0,
-                "query": query,
-                "timerange_hours": hours,
-                "limit_applied": limit,
-                "events_returned": 0,
-            },
-            "source": "mock",
-        }
+            # Mock fallback
+            logger.debug("search_siem_mock", query=query, hours=hours, limit=limit)
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            return ToolResult.ok(
+                data={
+                    "events": [],
+                    "events_raw": [],
+                    "total_count": 0,
+                    "search_stats": {
+                        "search_id": "mock-search",
+                        "execution_time_ms": 0,
+                        "events_scanned": 0,
+                        "query": query,
+                        "timerange_hours": hours,
+                        "limit_applied": limit,
+                        "events_returned": 0,
+                    },
+                    "is_mock": True,
+                },
+                execution_time_ms=execution_time_ms,
+            )
+        except Exception as e:
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error("search_siem_failed", query=query, error=str(e))
+            return ToolResult.fail(
+                error=f"SIEM search failed: {str(e)}",
+                execution_time_ms=execution_time_ms,
+            )
 
     registry.register(
         Tool(
@@ -1057,47 +1070,60 @@ def create_triage_tools() -> ToolRegistry:
         )
     )
 
-    async def get_recent_alerts(limit: int = 10) -> dict[str, Any]:
+    async def get_recent_alerts(limit: int = 10) -> ToolResult:
         """Get recent alerts from the SIEM using the bridge or mock fallback.
 
         Args:
             limit: Maximum number of alerts to return (default: 10)
 
         Returns:
-            dict containing:
+            ToolResult with data containing:
                 - alerts: List of alert summaries (formatted for LLM readability)
                 - alerts_raw: List of raw alert data
                 - total_count: Total number of alerts returned
-                - source: Data source identifier
+                - is_mock: Whether mock data was used
         """
+        start_time = time.perf_counter()
         bridge = get_siem_bridge()
 
-        if bridge is not None:
-            try:
+        try:
+            if bridge is not None:
                 logger.debug("get_recent_alerts_bridge", limit=limit)
                 raw_alerts = bridge.get_recent_alerts(limit)
 
                 # Format alerts for LLM readability
                 formatted_alerts = [_format_alert_for_llm(a) for a in raw_alerts]
 
-                return {
-                    "alerts": formatted_alerts,
-                    "alerts_raw": raw_alerts,
-                    "total_count": len(raw_alerts),
-                    "source": "siem_bridge",
-                }
-            except Exception as e:
-                logger.error("get_recent_alerts_bridge_error", error=str(e))
-                # Fall through to mock
+                execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                return ToolResult.ok(
+                    data={
+                        "alerts": formatted_alerts,
+                        "alerts_raw": raw_alerts,
+                        "total_count": len(raw_alerts),
+                        "is_mock": False,
+                    },
+                    execution_time_ms=execution_time_ms,
+                )
 
-        # Mock fallback
-        logger.debug("get_recent_alerts_mock", limit=limit)
-        return {
-            "alerts": [],
-            "alerts_raw": [],
-            "total_count": 0,
-            "source": "mock",
-        }
+            # Mock fallback
+            logger.debug("get_recent_alerts_mock", limit=limit)
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            return ToolResult.ok(
+                data={
+                    "alerts": [],
+                    "alerts_raw": [],
+                    "total_count": 0,
+                    "is_mock": True,
+                },
+                execution_time_ms=execution_time_ms,
+            )
+        except Exception as e:
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error("get_recent_alerts_failed", error=str(e))
+            return ToolResult.fail(
+                error=f"Get recent alerts failed: {str(e)}",
+                execution_time_ms=execution_time_ms,
+            )
 
     registry.register(
         Tool(
@@ -1126,39 +1152,53 @@ def create_triage_tools() -> ToolRegistry:
     # EDR Tools - Use bridge when available, fallback to mock
     # ========================================================================
 
-    async def get_host_info(hostname: str) -> dict[str, Any]:
+    async def get_host_info(hostname: str) -> ToolResult:
         """Get host information from EDR.
 
         Returns host details including OS, status, and isolation state.
         Uses the PyO3 bridge when available, otherwise returns mock data.
         """
+        start_time = time.perf_counter()
         bridge = get_edr_bridge()
-        if bridge is not None:
-            try:
+
+        try:
+            if bridge is not None:
                 result = bridge.get_host_info(hostname)
                 # Format for LLM readability
-                return _format_host_info_for_llm(result)
-            except Exception as e:
-                logger.warning(
-                    "EDR bridge get_host_info failed, using mock",
-                    hostname=hostname,
-                    error=str(e),
+                formatted = _format_host_info_for_llm(result)
+                formatted["is_mock"] = False
+
+                execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                return ToolResult.ok(
+                    data=formatted,
+                    execution_time_ms=execution_time_ms,
                 )
 
-        # Mock fallback
-        return {
-            "hostname": hostname,
-            "host_id": f"mock-{hostname}",
-            "ip_addresses": ["192.168.1.100"],
-            "os": "Windows 10 Enterprise",
-            "os_version": "10.0.19044",
-            "status": "online",
-            "isolated": False,
-            "last_seen": "2025-01-29T10:30:00Z",
-            "agent_version": "7.0.0",
-            "tags": ["workstation", "finance"],
-            "source": "mock",
-        }
+            # Mock fallback
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            return ToolResult.ok(
+                data={
+                    "hostname": hostname,
+                    "host_id": f"mock-{hostname}",
+                    "ip_addresses": ["192.168.1.100"],
+                    "os": "Windows 10 Enterprise",
+                    "os_version": "10.0.19044",
+                    "status": "online",
+                    "isolated": False,
+                    "last_seen": "2025-01-29T10:30:00Z",
+                    "agent_version": "7.0.0",
+                    "tags": ["workstation", "finance"],
+                    "is_mock": True,
+                },
+                execution_time_ms=execution_time_ms,
+            )
+        except Exception as e:
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error("get_host_info_failed", hostname=hostname, error=str(e))
+            return ToolResult.fail(
+                error=f"Get host info failed: {str(e)}",
+                execution_time_ms=execution_time_ms,
+            )
 
     def _format_host_info_for_llm(data: dict[str, Any]) -> dict[str, Any]:
         """Format host info for LLM readability."""
@@ -1200,58 +1240,73 @@ def create_triage_tools() -> ToolRegistry:
         )
     )
 
-    async def get_detections(hostname: str, hours: int = 24) -> dict[str, Any]:
+    async def get_detections(hostname: str, hours: int = 24) -> ToolResult:
         """Get recent detections/alerts for a host.
 
         Returns detections with severity, MITRE techniques, and process info.
         """
+        start_time = time.perf_counter()
         bridge = get_edr_bridge()
-        if bridge is not None:
-            try:
+
+        try:
+            if bridge is not None:
                 result = bridge.get_detections(hostname)
-                return _format_detections_for_llm(result, hostname)
-            except Exception as e:
-                logger.warning(
-                    "EDR bridge get_detections failed, using mock",
-                    hostname=hostname,
-                    error=str(e),
+                formatted = _format_detections_for_llm(result, hostname)
+                formatted["timerange_hours"] = hours
+                formatted["is_mock"] = False
+
+                execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                return ToolResult.ok(
+                    data=formatted,
+                    execution_time_ms=execution_time_ms,
                 )
 
-        # Mock fallback with realistic detection data
-        return {
-            "hostname": hostname,
-            "timerange_hours": hours,
-            "total_count": 2,
-            "detections": [
-                {
-                    "id": "det-001",
-                    "name": "Suspicious PowerShell Execution",
-                    "severity": "high",
-                    "timestamp": "2025-01-29T09:15:00Z",
-                    "description": "PowerShell executing encoded command",
-                    "tactic": "Execution",
-                    "technique": "T1059.001",
-                    "technique_name": "PowerShell",
-                    "process_name": "powershell.exe",
-                    "file_hash": "abc123def456",
-                    "status": "new",
+            # Mock fallback with realistic detection data
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            return ToolResult.ok(
+                data={
+                    "hostname": hostname,
+                    "timerange_hours": hours,
+                    "total_count": 2,
+                    "detections": [
+                        {
+                            "id": "det-001",
+                            "name": "Suspicious PowerShell Execution",
+                            "severity": "high",
+                            "timestamp": "2025-01-29T09:15:00Z",
+                            "description": "PowerShell executing encoded command",
+                            "tactic": "Execution",
+                            "technique": "T1059.001",
+                            "technique_name": "PowerShell",
+                            "process_name": "powershell.exe",
+                            "file_hash": "abc123def456",
+                            "status": "new",
+                        },
+                        {
+                            "id": "det-002",
+                            "name": "Credential Access Attempt",
+                            "severity": "critical",
+                            "timestamp": "2025-01-29T09:20:00Z",
+                            "description": "LSASS memory access detected",
+                            "tactic": "Credential Access",
+                            "technique": "T1003.001",
+                            "technique_name": "LSASS Memory",
+                            "process_name": "mimikatz.exe",
+                            "file_hash": "fed987cba654",
+                            "status": "new",
+                        },
+                    ],
+                    "is_mock": True,
                 },
-                {
-                    "id": "det-002",
-                    "name": "Credential Access Attempt",
-                    "severity": "critical",
-                    "timestamp": "2025-01-29T09:20:00Z",
-                    "description": "LSASS memory access detected",
-                    "tactic": "Credential Access",
-                    "technique": "T1003.001",
-                    "technique_name": "LSASS Memory",
-                    "process_name": "mimikatz.exe",
-                    "file_hash": "fed987cba654",
-                    "status": "new",
-                },
-            ],
-            "source": "mock",
-        }
+                execution_time_ms=execution_time_ms,
+            )
+        except Exception as e:
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error("get_detections_failed", hostname=hostname, error=str(e))
+            return ToolResult.fail(
+                error=f"Get detections failed: {str(e)}",
+                execution_time_ms=execution_time_ms,
+            )
 
     def _format_detections_for_llm(data: list[dict], hostname: str) -> dict[str, Any]:
         """Format detections for LLM readability."""
@@ -1306,82 +1361,96 @@ def create_triage_tools() -> ToolRegistry:
         )
     )
 
-    async def get_processes(hostname: str, hours: int = 24) -> dict[str, Any]:
+    async def get_processes(hostname: str, hours: int = 24) -> ToolResult:
         """Get process list for a host.
 
         Returns running processes with name, command line, user, and parent info.
         """
+        start_time = time.perf_counter()
         bridge = get_edr_bridge()
-        if bridge is not None:
-            try:
+
+        try:
+            if bridge is not None:
                 result = bridge.get_processes(hostname, hours)
-                return _format_processes_for_llm(result, hostname, hours)
-            except Exception as e:
-                logger.warning(
-                    "EDR bridge get_processes failed, using mock",
-                    hostname=hostname,
-                    error=str(e),
+                formatted = _format_processes_for_llm(result, hostname, hours)
+                formatted["is_mock"] = False
+
+                execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                return ToolResult.ok(
+                    data=formatted,
+                    execution_time_ms=execution_time_ms,
                 )
 
-        # Mock fallback with realistic process data
-        return {
-            "hostname": hostname,
-            "timerange_hours": hours,
-            "total_count": 5,
-            "processes": [
-                {
-                    "pid": 1234,
-                    "name": "powershell.exe",
-                    "command_line": "powershell.exe -enc SQBFAFgA...",
-                    "user": "DOMAIN\\user1",
-                    "parent_pid": 5678,
-                    "parent_name": "cmd.exe",
-                    "start_time": "2025-01-29T09:14:30Z",
-                    "hash": "abc123",
+            # Mock fallback with realistic process data
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            return ToolResult.ok(
+                data={
+                    "hostname": hostname,
+                    "timerange_hours": hours,
+                    "total_count": 5,
+                    "processes": [
+                        {
+                            "pid": 1234,
+                            "name": "powershell.exe",
+                            "command_line": "powershell.exe -enc SQBFAFgA...",
+                            "user": "DOMAIN\\user1",
+                            "parent_pid": 5678,
+                            "parent_name": "cmd.exe",
+                            "start_time": "2025-01-29T09:14:30Z",
+                            "hash": "abc123",
+                        },
+                        {
+                            "pid": 5678,
+                            "name": "cmd.exe",
+                            "command_line": "cmd.exe /c powershell",
+                            "user": "DOMAIN\\user1",
+                            "parent_pid": 9999,
+                            "parent_name": "explorer.exe",
+                            "start_time": "2025-01-29T09:14:00Z",
+                            "hash": "def456",
+                        },
+                        {
+                            "pid": 2468,
+                            "name": "mimikatz.exe",
+                            "command_line": "mimikatz.exe sekurlsa::logonpasswords",
+                            "user": "DOMAIN\\user1",
+                            "parent_pid": 1234,
+                            "parent_name": "powershell.exe",
+                            "start_time": "2025-01-29T09:19:00Z",
+                            "hash": "fed987",
+                        },
+                        {
+                            "pid": 9999,
+                            "name": "explorer.exe",
+                            "command_line": "C:\\Windows\\explorer.exe",
+                            "user": "DOMAIN\\user1",
+                            "parent_pid": 1,
+                            "parent_name": "System",
+                            "start_time": "2025-01-29T08:00:00Z",
+                            "hash": "ghijkl",
+                        },
+                        {
+                            "pid": 3456,
+                            "name": "chrome.exe",
+                            "command_line": "C:\\Program Files\\Google\\Chrome\\chrome.exe",
+                            "user": "DOMAIN\\user1",
+                            "parent_pid": 9999,
+                            "parent_name": "explorer.exe",
+                            "start_time": "2025-01-29T08:30:00Z",
+                            "hash": "mnopqr",
+                        },
+                    ],
+                    "is_mock": True,
                 },
-                {
-                    "pid": 5678,
-                    "name": "cmd.exe",
-                    "command_line": "cmd.exe /c powershell",
-                    "user": "DOMAIN\\user1",
-                    "parent_pid": 9999,
-                    "parent_name": "explorer.exe",
-                    "start_time": "2025-01-29T09:14:00Z",
-                    "hash": "def456",
-                },
-                {
-                    "pid": 2468,
-                    "name": "mimikatz.exe",
-                    "command_line": "mimikatz.exe sekurlsa::logonpasswords",
-                    "user": "DOMAIN\\user1",
-                    "parent_pid": 1234,
-                    "parent_name": "powershell.exe",
-                    "start_time": "2025-01-29T09:19:00Z",
-                    "hash": "fed987",
-                },
-                {
-                    "pid": 9999,
-                    "name": "explorer.exe",
-                    "command_line": "C:\\Windows\\explorer.exe",
-                    "user": "DOMAIN\\user1",
-                    "parent_pid": 1,
-                    "parent_name": "System",
-                    "start_time": "2025-01-29T08:00:00Z",
-                    "hash": "ghijkl",
-                },
-                {
-                    "pid": 3456,
-                    "name": "chrome.exe",
-                    "command_line": "C:\\Program Files\\Google\\Chrome\\chrome.exe",
-                    "user": "DOMAIN\\user1",
-                    "parent_pid": 9999,
-                    "parent_name": "explorer.exe",
-                    "start_time": "2025-01-29T08:30:00Z",
-                    "hash": "mnopqr",
-                },
-            ],
-            "source": "mock",
-        }
+                execution_time_ms=execution_time_ms,
+            )
+        except Exception as e:
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error("get_processes_failed", hostname=hostname, error=str(e))
+            return ToolResult.fail(
+                error=f"Get processes failed: {str(e)}",
+                execution_time_ms=execution_time_ms,
+            )
 
     def _format_processes_for_llm(data: list[dict], hostname: str, hours: int) -> dict[str, Any]:
         """Format process list for LLM readability."""
@@ -1434,92 +1503,106 @@ def create_triage_tools() -> ToolRegistry:
         )
     )
 
-    async def get_network_connections(hostname: str, hours: int = 24) -> dict[str, Any]:
+    async def get_network_connections(hostname: str, hours: int = 24) -> ToolResult:
         """Get network connections for a host.
 
         Returns connections with destination IP, port, and associated process.
         """
+        start_time = time.perf_counter()
         bridge = get_edr_bridge()
-        if bridge is not None:
-            try:
+
+        try:
+            if bridge is not None:
                 result = bridge.get_network_connections(hostname, hours)
-                return _format_network_connections_for_llm(result, hostname, hours)
-            except Exception as e:
-                logger.warning(
-                    "EDR bridge get_network_connections failed, using mock",
-                    hostname=hostname,
-                    error=str(e),
+                formatted = _format_network_connections_for_llm(result, hostname, hours)
+                formatted["is_mock"] = False
+
+                execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                return ToolResult.ok(
+                    data=formatted,
+                    execution_time_ms=execution_time_ms,
                 )
 
-        # Mock fallback with realistic network data
-        return {
-            "hostname": hostname,
-            "timerange_hours": hours,
-            "total_count": 4,
-            "connections": [
-                {
-                    "timestamp": "2025-01-29T09:15:30Z",
-                    "direction": "outbound",
-                    "protocol": "TCP",
-                    "local_ip": "192.168.1.100",
-                    "local_port": 49152,
-                    "remote_ip": "203.0.113.50",
-                    "remote_port": 443,
-                    "remote_hostname": "c2.evil.com",
-                    "process_name": "powershell.exe",
-                    "process_pid": 1234,
-                    "bytes_sent": 15000,
-                    "bytes_received": 250000,
-                    "status": "established",
+            # Mock fallback with realistic network data
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            return ToolResult.ok(
+                data={
+                    "hostname": hostname,
+                    "timerange_hours": hours,
+                    "total_count": 4,
+                    "connections": [
+                        {
+                            "timestamp": "2025-01-29T09:15:30Z",
+                            "direction": "outbound",
+                            "protocol": "TCP",
+                            "local_ip": "192.168.1.100",
+                            "local_port": 49152,
+                            "remote_ip": "203.0.113.50",
+                            "remote_port": 443,
+                            "remote_hostname": "c2.evil.com",
+                            "process_name": "powershell.exe",
+                            "process_pid": 1234,
+                            "bytes_sent": 15000,
+                            "bytes_received": 250000,
+                            "status": "established",
+                        },
+                        {
+                            "timestamp": "2025-01-29T09:16:00Z",
+                            "direction": "outbound",
+                            "protocol": "TCP",
+                            "local_ip": "192.168.1.100",
+                            "local_port": 49153,
+                            "remote_ip": "198.51.100.25",
+                            "remote_port": 8443,
+                            "remote_hostname": "exfil.malware.net",
+                            "process_name": "mimikatz.exe",
+                            "process_pid": 2468,
+                            "bytes_sent": 500000,
+                            "bytes_received": 1000,
+                            "status": "closed",
+                        },
+                        {
+                            "timestamp": "2025-01-29T08:30:00Z",
+                            "direction": "outbound",
+                            "protocol": "TCP",
+                            "local_ip": "192.168.1.100",
+                            "local_port": 49100,
+                            "remote_ip": "142.250.185.206",
+                            "remote_port": 443,
+                            "remote_hostname": "www.google.com",
+                            "process_name": "chrome.exe",
+                            "process_pid": 3456,
+                            "bytes_sent": 50000,
+                            "bytes_received": 1500000,
+                            "status": "established",
+                        },
+                        {
+                            "timestamp": "2025-01-29T09:00:00Z",
+                            "direction": "inbound",
+                            "protocol": "TCP",
+                            "local_ip": "192.168.1.100",
+                            "local_port": 445,
+                            "remote_ip": "192.168.1.50",
+                            "remote_port": 52100,
+                            "remote_hostname": "admin-workstation",
+                            "process_name": "System",
+                            "process_pid": 4,
+                            "bytes_sent": 0,
+                            "bytes_received": 1500,
+                            "status": "closed",
+                        },
+                    ],
+                    "is_mock": True,
                 },
-                {
-                    "timestamp": "2025-01-29T09:16:00Z",
-                    "direction": "outbound",
-                    "protocol": "TCP",
-                    "local_ip": "192.168.1.100",
-                    "local_port": 49153,
-                    "remote_ip": "198.51.100.25",
-                    "remote_port": 8443,
-                    "remote_hostname": "exfil.malware.net",
-                    "process_name": "mimikatz.exe",
-                    "process_pid": 2468,
-                    "bytes_sent": 500000,
-                    "bytes_received": 1000,
-                    "status": "closed",
-                },
-                {
-                    "timestamp": "2025-01-29T08:30:00Z",
-                    "direction": "outbound",
-                    "protocol": "TCP",
-                    "local_ip": "192.168.1.100",
-                    "local_port": 49100,
-                    "remote_ip": "142.250.185.206",
-                    "remote_port": 443,
-                    "remote_hostname": "www.google.com",
-                    "process_name": "chrome.exe",
-                    "process_pid": 3456,
-                    "bytes_sent": 50000,
-                    "bytes_received": 1500000,
-                    "status": "established",
-                },
-                {
-                    "timestamp": "2025-01-29T09:00:00Z",
-                    "direction": "inbound",
-                    "protocol": "TCP",
-                    "local_ip": "192.168.1.100",
-                    "local_port": 445,
-                    "remote_ip": "192.168.1.50",
-                    "remote_port": 52100,
-                    "remote_hostname": "admin-workstation",
-                    "process_name": "System",
-                    "process_pid": 4,
-                    "bytes_sent": 0,
-                    "bytes_received": 1500,
-                    "status": "closed",
-                },
-            ],
-            "source": "mock",
-        }
+                execution_time_ms=execution_time_ms,
+            )
+        except Exception as e:
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error("get_network_connections_failed", hostname=hostname, error=str(e))
+            return ToolResult.fail(
+                error=f"Get network connections failed: {str(e)}",
+                execution_time_ms=execution_time_ms,
+            )
 
     def _format_network_connections_for_llm(
         data: list[dict], hostname: str, hours: int
@@ -1584,14 +1667,29 @@ def create_triage_tools() -> ToolRegistry:
     # End of EDR Tools
     # ========================================================================
 
-    async def map_to_mitre(description: str) -> dict[str, Any]:
+    async def map_to_mitre(description: str) -> ToolResult:
         """Map attack behavior to MITRE ATT&CK techniques."""
-        return {
-            "techniques": [],
-            "tactics": [],
-            "description": description,
-            "source": "mock",
-        }
+        start_time = time.perf_counter()
+
+        try:
+            # Currently only mock implementation available
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            return ToolResult.ok(
+                data={
+                    "techniques": [],
+                    "tactics": [],
+                    "description": description,
+                    "is_mock": True,
+                },
+                execution_time_ms=execution_time_ms,
+            )
+        except Exception as e:
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error("map_to_mitre_failed", description=description, error=str(e))
+            return ToolResult.fail(
+                error=f"Map to MITRE failed: {str(e)}",
+                execution_time_ms=execution_time_ms,
+            )
 
     registry.register(
         Tool(
