@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -113,8 +114,9 @@ def get_threat_intel_bridge() -> Any:
     global _threat_intel_bridge
     if _threat_intel_bridge is None and _THREAT_INTEL_BRIDGE_AVAILABLE:
         try:
-            _threat_intel_bridge = ThreatIntelBridge("mock")
-            logger.info("ThreatIntelBridge initialized successfully")
+            mode = os.environ.get("TW_THREAT_INTEL_MODE", "mock")
+            _threat_intel_bridge = ThreatIntelBridge(mode)
+            logger.info("ThreatIntelBridge initialized", mode=mode)
         except Exception as e:
             logger.error("Failed to initialize ThreatIntelBridge", error=str(e))
     return _threat_intel_bridge
@@ -125,8 +127,10 @@ def get_edr_bridge() -> Any:
     global _edr_bridge
     if _edr_bridge is None and _EDR_BRIDGE_AVAILABLE:
         try:
-            _edr_bridge = EDRBridge("mock", with_sample_data=True)
-            logger.info("EDRBridge initialized successfully")
+            mode = os.environ.get("TW_EDR_MODE", "mock")
+            with_sample_data = os.environ.get("TW_BRIDGE_SAMPLE_DATA", "true").lower() == "true"
+            _edr_bridge = EDRBridge(mode, with_sample_data=with_sample_data)
+            logger.info("EDRBridge initialized", mode=mode, with_sample_data=with_sample_data)
         except Exception as e:
             logger.error("Failed to initialize EDRBridge", error=str(e))
     return _edr_bridge
@@ -137,8 +141,10 @@ def get_siem_bridge() -> Any:
     global _siem_bridge
     if _siem_bridge is None and _SIEM_BRIDGE_AVAILABLE:
         try:
-            _siem_bridge = SIEMBridge("mock", with_sample_data=True)
-            logger.info("SIEMBridge initialized successfully")
+            mode = os.environ.get("TW_SIEM_MODE", "mock")
+            with_sample_data = os.environ.get("TW_BRIDGE_SAMPLE_DATA", "true").lower() == "true"
+            _siem_bridge = SIEMBridge(mode, with_sample_data=with_sample_data)
+            logger.info("SIEMBridge initialized", mode=mode, with_sample_data=with_sample_data)
         except Exception as e:
             logger.error("Failed to initialize SIEMBridge", error=str(e))
     return _siem_bridge
