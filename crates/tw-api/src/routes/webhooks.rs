@@ -70,9 +70,9 @@ async fn receive_alert(
         })
         .await;
 
-    // TODO: Persist incident to database
-    // let repo = tw_core::db::create_incident_repository(&state.db);
-    // repo.create(&incident).await?;
+    // Persist incident to database
+    let repo = tw_core::db::create_incident_repository(&state.db);
+    repo.create(&incident).await?;
 
     Ok((
         StatusCode::ACCEPTED,
@@ -141,6 +141,10 @@ async fn receive_alert_from_source(
             alert_id: alert_id.clone(),
         })
         .await;
+
+    // Persist incident to database
+    let repo = tw_core::db::create_incident_repository(&state.db);
+    repo.create(&incident).await?;
 
     Ok((
         StatusCode::ACCEPTED,

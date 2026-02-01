@@ -22,8 +22,20 @@ use tw_core::db::{
 };
 use tw_core::incident::{ApprovalStatus, IncidentStatus, Severity};
 
+use crate::auth::AuthenticatedUser;
+use crate::error::ApiError;
 use crate::state::AppState;
 use templates::*;
+use tw_core::User;
+
+/// Converts a User to CurrentUserInfo for templates.
+fn user_to_current_info(user: &User) -> CurrentUserInfo {
+    CurrentUserInfo {
+        username: user.username.clone(),
+        display_name: user.display_name.clone(),
+        role: format!("{:?}", user.role),
+    }
+}
 
 /// Creates the web dashboard router.
 pub fn create_web_router(state: AppState) -> Router {
@@ -63,7 +75,10 @@ pub fn create_web_router(state: AppState) -> Router {
 // ============================================
 
 /// Dashboard page - main overview with KPIs and recent incidents.
-async fn dashboard(State(state): State<AppState>) -> impl IntoResponse {
+async fn dashboard(
+    State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
     let repo = create_incident_repository(&state.db);
 
     // Fetch metrics
@@ -101,12 +116,12 @@ async fn dashboard(State(state): State<AppState>) -> impl IntoResponse {
         open_count,
         approval_count,
         system_healthy: true,
-        current_user: None, // TODO: Get from session
+        current_user: Some(user_to_current_info(&user)),
         metrics,
         recent_incidents,
     };
 
-    HtmlTemplate(template)
+    Ok(HtmlTemplate(template))
 }
 
 /// Incidents list page with filtering and pagination.
@@ -128,8 +143,9 @@ fn default_page() -> u32 {
 
 async fn incidents_list(
     State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
     Query(query): Query<IncidentsQuery>,
-) -> impl IntoResponse {
+) -> Result<impl IntoResponse, ApiError> {
     let repo = create_incident_repository(&state.db);
 
     // Parse severity filter
@@ -189,7 +205,7 @@ async fn incidents_list(
         open_count: nav.open_count,
         approval_count: nav.approval_count,
         system_healthy: true,
-        current_user: None, // TODO: Get from session
+        current_user: Some(user_to_current_info(&user)),
         incidents,
         total_count,
         severity_filter: query.severity,
@@ -199,11 +215,15 @@ async fn incidents_list(
         total_pages: total_pages.max(1),
     };
 
-    HtmlTemplate(template)
+    Ok(HtmlTemplate(template))
 }
 
 /// Incident detail page.
-async fn incident_detail(State(state): State<AppState>, Path(id): Path<Uuid>) -> impl IntoResponse {
+async fn incident_detail(
+    State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
+    Path(id): Path<Uuid>,
+) -> Result<Response, ApiError> {
     let repo = create_incident_repository(&state.db);
     let audit_repo = create_audit_repository(&state.db);
 
@@ -235,18 +255,21 @@ async fn incident_detail(State(state): State<AppState>, Path(id): Path<Uuid>) ->
                 open_count: nav.open_count,
                 approval_count: nav.approval_count,
                 system_healthy: true,
-                current_user: None, // TODO: Get from session
+                current_user: Some(user_to_current_info(&user)),
                 incident: detail,
             };
 
-            HtmlTemplate(template).into_response()
+            Ok(HtmlTemplate(template).into_response())
         }
-        _ => Redirect::to("/incidents").into_response(),
+        _ => Ok(Redirect::to("/incidents").into_response()),
     }
 }
 
 /// Approvals page - pending action approvals.
-async fn approvals(State(state): State<AppState>) -> impl IntoResponse {
+async fn approvals(
+    State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
     let repo = create_incident_repository(&state.db);
 
     // Fetch nav counts
@@ -293,16 +316,19 @@ async fn approvals(State(state): State<AppState>) -> impl IntoResponse {
         open_count: nav.open_count,
         approval_count: pending_actions.len() as u32,
         system_healthy: true,
-        current_user: None, // TODO: Get from session
+        current_user: Some(user_to_current_info(&user)),
         pending_actions,
         recent_approvals: vec![],
     };
 
-    HtmlTemplate(template)
+    Ok(HtmlTemplate(template))
 }
 
 /// Playbooks page.
-async fn playbooks(State(state): State<AppState>) -> impl IntoResponse {
+async fn playbooks(
+    State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
     let incident_repo = create_incident_repository(&state.db);
     let nav = fetch_nav_counts(incident_repo.as_ref()).await;
 
@@ -338,15 +364,19 @@ async fn playbooks(State(state): State<AppState>) -> impl IntoResponse {
         open_count: nav.open_count,
         approval_count: nav.approval_count,
         system_healthy: true,
-        current_user: None, // TODO: Get from session
+        current_user: Some(user_to_current_info(&user)),
         playbooks: playbooks_list,
     };
 
-    HtmlTemplate(template)
+    Ok(HtmlTemplate(template))
 }
 
 /// Playbook detail page.
-async fn playbook_detail(State(state): State<AppState>, Path(id): Path<Uuid>) -> impl IntoResponse {
+async fn playbook_detail(
+    State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
+    Path(id): Path<Uuid>,
+) -> Result<Response, ApiError> {
     let incident_repo = create_incident_repository(&state.db);
     let nav = fetch_nav_counts(incident_repo.as_ref()).await;
 
@@ -406,13 +436,13 @@ async fn playbook_detail(State(state): State<AppState>, Path(id): Path<Uuid>) ->
                 open_count: nav.open_count,
                 approval_count: nav.approval_count,
                 system_healthy: true,
-                current_user: None, // TODO: Get from session
+                current_user: Some(user_to_current_info(&user)),
                 playbook: detail,
             };
 
-            HtmlTemplate(template).into_response()
+            Ok(HtmlTemplate(template).into_response())
         }
-        _ => Redirect::to("/playbooks").into_response(),
+        _ => Ok(Redirect::to("/playbooks").into_response()),
     }
 }
 
@@ -429,8 +459,9 @@ fn default_tab() -> String {
 
 async fn settings(
     State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
     Query(query): Query<SettingsQuery>,
-) -> impl IntoResponse {
+) -> Result<impl IntoResponse, ApiError> {
     let repo = create_incident_repository(&state.db);
     let nav = fetch_nav_counts(repo.as_ref()).await;
 
@@ -488,7 +519,7 @@ async fn settings(
         open_count: nav.open_count,
         approval_count: nav.approval_count,
         system_healthy: true,
-        current_user: None, // TODO: Get from session
+        current_user: Some(user_to_current_info(&user)),
         tab: query.tab,
         settings: settings_data,
         connectors,
@@ -497,19 +528,22 @@ async fn settings(
         notification_channels,
     };
 
-    HtmlTemplate(template)
+    Ok(HtmlTemplate(template))
 }
 
 // ============================================
 // HTMX Partials
 // ============================================
 
-async fn partials_kpis(State(state): State<AppState>) -> impl IntoResponse {
+async fn partials_kpis(
+    State(state): State<AppState>,
+    AuthenticatedUser(_user): AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
     let repo = create_incident_repository(&state.db);
     let metrics = fetch_dashboard_metrics(repo.as_ref()).await;
 
     let template = KpisPartialTemplate { metrics };
-    HtmlTemplate(template)
+    Ok(HtmlTemplate(template))
 }
 
 #[derive(Debug, Deserialize)]
@@ -523,8 +557,9 @@ struct PartialsQuery {
 
 async fn partials_incidents(
     State(state): State<AppState>,
+    AuthenticatedUser(_user): AuthenticatedUser,
     Query(query): Query<PartialsQuery>,
-) -> impl IntoResponse {
+) -> Result<impl IntoResponse, ApiError> {
     let repo = create_incident_repository(&state.db);
 
     let severity_filter = parse_severity(&query.severity);
@@ -545,33 +580,42 @@ async fn partials_incidents(
     .await;
 
     let template = IncidentsPartialTemplate { incidents };
-    HtmlTemplate(template)
+    Ok(HtmlTemplate(template))
 }
 
 // ============================================
 // Modal Handlers
 // ============================================
 
-async fn modal_add_playbook() -> impl IntoResponse {
-    HtmlTemplate(AddPlaybookModalTemplate)
+async fn modal_add_playbook(
+    AuthenticatedUser(_user): AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(HtmlTemplate(AddPlaybookModalTemplate))
 }
 
-async fn modal_add_connector() -> impl IntoResponse {
-    HtmlTemplate(AddConnectorModalTemplate)
+async fn modal_add_connector(
+    AuthenticatedUser(_user): AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(HtmlTemplate(AddConnectorModalTemplate))
 }
 
-async fn modal_add_policy() -> impl IntoResponse {
-    HtmlTemplate(AddPolicyModalTemplate)
+async fn modal_add_policy(
+    AuthenticatedUser(_user): AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(HtmlTemplate(AddPolicyModalTemplate))
 }
 
-async fn modal_add_notification() -> impl IntoResponse {
-    HtmlTemplate(AddNotificationModalTemplate)
+async fn modal_add_notification(
+    AuthenticatedUser(_user): AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(HtmlTemplate(AddNotificationModalTemplate))
 }
 
 async fn modal_edit_notification(
     State(state): State<AppState>,
+    AuthenticatedUser(_user): AuthenticatedUser,
     Path(id): Path<Uuid>,
-) -> impl IntoResponse {
+) -> Result<Response, ApiError> {
     let notification_repo = create_notification_repository(&state.db);
 
     match notification_repo.get(id).await {
@@ -586,17 +630,20 @@ async fn modal_edit_notification(
                     channel.enabled,
                 ),
             };
-            HtmlTemplate(template).into_response()
+            Ok(HtmlTemplate(template).into_response())
         }
         _ => {
             // Return empty response if not found
-            "".into_response()
+            Ok("".into_response())
         }
     }
 }
 
 /// Partial for notifications table (used by HTMX refresh).
-async fn partials_notifications(State(state): State<AppState>) -> impl IntoResponse {
+async fn partials_notifications(
+    State(state): State<AppState>,
+    AuthenticatedUser(_user): AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
     let notification_repo = create_notification_repository(&state.db);
     let notification_channels: Vec<NotificationChannel> = notification_repo
         .list()
@@ -615,14 +662,15 @@ async fn partials_notifications(State(state): State<AppState>) -> impl IntoRespo
     let template = NotificationsPartialTemplate {
         notification_channels,
     };
-    HtmlTemplate(template)
+    Ok(HtmlTemplate(template))
 }
 
 /// Edit policy modal handler.
 async fn modal_edit_policy(
     State(state): State<AppState>,
+    AuthenticatedUser(_user): AuthenticatedUser,
     Path(id): Path<Uuid>,
-) -> impl IntoResponse {
+) -> Result<Response, ApiError> {
     let policy_repo = create_policy_repository(&state.db);
 
     match policy_repo.get(id).await {
@@ -648,26 +696,30 @@ async fn modal_edit_policy(
                     enabled: policy.enabled,
                 },
             };
-            HtmlTemplate(template).into_response()
+            Ok(HtmlTemplate(template).into_response())
         }
-        _ => "".into_response(),
+        _ => Ok("".into_response()),
     }
 }
 
 /// Partial for policies table (used by HTMX refresh).
-async fn partials_policies(State(state): State<AppState>) -> impl IntoResponse {
+async fn partials_policies(
+    State(state): State<AppState>,
+    AuthenticatedUser(_user): AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
     let policy_repo = create_policy_repository(&state.db);
     let policies = fetch_policies(policy_repo.as_ref()).await;
 
     let template = PoliciesPartialTemplate { policies };
-    HtmlTemplate(template)
+    Ok(HtmlTemplate(template))
 }
 
 /// Edit connector modal handler.
 async fn modal_edit_connector(
     State(state): State<AppState>,
+    AuthenticatedUser(_user): AuthenticatedUser,
     Path(id): Path<Uuid>,
-) -> impl IntoResponse {
+) -> Result<Response, ApiError> {
     let connector_repo = create_connector_repository(&state.db);
 
     match connector_repo.get(id).await {
@@ -681,14 +733,17 @@ async fn modal_edit_connector(
                     enabled: connector.enabled,
                 },
             };
-            HtmlTemplate(template).into_response()
+            Ok(HtmlTemplate(template).into_response())
         }
-        _ => "".into_response(),
+        _ => Ok("".into_response()),
     }
 }
 
 /// Partial for connectors grid (used by HTMX refresh).
-async fn partials_connectors(State(state): State<AppState>) -> impl IntoResponse {
+async fn partials_connectors(
+    State(state): State<AppState>,
+    AuthenticatedUser(_user): AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
     let connector_repo = create_connector_repository(&state.db);
     let connectors: Vec<ConnectorData> = connector_repo
         .list()
@@ -705,7 +760,7 @@ async fn partials_connectors(State(state): State<AppState>) -> impl IntoResponse
         .collect();
 
     let template = ConnectorsPartialTemplate { connectors };
-    HtmlTemplate(template)
+    Ok(HtmlTemplate(template))
 }
 
 // ============================================
