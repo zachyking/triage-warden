@@ -74,3 +74,113 @@
     severity: informational
     techniques: []
 
+# SUSPICIOUS: Lookalike domain but some legitimate indicators
+- id: phishing_004
+  name: "Suspicious email with lookalike domain - mixed signals"
+  alert:
+    type: email_security
+    subject: "Invoice #INV-2024-0892 for your review"
+    sender: "billing@microsoft-support.co"
+    sender_display: "Microsoft Billing"
+    recipient: "procurement@company.com"
+    body: "Please find attached your invoice for the recent subscription renewal. Contact us if you have questions."
+    attachments:
+      - filename: "Invoice_2024_0892.pdf"
+        size: 125000
+        mime_type: "application/pdf"
+        sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    headers:
+      return_path: "billing@microsoft-support.co"
+      received_from: "104.45.231.87"
+      dkim: "pass"
+      spf: "pass"
+      dmarc: "none"
+    links: []
+    timestamp: "2024-01-15T14:20:00Z"
+  expected:
+    verdict: suspicious
+    severity: medium
+    techniques: [T1566.001]
+
+# SUSPICIOUS: Internal sender with unusual behavior
+- id: phishing_005
+  name: "Internal sender with atypical urgency and external link"
+  alert:
+    type: email_security
+    subject: "URGENT: Update your direct deposit info NOW"
+    sender: "hr.director@company.com"
+    sender_display: "HR Director"
+    recipient: "employees@company.com"
+    body: "Due to a payroll system update, all employees must verify their banking details immediately at the link below or risk delayed payment. This must be done within 2 hours."
+    attachments: []
+    headers:
+      return_path: "hr.director@company.com"
+      received_from: "10.0.0.55"
+      dkim: "pass"
+      spf: "pass"
+      dmarc: "pass"
+    links:
+      - url: "https://payroll-update.company-hr.net/verify"
+        display_text: "Update Banking Info"
+    timestamp: "2024-01-15T16:45:00Z"
+  expected:
+    verdict: suspicious
+    severity: medium
+    techniques: [T1566.001, T1598.003]
+
+# INCONCLUSIVE: Insufficient email header data
+- id: phishing_006
+  name: "Email with missing authentication headers"
+  alert:
+    type: email_security
+    subject: "Meeting follow-up documents"
+    sender: "partner@external-vendor.com"
+    sender_display: "External Partner"
+    recipient: "project.manager@company.com"
+    body: "As discussed in our call, please find the project specifications attached."
+    attachments:
+      - filename: "Project_Specs_v2.docx"
+        size: 89000
+        mime_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        sha256: "unknown"
+    headers:
+      return_path: "unknown"
+      received_from: "unknown"
+    links: []
+    timestamp: "2024-01-15T11:30:00Z"
+  expected:
+    verdict: inconclusive
+    severity: medium
+    techniques: []
+
+# INCONCLUSIVE: Conflicting signals - known sender but suspicious attachment
+- id: phishing_007
+  name: "Known sender with password-protected attachment"
+  alert:
+    type: email_security
+    subject: "Confidential: Contract amendments"
+    sender: "legal@trustedpartner.com"
+    sender_display: "Legal Department"
+    recipient: "contracts@company.com"
+    body: "Please review the attached contract amendments. Password is: Company2024"
+    attachments:
+      - filename: "Contract_Amendments.zip"
+        size: 450000
+        mime_type: "application/zip"
+        sha256: "7d865e959b2466918c9863afca942d0fb89d7c9ac0c99bafc3749504ded97730"
+        password_protected: true
+    headers:
+      return_path: "legal@trustedpartner.com"
+      received_from: "198.51.100.25"
+      dkim: "pass"
+      spf: "pass"
+      dmarc: "pass"
+    links: []
+    previous_correspondence: true
+    sender_reputation: "established"
+    timestamp: "2024-01-15T10:15:00Z"
+  expected:
+    verdict: inconclusive
+    severity: medium
+    techniques: [T1566.001]
+

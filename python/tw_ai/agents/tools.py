@@ -78,6 +78,32 @@ try:
 except ImportError:
     logger.warning("tw_bridge.PolicyBridge not available, using mock fallback")
 
+# Try to import TicketingBridge from the Rust PyO3 bridge
+_TICKETING_BRIDGE_AVAILABLE = False
+_TicketingBridgeClass: type[Any] | None = None
+
+try:
+    from tw_bridge import TicketingBridge as _TicketingBridgeImport
+
+    _TicketingBridgeClass = _TicketingBridgeImport
+    _TICKETING_BRIDGE_AVAILABLE = True
+    logger.info("tw_bridge.TicketingBridge available")
+except ImportError:
+    logger.warning("tw_bridge.TicketingBridge not available, using mock fallback")
+
+# Try to import EmailGatewayBridge from the Rust PyO3 bridge
+_EMAIL_GATEWAY_BRIDGE_AVAILABLE = False
+_EmailGatewayBridgeClass: type[Any] | None = None
+
+try:
+    from tw_bridge import EmailGatewayBridge as _EmailGatewayBridgeImport
+
+    _EmailGatewayBridgeClass = _EmailGatewayBridgeImport
+    _EMAIL_GATEWAY_BRIDGE_AVAILABLE = True
+    logger.info("tw_bridge.EmailGatewayBridge available")
+except ImportError:
+    logger.warning("tw_bridge.EmailGatewayBridge not available, using mock fallback")
+
 
 # =============================================================================
 # ToolResult Dataclass
@@ -183,6 +209,16 @@ def is_policy_bridge_available() -> bool:
     return _POLICY_BRIDGE_AVAILABLE
 
 
+def is_ticketing_bridge_available() -> bool:
+    """Check if the Ticketing PyO3 bridge is available."""
+    return _TICKETING_BRIDGE_AVAILABLE
+
+
+def is_email_gateway_bridge_available() -> bool:
+    """Check if the EmailGateway PyO3 bridge is available."""
+    return _EMAIL_GATEWAY_BRIDGE_AVAILABLE
+
+
 _policy_bridge: Any = None
 
 
@@ -196,6 +232,73 @@ def get_policy_bridge() -> Any:
         except Exception as e:
             logger.error("Failed to initialize PolicyBridge", error=str(e))
     return _policy_bridge
+
+
+_ticketing_bridge: Any = None
+
+
+def get_ticketing_bridge() -> Any:
+    """Get or create the Ticketing bridge instance.
+
+    The bridge mode is controlled by the TW_TICKETING_MODE environment variable:
+        - "mock" (default): Uses mock connector for testing
+        - "jira": Uses Jira Cloud/Server API
+
+    For "jira" mode, the following environment variables are required:
+        - TW_JIRA_URL: Base URL of your Jira instance
+        - TW_JIRA_EMAIL: Email address for authentication
+        - TW_JIRA_API_TOKEN: API token for authentication
+        - TW_JIRA_PROJECT: Project key (e.g., "SEC")
+
+    Returns:
+        TicketingBridge instance or None if unavailable
+    """
+    global _ticketing_bridge
+    if (
+        _ticketing_bridge is None
+        and _TICKETING_BRIDGE_AVAILABLE
+        and _TicketingBridgeClass is not None
+    ):
+        try:
+            mode = os.environ.get("TW_TICKETING_MODE", "mock")
+            _ticketing_bridge = _TicketingBridgeClass(mode)
+            logger.info("TicketingBridge initialized", mode=mode)
+        except Exception as e:
+            logger.error("Failed to initialize TicketingBridge", error=str(e))
+    return _ticketing_bridge
+
+
+_email_gateway_bridge: Any = None
+
+
+def get_email_gateway_bridge() -> Any:
+    """Get or create the EmailGateway bridge instance.
+
+    The bridge mode is controlled by the TW_EMAIL_GATEWAY_MODE environment variable:
+        - "mock" (default): Uses mock connector for testing
+        - "m365": Uses Microsoft 365 Graph API
+
+    For "m365" mode, the following environment variables are required:
+        - TW_M365_TENANT_ID: Microsoft 365 tenant ID
+        - TW_M365_CLIENT_ID: Application client ID
+        - TW_M365_CLIENT_SECRET: Application client secret
+
+    Returns:
+        EmailGatewayBridge instance or None if unavailable
+    """
+    global _email_gateway_bridge
+    if (
+        _email_gateway_bridge is None
+        and _EMAIL_GATEWAY_BRIDGE_AVAILABLE
+        and _EmailGatewayBridgeClass is not None
+    ):
+        try:
+            mode = os.environ.get("TW_EMAIL_GATEWAY_MODE", "mock")
+            _email_gateway_bridge = _EmailGatewayBridgeClass(mode)
+            logger.info("EmailGatewayBridge initialized", mode=mode)
+        except Exception as e:
+            logger.error("Failed to initialize EmailGatewayBridge", error=str(e))
+    return _email_gateway_bridge
 
 
 # =============================================================================
@@ -436,6 +539,83 @@ def _mock_check_approval_status(request_id: str) -> dict[str, Any]:
         "status": "expired",
         "decided_by": None,
     }
+
+
+# =============================================================================
+# Mock Fallback Implementations for Ticketing
+# =============================================================================
+
+# Mock ticket storage for testing
+_mock_tickets: dict[str, dict[str, Any]] = {}
+_mock_ticket_counter: int = 0
+
+
+def _mock_create_ticket(
+    title: str,
+    description: str,
+    priority: str,
+    labels: list[str],
+) -> dict[str, Any]:
+    """Mock ticket creation when TicketingBridge is unavailable.
+
+    Creates a mock ticket with generated ID and URL for testing.
+    """
+    global _mock_ticket_counter
+
+    _mock_ticket_counter += 1
+    ticket_id = f"MOCK-{_mock_ticket_counter}"
+    ticket_key = ticket_id
+    ticket_url = f"https://mock-ticketing.example.com/browse/{ticket_key}"
+
+    ticket = {
+        "id": ticket_id,
+        "key": ticket_key,
+        "title": title,
+        "description": description,
+        "status": "Open",
+        "priority": priority,
+        "labels": labels,
+        "url": ticket_url,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "is_mock": True,
+    }
+
+    _mock_tickets[ticket_id] = ticket
+    return ticket
+
+
+# =============================================================================
+# Mock Fallback Implementations for Email Gateway
+# =============================================================================
+
+# Mock email and block storage for testing
+_mock_quarantined_emails: dict[str, dict[str, Any]] = {}
+_mock_blocked_senders: dict[str, dict[str, Any]] = {}
+
+
+def _mock_quarantine_email(message_id: str) -> bool:
+    """Mock email quarantine when EmailGatewayBridge is unavailable.
+
+    Simulates quarantining an email for testing purposes.
+    """
+    _mock_quarantined_emails[message_id] = {
+        "quarantined_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "status": "quarantined",
+    }
+    return True
+
+
+def _mock_block_sender(sender_address: str) -> bool:
+    """Mock sender blocking when EmailGatewayBridge is unavailable.
+
+    Simulates blocking a sender for testing purposes.
+    """
+    _mock_blocked_senders[sender_address] = {
+        "blocked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "status": "blocked",
+    }
+    return True
 
 
 # =============================================================================

@@ -85,3 +85,183 @@
     verdict: benign
     severity: informational
     techniques: []
+
+# SUSPICIOUS: Impossible travel but with MFA success
+- id: login_004
+  name: "Impossible travel with successful MFA"
+  alert:
+    type: authentication
+    event_type: "impossible_travel"
+    target_account: "executive.vp@company.com"
+    source_ip: "103.21.244.15"
+    source_country: "AU"
+    source_city: "Sydney"
+    device_info:
+      os: "iOS 17"
+      browser: "Safari Mobile"
+      device_type: "iPhone"
+    previous_locations:
+      - country: "US"
+        city: "San Francisco"
+        last_seen: "2024-01-15T06:00:00Z"
+    time_since_last_location: "2 hours"
+    travel_speed_kmh: 7500
+    mfa_result: "success"
+    mfa_method: "push_notification"
+    login_result: "success"
+    calendar_context: "No travel scheduled"
+    timestamp: "2024-01-15T08:00:00Z"
+  expected:
+    verdict: suspicious
+    severity: medium
+    techniques: [T1078.004]
+
+# SUSPICIOUS: Service account login from unexpected host
+- id: login_005
+  name: "Service account login from non-standard server"
+  alert:
+    type: authentication
+    event_type: "service_account_login"
+    target_account: "svc_database@company.local"
+    source_ip: "10.0.5.200"
+    source_hostname: "DEV-TEST-SERVER"
+    authentication_type: "kerberos"
+    login_time: "14:30:00"
+    day_of_week: "Monday"
+    login_result: "success"
+    expected_hosts:
+      - "DB-PROD-01"
+      - "DB-PROD-02"
+      - "DB-BACKUP-01"
+    historical_pattern:
+      - hosts: ["DB-PROD-01", "DB-PROD-02"]
+        frequency: "continuous"
+        last_30_days: 10000
+    service_account_permissions:
+      - "Database Administrators"
+      - "Full access to SQL servers"
+    timestamp: "2024-01-15T14:30:00Z"
+  expected:
+    verdict: suspicious
+    severity: medium
+    techniques: [T1078.001]
+
+# SUSPICIOUS: Multiple failed logins followed by success from different IP
+- id: login_006
+  name: "Failed login attempts then success from new IP"
+  alert:
+    type: authentication
+    event_type: "suspicious_login_pattern"
+    target_account: "finance.manager@company.com"
+    failed_attempts:
+      - ip: "185.220.101.45"
+        country: "RU"
+        count: 15
+        timestamp: "2024-01-15T04:00:00Z"
+    successful_login:
+      ip: "72.134.89.201"
+      country: "US"
+      city: "Chicago"
+      timestamp: "2024-01-15T04:30:00Z"
+    device_info:
+      os: "Windows 10"
+      browser: "Firefox 121"
+      device_type: "Desktop"
+    mfa_result: "success"
+    password_changed: false
+    user_home_location: "Chicago, US"
+    timestamp: "2024-01-15T04:30:00Z"
+  expected:
+    verdict: suspicious
+    severity: medium
+    techniques: [T1110.001, T1078.004]
+
+# INCONCLUSIVE: VPN login with incomplete geo data
+- id: login_007
+  name: "VPN login with missing geolocation data"
+  alert:
+    type: authentication
+    event_type: "vpn_login"
+    target_account: "remote.consultant@company.com"
+    source_ip: "192.0.2.100"
+    source_country: "unknown"
+    source_city: "unknown"
+    vpn_client: "GlobalProtect"
+    device_info:
+      os: "macOS 14"
+      browser: "N/A"
+      device_type: "Laptop"
+      device_id: "unknown"
+    previous_locations: []
+    mfa_result: "success"
+    login_result: "success"
+    account_type: "contractor"
+    account_created: "2024-01-10"
+    first_login: true
+    timestamp: "2024-01-15T09:00:00Z"
+  expected:
+    verdict: inconclusive
+    severity: medium
+    techniques: []
+
+# INCONCLUSIVE: Conflicting user behavior signals
+- id: login_008
+  name: "After-hours login with mixed context signals"
+  alert:
+    type: authentication
+    event_type: "after_hours_login"
+    target_account: "engineer.david@company.com"
+    source_ip: "98.45.123.67"
+    source_country: "US"
+    source_city: "Austin"
+    device_info:
+      os: "Linux Ubuntu 22.04"
+      browser: "Chrome 120"
+      device_type: "Desktop"
+    login_time: "03:30:00"
+    day_of_week: "Wednesday"
+    user_normal_hours: "09:00-18:00"
+    mfa_result: "success"
+    previous_after_hours_logins: 2
+    recent_pagerduty_incident: true
+    oncall_schedule: "not_oncall"
+    accessed_resources:
+      - "git.company.com"
+      - "jenkins.company.com"
+    timestamp: "2024-01-15T03:30:00Z"
+  expected:
+    verdict: inconclusive
+    severity: medium
+    techniques: []
+
+# INCONCLUSIVE: Account lockout with ambiguous cause
+- id: login_009
+  name: "Account lockout with unclear origin"
+  alert:
+    type: authentication
+    event_type: "account_lockout"
+    target_account: "sales.director@company.com"
+    lockout_reason: "Too many failed attempts"
+    failed_attempts_count: 10
+    source_ips:
+      - ip: "10.0.3.50"
+        location: "internal"
+        failed_attempts: 5
+      - ip: "192.168.1.100"
+        location: "internal"
+        failed_attempts: 3
+      - ip: "unknown"
+        location: "unknown"
+        failed_attempts: 2
+    time_window: "15 minutes"
+    user_agent_patterns:
+      - "Microsoft Office/16.0"
+      - "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    recent_password_change: false
+    cached_credentials_possible: true
+    user_reported_issue: null
+    timestamp: "2024-01-15T11:00:00Z"
+  expected:
+    verdict: inconclusive
+    severity: medium
+    techniques: []

@@ -2093,6 +2093,216 @@ impl TicketingBridge {
 }
 
 // ============================================================================
+// MetricsBridge - Metrics Export Bridge for Python
+// ============================================================================
+
+/// Bridge for exporting Python metrics to the Rust Prometheus endpoint.
+///
+/// Provides Python access to record metrics that are exposed via the
+/// Rust Prometheus endpoint at /metrics.
+///
+/// The metrics recorded through this bridge are:
+/// - `triage_warden_incidents_total`: Counter with severity and status labels
+/// - `triage_warden_actions_total`: Counter with action_type and status labels
+/// - `triage_warden_triage_duration_seconds`: Histogram of triage durations
+///
+/// Example:
+///     from tw_bridge import MetricsBridge
+///
+///     metrics = MetricsBridge()
+///     metrics.record_incident("high", "resolved")
+///     metrics.record_action("quarantine_email", "success")
+///     metrics.record_triage_duration(1.5)  # 1.5 seconds
+#[pyclass]
+pub struct MetricsBridge {
+    /// Whether metrics recording is enabled
+    enabled: bool,
+}
+
+#[pymethods]
+impl MetricsBridge {
+    /// Creates a new MetricsBridge.
+    ///
+    /// Args:
+    ///     enabled: Whether metrics recording is enabled (default: True)
+    ///
+    /// Returns:
+    ///     MetricsBridge instance
+    #[new]
+    #[pyo3(signature = (enabled=true))]
+    pub fn new(enabled: bool) -> Self {
+        Self { enabled }
+    }
+
+    /// Record an incident with the given severity and status.
+    ///
+    /// This increments the `triage_warden_incidents_total` counter
+    /// with labels for severity and status.
+    ///
+    /// Args:
+    ///     severity: Incident severity (e.g., "critical", "high", "medium", "low", "info")
+    ///     status: Incident status (e.g., "new", "resolved", "false_positive")
+    ///
+    /// Example:
+    ///     metrics.record_incident("high", "resolved")
+    pub fn record_incident(&self, severity: &str, status: &str) {
+        if !self.enabled {
+            return;
+        }
+        metrics::counter!(
+            "triage_warden_incidents_total",
+            "severity" => severity.to_string(),
+            "status" => status.to_string()
+        )
+        .increment(1);
+    }
+
+    /// Record an action with the given action type and status.
+    ///
+    /// This increments the `triage_warden_actions_total` counter
+    /// with labels for action_type and status.
+    ///
+    /// Args:
+    ///     action_type: Type of action (e.g., "quarantine_email", "block_sender",
+    ///                  "isolate_host", "create_ticket")
+    ///     status: Action status (e.g., "success", "failure", "pending")
+    ///
+    /// Example:
+    ///     metrics.record_action("quarantine_email", "success")
+    pub fn record_action(&self, action_type: &str, status: &str) {
+        if !self.enabled {
+            return;
+        }
+        metrics::counter!(
+            "triage_warden_actions_total",
+            "action_type" => action_type.to_string(),
+            "status" => status.to_string()
+        )
+        .increment(1);
+    }
+
+    /// Record triage duration in seconds.
+    ///
+    /// This records a value to the `triage_warden_triage_duration_seconds`
+    /// histogram for tracking triage operation performance.
+    ///
+    /// Args:
+    ///     duration_seconds: Duration of the triage operation in seconds (float)
+    ///
+    /// Example:
+    ///     start = time.time()
+    ///     # ... perform triage ...
+    ///     metrics.record_triage_duration(time.time() - start)
+    pub fn record_triage_duration(&self, duration_seconds: f64) {
+        if !self.enabled {
+            return;
+        }
+        metrics::histogram!("triage_warden_triage_duration_seconds").record(duration_seconds);
+    }
+
+    /// Record a stage latency measurement.
+    ///
+    /// This records a value to the `triage_warden_stage_latency_seconds`
+    /// histogram with a stage label for tracking individual pipeline stages.
+    ///
+    /// Args:
+    ///     stage: Name of the pipeline stage (e.g., "email_parsing", "enrichment",
+    ///            "llm_analysis", "action_execution")
+    ///     duration_seconds: Duration of the stage in seconds (float)
+    ///
+    /// Example:
+    ///     metrics.record_stage_latency("email_parsing", 0.025)  # 25ms
+    pub fn record_stage_latency(&self, stage: &str, duration_seconds: f64) {
+        if !self.enabled {
+            return;
+        }
+        metrics::histogram!(
+            "triage_warden_stage_latency_seconds",
+            "stage" => stage.to_string()
+        )
+        .record(duration_seconds);
+    }
+
+    /// Record an error occurrence.
+    ///
+    /// This increments the `triage_warden_errors_total` counter
+    /// with an error_type label.
+    ///
+    /// Args:
+    ///     error_type: Type of error (e.g., "parse_error", "llm_timeout",
+    ///                 "connector_error", "policy_violation")
+    ///
+    /// Example:
+    ///     metrics.record_error("llm_timeout")
+    pub fn record_error(&self, error_type: &str) {
+        if !self.enabled {
+            return;
+        }
+        metrics::counter!(
+            "triage_warden_errors_total",
+            "error_type" => error_type.to_string()
+        )
+        .increment(1);
+    }
+
+    /// Record a triage verdict with confidence.
+    ///
+    /// This increments the `triage_warden_triages_total` counter
+    /// with verdict and confidence_bucket labels.
+    ///
+    /// Args:
+    ///     verdict: Triage verdict (e.g., "malicious", "suspicious", "benign", "inconclusive")
+    ///     confidence: Confidence score between 0 and 1
+    ///
+    /// Example:
+    ///     metrics.record_triage_verdict("malicious", 0.95)
+    pub fn record_triage_verdict(&self, verdict: &str, confidence: f64) {
+        if !self.enabled {
+            return;
+        }
+        // Bucket confidence into ranges for Prometheus labels
+        let confidence_bucket = if confidence >= 0.9 {
+            "0.9-1.0"
+        } else if confidence >= 0.7 {
+            "0.7-0.9"
+        } else if confidence >= 0.5 {
+            "0.5-0.7"
+        } else {
+            "0.0-0.5"
+        };
+
+        metrics::counter!(
+            "triage_warden_triages_total",
+            "verdict" => verdict.to_string(),
+            "confidence_bucket" => confidence_bucket.to_string()
+        )
+        .increment(1);
+    }
+
+    /// Check if metrics recording is enabled.
+    ///
+    /// Returns:
+    ///     bool: True if metrics recording is enabled
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Enable or disable metrics recording.
+    ///
+    /// Args:
+    ///     enabled: Whether to enable metrics recording
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+}
+
+impl Default for MetricsBridge {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+// ============================================================================
 // Legacy TriageWardenBridge (kept for backward compatibility)
 // ============================================================================
 
@@ -2298,6 +2508,7 @@ fn tw_bridge(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<EmailGatewayBridge>()?;
     m.add_class::<PolicyBridge>()?;
     m.add_class::<TicketingBridge>()?;
+    m.add_class::<MetricsBridge>()?;
 
     // Add version
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

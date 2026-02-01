@@ -32,6 +32,9 @@ pythonize = "0.20"
 # Sync for shared runtime
 once_cell = "1.19"
 
+# Metrics recording
+metrics.workspace = true
+
 tw-core = { path = "../crates/tw-core" }
 tw-connectors = { path = "../crates/tw-connectors" }
 tw-policy = { path = "../crates/tw-policy" }
