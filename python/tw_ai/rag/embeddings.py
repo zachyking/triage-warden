@@ -67,29 +67,38 @@ class EmbeddingService:
         Returns:
             Loaded SentenceTransformer model.
         """
-        from sentence_transformers import SentenceTransformer
+        try:
+            from sentence_transformers import SentenceTransformer
 
-        logger.info(
-            "loading_embedding_model",
-            model=self._config.embedding_model,
-            device=self._config.embedding_device,
-        )
+            logger.info(
+                "loading_embedding_model",
+                model=self._config.embedding_model,
+                device=self._config.embedding_device,
+            )
 
-        model = SentenceTransformer(
-            self._config.embedding_model,
-            device=self._config.embedding_device,
-        )
+            model = SentenceTransformer(
+                self._config.embedding_model,
+                device=self._config.embedding_device,
+            )
 
-        # Get actual dimension from model
-        self._dimension = model.get_sentence_embedding_dimension()
+            # Get actual dimension from model
+            self._dimension = model.get_sentence_embedding_dimension()
 
-        logger.info(
-            "embedding_model_loaded",
-            model=self._config.embedding_model,
-            dimension=self._dimension,
-        )
+            logger.info(
+                "embedding_model_loaded",
+                model=self._config.embedding_model,
+                dimension=self._dimension,
+            )
 
-        return model
+            return model
+        except Exception as e:
+            logger.error(
+                "load_model_failed",
+                model=self._config.embedding_model,
+                device=self._config.embedding_device,
+                error=str(e),
+            )
+            raise
 
     def embed(self, text: str) -> list[float]:
         """Generate embedding for a single text.
@@ -100,8 +109,16 @@ class EmbeddingService:
         Returns:
             Embedding vector as list of floats.
         """
-        embedding = self.model.encode(text, convert_to_numpy=True)
-        return embedding.tolist()
+        try:
+            embedding = self.model.encode(text, convert_to_numpy=True)
+            return embedding.tolist()
+        except Exception as e:
+            logger.error(
+                "embed_failed",
+                text_length=len(text),
+                error=str(e),
+            )
+            raise
 
     def embed_batch(self, texts: list[str], batch_size: int = 32) -> list[list[float]]:
         """Generate embeddings for multiple texts.
@@ -116,14 +133,23 @@ class EmbeddingService:
         if not texts:
             return []
 
-        embeddings = self.model.encode(
-            texts,
-            batch_size=batch_size,
-            convert_to_numpy=True,
-            show_progress_bar=False,
-        )
+        try:
+            embeddings = self.model.encode(
+                texts,
+                batch_size=batch_size,
+                convert_to_numpy=True,
+                show_progress_bar=False,
+            )
 
-        return [emb.tolist() for emb in embeddings]
+            return [emb.tolist() for emb in embeddings]
+        except Exception as e:
+            logger.error(
+                "embed_batch_failed",
+                text_count=len(texts),
+                batch_size=batch_size,
+                error=str(e),
+            )
+            raise
 
     def similarity(self, text1: str, text2: str) -> float:
         """Calculate cosine similarity between two texts.

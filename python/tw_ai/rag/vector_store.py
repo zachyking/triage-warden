@@ -108,23 +108,32 @@ class VectorStore:
         Returns:
             Document ID.
         """
-        collection = self.get_collection(collection_name)
-        embedding = self._embedding_service.embed(document.content)
+        try:
+            collection = self.get_collection(collection_name)
+            embedding = self._embedding_service.embed(document.content)
 
-        collection.add(
-            ids=[document.id],
-            embeddings=[embedding],
-            documents=[document.content],
-            metadatas=[document.to_metadata()],
-        )
+            collection.add(
+                ids=[document.id],
+                embeddings=[embedding],
+                documents=[document.content],
+                metadatas=[document.to_metadata()],
+            )
 
-        logger.debug(
-            "document_added",
-            collection=collection_name,
-            document_id=document.id,
-        )
+            logger.debug(
+                "document_added",
+                collection=collection_name,
+                document_id=document.id,
+            )
 
-        return document.id
+            return document.id
+        except Exception as e:
+            logger.error(
+                "add_document_failed",
+                collection=collection_name,
+                document_id=document.id,
+                error=str(e),
+            )
+            raise
 
     def add_documents(
         self,
@@ -145,27 +154,36 @@ class VectorStore:
         if not documents:
             return []
 
-        collection = self.get_collection(collection_name)
+        try:
+            collection = self.get_collection(collection_name)
 
-        # Generate embeddings in batches
-        contents = [doc.content for doc in documents]
-        embeddings = self._embedding_service.embed_batch(contents, batch_size=batch_size)
+            # Generate embeddings in batches
+            contents = [doc.content for doc in documents]
+            embeddings = self._embedding_service.embed_batch(contents, batch_size=batch_size)
 
-        # Add to collection
-        collection.add(
-            ids=[doc.id for doc in documents],
-            embeddings=embeddings,
-            documents=contents,
-            metadatas=[doc.to_metadata() for doc in documents],
-        )
+            # Add to collection
+            collection.add(
+                ids=[doc.id for doc in documents],
+                embeddings=embeddings,
+                documents=contents,
+                metadatas=[doc.to_metadata() for doc in documents],
+            )
 
-        logger.info(
-            "documents_added",
-            collection=collection_name,
-            count=len(documents),
-        )
+            logger.info(
+                "documents_added",
+                collection=collection_name,
+                count=len(documents),
+            )
 
-        return [doc.id for doc in documents]
+            return [doc.id for doc in documents]
+        except Exception as e:
+            logger.error(
+                "add_documents_failed",
+                collection=collection_name,
+                count=len(documents),
+                error=str(e),
+            )
+            raise
 
     def query(
         self,
@@ -185,24 +203,33 @@ class VectorStore:
         Returns:
             Query results with ids, documents, distances, and metadatas.
         """
-        collection = self.get_collection(collection_name)
-        query_embedding = self._embedding_service.embed(query_text)
+        try:
+            collection = self.get_collection(collection_name)
+            query_embedding = self._embedding_service.embed(query_text)
 
-        results = collection.query(
-            query_embeddings=[query_embedding],
-            n_results=n_results,
-            where=where,
-            include=["documents", "distances", "metadatas"],
-        )
+            results = collection.query(
+                query_embeddings=[query_embedding],
+                n_results=n_results,
+                where=where,
+                include=["documents", "distances", "metadatas"],
+            )
 
-        logger.debug(
-            "query_executed",
-            collection=collection_name,
-            n_results=n_results,
-            has_filters=where is not None,
-        )
+            logger.debug(
+                "query_executed",
+                collection=collection_name,
+                n_results=n_results,
+                has_filters=where is not None,
+            )
 
-        return results
+            return results
+        except Exception as e:
+            logger.error(
+                "query_failed",
+                collection=collection_name,
+                n_results=n_results,
+                error=str(e),
+            )
+            raise
 
     def delete_document(self, collection_name: str, document_id: str) -> None:
         """Delete a document from a collection.
@@ -211,14 +238,23 @@ class VectorStore:
             collection_name: Collection name.
             document_id: Document ID to delete.
         """
-        collection = self.get_collection(collection_name)
-        collection.delete(ids=[document_id])
+        try:
+            collection = self.get_collection(collection_name)
+            collection.delete(ids=[document_id])
 
-        logger.debug(
-            "document_deleted",
-            collection=collection_name,
-            document_id=document_id,
-        )
+            logger.debug(
+                "document_deleted",
+                collection=collection_name,
+                document_id=document_id,
+            )
+        except Exception as e:
+            logger.error(
+                "delete_document_failed",
+                collection=collection_name,
+                document_id=document_id,
+                error=str(e),
+            )
+            raise
 
     def delete_collection(self, collection_name: str) -> None:
         """Delete an entire collection.
@@ -226,10 +262,18 @@ class VectorStore:
         Args:
             collection_name: Collection name to delete.
         """
-        self.client.delete_collection(collection_name)
-        self._collections.pop(collection_name, None)
+        try:
+            self.client.delete_collection(collection_name)
+            self._collections.pop(collection_name, None)
 
-        logger.info("collection_deleted", collection=collection_name)
+            logger.info("collection_deleted", collection=collection_name)
+        except Exception as e:
+            logger.error(
+                "delete_collection_failed",
+                collection=collection_name,
+                error=str(e),
+            )
+            raise
 
     def collection_count(self, collection_name: str) -> int:
         """Get the number of documents in a collection.

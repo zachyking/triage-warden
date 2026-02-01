@@ -84,61 +84,70 @@ class RetrievalService:
         top_k = top_k or self._config.default_top_k
         min_similarity = min_similarity or self._config.min_similarity_threshold
 
-        # Execute query
-        raw_results = self._vector_store.query(
-            collection_name=collection,
-            query_text=query,
-            n_results=top_k,
-            where=filters,
-        )
+        try:
+            # Execute query
+            raw_results = self._vector_store.query(
+                collection_name=collection,
+                query_text=query,
+                n_results=top_k,
+                where=filters,
+            )
 
-        # Process results
-        results = []
-        total_results = 0
+            # Process results
+            results = []
+            total_results = 0
 
-        if raw_results and raw_results.get("ids"):
-            ids = raw_results["ids"][0] if raw_results["ids"] else []
-            documents = raw_results.get("documents", [[]])[0]
-            distances = raw_results.get("distances", [[]])[0]
-            metadatas = raw_results.get("metadatas", [[]])[0]
+            if raw_results and raw_results.get("ids"):
+                ids = raw_results["ids"][0] if raw_results["ids"] else []
+                documents = raw_results.get("documents", [[]])[0]
+                distances = raw_results.get("distances", [[]])[0]
+                metadatas = raw_results.get("metadatas", [[]])[0]
 
-            total_results = len(ids)
+                total_results = len(ids)
 
-            for i, doc_id in enumerate(ids):
-                similarity = self._distance_to_similarity(distances[i])
+                for i, doc_id in enumerate(ids):
+                    similarity = self._distance_to_similarity(distances[i])
 
-                # Apply similarity threshold
-                if similarity >= min_similarity:
-                    results.append(
-                        QueryResult(
-                            id=doc_id,
-                            content=documents[i] if documents else "",
-                            similarity=similarity,
-                            metadata=metadatas[i] if metadatas else {},
+                    # Apply similarity threshold
+                    if similarity >= min_similarity:
+                        results.append(
+                            QueryResult(
+                                id=doc_id,
+                                content=documents[i] if documents else "",
+                                similarity=similarity,
+                                metadata=metadatas[i] if metadatas else {},
+                            )
                         )
-                    )
 
-        # Sort by similarity descending
-        results.sort(key=lambda r: r.similarity, reverse=True)
+            # Sort by similarity descending
+            results.sort(key=lambda r: r.similarity, reverse=True)
 
-        execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+            execution_time_ms = int((time.perf_counter() - start_time) * 1000)
 
-        logger.debug(
-            "search_executed",
-            collection=collection,
-            query_length=len(query),
-            total_results=total_results,
-            filtered_results=len(results),
-            execution_time_ms=execution_time_ms,
-        )
+            logger.debug(
+                "search_executed",
+                collection=collection,
+                query_length=len(query),
+                total_results=total_results,
+                filtered_results=len(results),
+                execution_time_ms=execution_time_ms,
+            )
 
-        return QueryResponse(
-            query=query,
-            collection=collection,
-            results=results,
-            total_results=total_results,
-            execution_time_ms=execution_time_ms,
-        )
+            return QueryResponse(
+                query=query,
+                collection=collection,
+                results=results,
+                total_results=total_results,
+                execution_time_ms=execution_time_ms,
+            )
+        except Exception as e:
+            logger.error(
+                "search_failed",
+                collection=collection,
+                query_length=len(query),
+                error=str(e),
+            )
+            raise
 
     def search_similar_incidents(
         self,
