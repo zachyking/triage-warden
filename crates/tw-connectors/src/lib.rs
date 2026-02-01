@@ -54,7 +54,7 @@ pub use traits::{
 
 // Re-export connector implementations
 pub use edr::{CrowdStrikeConfig, CrowdStrikeConnector, MockEDRConnector};
-pub use email::{M365Config, M365Connector};
+pub use email::{M365Config, M365Connector, MockEmailGatewayConnector};
 pub use siem::{MockSIEMConnector, SplunkConfig, SplunkConnector};
 pub use threat_intel::{MockThreatIntelConnector, VirusTotalConfig, VirusTotalConnector};
 pub use ticketing::{JiraConfig, JiraConnector, MockTicketingConnector};

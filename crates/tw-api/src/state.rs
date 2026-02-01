@@ -1,8 +1,10 @@
 //! Application state shared across handlers.
 
 use std::sync::Arc;
+use tracing::info;
 use tw_core::db::DbPool;
 use tw_core::EventBus;
+use tw_policy::PolicyEngine;
 
 /// Shared application state.
 #[derive(Clone)]
@@ -13,15 +15,24 @@ pub struct AppState {
     pub event_bus: Arc<EventBus>,
     /// Webhook secrets for signature validation.
     pub webhook_secrets: Arc<WebhookSecrets>,
+    /// Policy engine for evaluating actions against rules and guardrails.
+    pub policy_engine: Arc<PolicyEngine>,
 }
 
 impl AppState {
     /// Creates a new application state.
     pub fn new(db: DbPool, event_bus: EventBus) -> Self {
+        let policy_engine = PolicyEngine::default();
+        info!(
+            rules_count = policy_engine.rules().len(),
+            "Policy engine initialized with default rules"
+        );
+
         Self {
             db: Arc::new(db),
             event_bus: Arc::new(event_bus),
             webhook_secrets: Arc::new(WebhookSecrets::default()),
+            policy_engine: Arc::new(policy_engine),
         }
     }
 

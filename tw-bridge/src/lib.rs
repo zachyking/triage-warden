@@ -37,10 +37,21 @@ use std::sync::Arc;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
+use tw_connectors::edr::crowdstrike::{CrowdStrikeConfig, CrowdStrikeConnector};
 use tw_connectors::edr::mock::MockEDRConnector;
+use tw_connectors::email::m365::{M365Config, M365Connector};
+use tw_connectors::email::mock::MockEmailGatewayConnector;
 use tw_connectors::siem::mock::MockSIEMConnector;
+use tw_connectors::siem::splunk::{SplunkConfig, SplunkConnector};
 use tw_connectors::threat_intel::mock::MockThreatIntelConnector;
-use tw_connectors::traits::{EDRConnector, SIEMConnector, ThreatIntelConnector, TimeRange};
+use tw_connectors::threat_intel::virustotal::{VirusTotalConfig, VirusTotalConnector};
+use tw_connectors::ticketing::jira::{JiraConfig, JiraConnector};
+use tw_connectors::ticketing::mock::MockTicketingConnector;
+use tw_connectors::traits::{
+    AuthConfig, ConnectorConfig, ConnectorHealth, CreateTicketRequest, EDRConnector,
+    EmailGatewayConnector, EmailSearchQuery, SIEMConnector, ThreatIntelConnector, TicketPriority,
+    TicketingConnector, TimeRange, UpdateTicketRequest,
+};
 use tw_policy::{
     ApprovalLevel, ApprovalManager, KillSwitch, ModeManager, OperationMode, PolicyDecision,
     PolicyEngine,
@@ -265,9 +276,13 @@ impl BridgeConfig {
 ///     ti = ThreatIntelBridge("mock")
 ///     result = ti.lookup_hash("44d88612fea8a8f36de82e1278abb02f")
 ///     print(result)  # Returns dict with verdict, score, etc.
+///
+///     # Using VirusTotal connector (requires TW_VIRUSTOTAL_API_KEY env var)
+///     ti = ThreatIntelBridge("virustotal")
+///     result = ti.lookup_hash("abc123...")
 #[pyclass]
 pub struct ThreatIntelBridge {
-    connector: Arc<MockThreatIntelConnector>,
+    connector: Arc<dyn ThreatIntelConnector + Send + Sync>,
     connector_type: String,
 }
 
@@ -276,23 +291,67 @@ impl ThreatIntelBridge {
     /// Creates a new ThreatIntelBridge.
     ///
     /// Args:
-    ///     connector_type: Type of connector to use (currently only "mock" supported)
+    ///     mode: Connector mode to use ("mock" or "virustotal")
+    ///           - "mock": Uses mock connector for testing (default)
+    ///           - "virustotal": Uses VirusTotal API (requires TW_VIRUSTOTAL_API_KEY env var)
     ///
     /// Returns:
     ///     ThreatIntelBridge instance
     ///
     /// Raises:
-    ///     ValueError: If connector_type is not supported
+    ///     ValueError: If mode is not supported or API key is missing for virustotal
     #[new]
-    pub fn new(connector_type: &str) -> PyResult<Self> {
-        match connector_type {
-            "mock" => Ok(Self {
+    pub fn new(mode: &str) -> PyResult<Self> {
+        match mode {
+            "mock" | "" => Ok(Self {
                 connector: Arc::new(MockThreatIntelConnector::new("mock")),
-                connector_type: connector_type.to_string(),
+                connector_type: "mock".to_string(),
             }),
+            "virustotal" => {
+                let api_key = std::env::var("TW_VIRUSTOTAL_API_KEY").map_err(|_| {
+                    PyValueError::new_err(
+                        "TW_VIRUSTOTAL_API_KEY environment variable not set. \
+                         Please set your VirusTotal API key to use the virustotal connector.",
+                    )
+                })?;
+
+                if api_key.trim().is_empty() {
+                    return Err(PyValueError::new_err(
+                        "TW_VIRUSTOTAL_API_KEY environment variable is empty. \
+                         Please provide a valid VirusTotal API key.",
+                    ));
+                }
+
+                let config = VirusTotalConfig {
+                    connector: ConnectorConfig {
+                        name: "virustotal".to_string(),
+                        base_url: "https://www.virustotal.com".to_string(),
+                        auth: AuthConfig::ApiKey {
+                            key: api_key,
+                            header_name: "x-apikey".to_string(),
+                        },
+                        timeout_secs: 30,
+                        max_retries: 3,
+                        verify_tls: true,
+                        headers: std::collections::HashMap::new(),
+                    },
+                    cache_ttl_secs: 3600,
+                    max_cache_entries: 10000,
+                    requests_per_minute: 4, // Free tier limit
+                };
+
+                let connector = VirusTotalConnector::new(config).map_err(|e| {
+                    PyRuntimeError::new_err(format!("Failed to create VirusTotal connector: {}", e))
+                })?;
+
+                Ok(Self {
+                    connector: Arc::new(connector),
+                    connector_type: "virustotal".to_string(),
+                })
+            }
             _ => Err(PyValueError::new_err(format!(
-                "Unsupported connector type: {}. Supported: mock",
-                connector_type
+                "Unsupported connector mode: '{}'. Supported modes: 'mock', 'virustotal'",
+                mode
             ))),
         }
     }
@@ -406,16 +465,40 @@ impl ThreatIntelBridge {
     /// Check the health of the connector.
     ///
     /// Returns:
-    ///     dict with health status
+    ///     dict with health status including:
+    ///         - status: "healthy", "degraded", "unhealthy", or "unknown"
+    ///         - connector_type: The type of connector ("mock" or "virustotal")
+    ///         - message: Additional details (for degraded/unhealthy status)
     pub fn health_check(&self, py: Python<'_>) -> PyResult<PyObject> {
         let connector = Arc::clone(&self.connector);
+        let connector_type = self.connector_type.clone();
 
-        let result = get_runtime()
-            .block_on(async move {
-                use tw_connectors::traits::Connector;
-                connector.health_check().await
-            })
+        let health = get_runtime()
+            .block_on(async move { connector.health_check().await })
             .map_err(connector_error_to_py)?;
+
+        let result = match health {
+            ConnectorHealth::Healthy => serde_json::json!({
+                "status": "healthy",
+                "connector_type": connector_type,
+                "message": null
+            }),
+            ConnectorHealth::Degraded(msg) => serde_json::json!({
+                "status": "degraded",
+                "connector_type": connector_type,
+                "message": msg
+            }),
+            ConnectorHealth::Unhealthy(msg) => serde_json::json!({
+                "status": "unhealthy",
+                "connector_type": connector_type,
+                "message": msg
+            }),
+            ConnectorHealth::Unknown => serde_json::json!({
+                "status": "unknown",
+                "connector_type": connector_type,
+                "message": null
+            }),
+        };
 
         pythonize::pythonize(py, &result)
             .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
@@ -435,9 +518,13 @@ impl ThreatIntelBridge {
 ///     siem = SIEMBridge("mock")
 ///     results = siem.search("login_failure", 24)  # Search last 24 hours
 ///     alerts = siem.get_recent_alerts(10)
+///
+///     # Using Splunk connector (requires TW_SPLUNK_URL and TW_SPLUNK_TOKEN env vars)
+///     siem = SIEMBridge("splunk")
+///     results = siem.search("index=main error", 24)
 #[pyclass]
 pub struct SIEMBridge {
-    connector: Arc<MockSIEMConnector>,
+    connector: Arc<dyn SIEMConnector + Send + Sync>,
     connector_type: String,
 }
 
@@ -446,19 +533,23 @@ impl SIEMBridge {
     /// Creates a new SIEMBridge.
     ///
     /// Args:
-    ///     connector_type: Type of connector (currently only "mock" supported)
-    ///     with_sample_data: If True, initializes with sample security events
+    ///     mode: Type of connector ("mock" or "splunk")
+    ///     with_sample_data: If True and mode="mock", initializes with sample security events
+    ///
+    /// Environment Variables (for splunk mode):
+    ///     TW_SPLUNK_URL: Splunk server URL (e.g., "https://splunk.example.com:8089")
+    ///     TW_SPLUNK_TOKEN: Splunk authentication token
     ///
     /// Returns:
     ///     SIEMBridge instance
     ///
     /// Raises:
-    ///     ValueError: If connector_type is not supported
+    ///     ValueError: If mode is not supported or Splunk configuration is missing
     #[new]
-    #[pyo3(signature = (connector_type, with_sample_data=true))]
-    pub fn new(connector_type: &str, with_sample_data: bool) -> PyResult<Self> {
-        match connector_type {
-            "mock" => {
+    #[pyo3(signature = (mode, with_sample_data=true))]
+    pub fn new(mode: &str, with_sample_data: bool) -> PyResult<Self> {
+        match mode {
+            "mock" | "" => {
                 let connector = if with_sample_data {
                     MockSIEMConnector::with_sample_data("mock")
                 } else {
@@ -466,12 +557,51 @@ impl SIEMBridge {
                 };
                 Ok(Self {
                     connector: Arc::new(connector),
-                    connector_type: connector_type.to_string(),
+                    connector_type: "mock".to_string(),
+                })
+            }
+            "splunk" => {
+                let url = std::env::var("TW_SPLUNK_URL").map_err(|_| {
+                    PyValueError::new_err(
+                        "Splunk mode requires TW_SPLUNK_URL environment variable to be set",
+                    )
+                })?;
+                let token = std::env::var("TW_SPLUNK_TOKEN").map_err(|_| {
+                    PyValueError::new_err(
+                        "Splunk mode requires TW_SPLUNK_TOKEN environment variable to be set",
+                    )
+                })?;
+
+                let config = SplunkConfig {
+                    connector: ConnectorConfig {
+                        name: "splunk".to_string(),
+                        base_url: url,
+                        auth: AuthConfig::BearerToken { token },
+                        timeout_secs: 30,
+                        max_retries: 3,
+                        verify_tls: true,
+                        headers: std::collections::HashMap::new(),
+                    },
+                    app: "search".to_string(),
+                    owner: "-".to_string(),
+                    output_mode: "json".to_string(),
+                    search_timeout: 120,
+                    max_results: 10000,
+                    requests_per_second: 10,
+                };
+
+                let connector = SplunkConnector::new(config).map_err(|e| {
+                    PyValueError::new_err(format!("Failed to create Splunk connector: {}", e))
+                })?;
+
+                Ok(Self {
+                    connector: Arc::new(connector),
+                    connector_type: "splunk".to_string(),
                 })
             }
             _ => Err(PyValueError::new_err(format!(
-                "Unsupported connector type: {}. Supported: mock",
-                connector_type
+                "Unsupported connector mode: {}. Supported: mock, splunk",
+                mode
             ))),
         }
     }
@@ -615,15 +745,90 @@ impl SIEMBridge {
 /// Provides Python access to EDR connectors for host management,
 /// threat detection, and response actions.
 ///
+/// Supports multiple connector types:
+/// - "mock": Mock connector for testing (default, backward compatible)
+/// - "crowdstrike": CrowdStrike Falcon connector (requires env vars)
+///
 /// Example:
+///     # Mock connector (default)
 ///     edr = EDRBridge("mock")
 ///     host = edr.get_host_info("workstation-001")
 ///     detections = edr.get_detections("workstation-001")
 ///     result = edr.isolate_host("workstation-001")
+///
+///     # CrowdStrike connector (requires TW_CROWDSTRIKE_* env vars)
+///     edr = EDRBridge("crowdstrike")
 #[pyclass]
 pub struct EDRBridge {
-    connector: Arc<MockEDRConnector>,
+    connector: Arc<dyn EDRConnector + Send + Sync>,
     connector_type: String,
+}
+
+/// Creates a CrowdStrike connector from environment variables.
+///
+/// Required environment variables:
+/// - TW_CROWDSTRIKE_CLIENT_ID: OAuth2 client ID
+/// - TW_CROWDSTRIKE_CLIENT_SECRET: OAuth2 client secret
+///
+/// Optional environment variables:
+/// - TW_CROWDSTRIKE_REGION: API region (default: "us-1")
+///   Valid values: us-1, us-2, eu-1, us-gov-1
+fn create_crowdstrike_connector() -> PyResult<CrowdStrikeConnector> {
+    let client_id = std::env::var("TW_CROWDSTRIKE_CLIENT_ID").map_err(|_| {
+        PyValueError::new_err(
+            "Missing TW_CROWDSTRIKE_CLIENT_ID environment variable. \
+             Set TW_CROWDSTRIKE_CLIENT_ID and TW_CROWDSTRIKE_CLIENT_SECRET to use CrowdStrike connector.",
+        )
+    })?;
+
+    let client_secret = std::env::var("TW_CROWDSTRIKE_CLIENT_SECRET").map_err(|_| {
+        PyValueError::new_err(
+            "Missing TW_CROWDSTRIKE_CLIENT_SECRET environment variable. \
+             Set TW_CROWDSTRIKE_CLIENT_ID and TW_CROWDSTRIKE_CLIENT_SECRET to use CrowdStrike connector.",
+        )
+    })?;
+
+    let region = std::env::var("TW_CROWDSTRIKE_REGION").unwrap_or_else(|_| "us-1".to_string());
+
+    // Build the base URL based on region
+    let base_url = match region.as_str() {
+        "us-1" => "https://api.crowdstrike.com",
+        "us-2" => "https://api.us-2.crowdstrike.com",
+        "eu-1" => "https://api.eu-1.crowdstrike.com",
+        "us-gov-1" => "https://api.laggar.gcw.crowdstrike.com",
+        _ => "https://api.crowdstrike.com",
+    };
+
+    let token_url = format!("{}/oauth2/token", base_url);
+
+    let config = CrowdStrikeConfig {
+        connector: ConnectorConfig {
+            name: "crowdstrike".to_string(),
+            base_url: base_url.to_string(),
+            auth: AuthConfig::OAuth2 {
+                client_id,
+                client_secret,
+                token_url,
+                scopes: vec![
+                    "hosts:read".to_string(),
+                    "hosts:write".to_string(),
+                    "detects:read".to_string(),
+                    "real-time-response:read".to_string(),
+                    "real-time-response:write".to_string(),
+                ],
+            },
+            timeout_secs: 30,
+            max_retries: 3,
+            verify_tls: true,
+            headers: std::collections::HashMap::new(),
+        },
+        region,
+        member_cid: None,
+    };
+
+    CrowdStrikeConnector::new(config).map_err(|e| {
+        PyRuntimeError::new_err(format!("Failed to create CrowdStrike connector: {}", e))
+    })
 }
 
 #[pymethods]
@@ -631,31 +836,47 @@ impl EDRBridge {
     /// Creates a new EDRBridge.
     ///
     /// Args:
-    ///     connector_type: Type of connector (currently only "mock" supported)
-    ///     with_sample_data: If True, initializes with sample hosts and detections
+    ///     connector_type: Type of connector to use:
+    ///         - "mock": Mock connector for testing (default)
+    ///         - "crowdstrike": CrowdStrike Falcon connector
+    ///     with_sample_data: If True, initializes mock connector with sample data (default: True)
+    ///         Only applies to "mock" connector type.
     ///
     /// Returns:
     ///     EDRBridge instance
     ///
     /// Raises:
-    ///     ValueError: If connector_type is not supported
+    ///     ValueError: If connector_type is not supported or required credentials are missing
+    ///     RuntimeError: If connector initialization fails
+    ///
+    /// Environment Variables (for "crowdstrike" mode):
+    ///     TW_CROWDSTRIKE_CLIENT_ID: OAuth2 client ID (required)
+    ///     TW_CROWDSTRIKE_CLIENT_SECRET: OAuth2 client secret (required)
+    ///     TW_CROWDSTRIKE_REGION: API region (optional, default: "us-1")
     #[new]
     #[pyo3(signature = (connector_type, with_sample_data=true))]
     pub fn new(connector_type: &str, with_sample_data: bool) -> PyResult<Self> {
         match connector_type {
-            "mock" => {
-                let connector = if with_sample_data {
-                    MockEDRConnector::with_sample_data("mock")
+            "" | "mock" => {
+                let connector: Arc<dyn EDRConnector + Send + Sync> = if with_sample_data {
+                    Arc::new(MockEDRConnector::with_sample_data("mock"))
                 } else {
-                    MockEDRConnector::new("mock")
+                    Arc::new(MockEDRConnector::new("mock"))
                 };
+                Ok(Self {
+                    connector,
+                    connector_type: "mock".to_string(),
+                })
+            }
+            "crowdstrike" => {
+                let connector = create_crowdstrike_connector()?;
                 Ok(Self {
                     connector: Arc::new(connector),
                     connector_type: connector_type.to_string(),
                 })
             }
             _ => Err(PyValueError::new_err(format!(
-                "Unsupported connector type: {}. Supported: mock",
+                "Unsupported connector type: '{}'. Supported: 'mock', 'crowdstrike'",
                 connector_type
             ))),
         }
@@ -878,6 +1099,330 @@ impl EDRBridge {
                 connector.health_check().await
             })
             .map_err(connector_error_to_py)?;
+
+        pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+    }
+}
+
+// ============================================================================
+// EmailGatewayBridge - Email Gateway Connector Bridge
+// ============================================================================
+
+/// Bridge for Email Gateway (M365/mock) operations.
+///
+/// Provides Python access to email gateway connectors for email search,
+/// quarantine, and sender blocking operations.
+///
+/// Example:
+///     email = EmailGatewayBridge("mock")
+///     emails = email.search_emails("subject:phishing", None, None, 7)
+///     result = email.quarantine_email("msg-001")
+///     result = email.block_sender("attacker@evil.com")
+#[pyclass]
+pub struct EmailGatewayBridge {
+    connector: Arc<dyn EmailGatewayConnector + Send + Sync>,
+    connector_type: String,
+}
+
+#[pymethods]
+impl EmailGatewayBridge {
+    /// Creates a new EmailGatewayBridge.
+    ///
+    /// Args:
+    ///     mode: Connector mode to use ("mock" or "m365")
+    ///           - "mock": Uses mock connector for testing (default)
+    ///           - "m365": Uses Microsoft 365 Graph API (requires env vars:
+    ///                     TW_M365_TENANT_ID, TW_M365_CLIENT_ID, TW_M365_CLIENT_SECRET)
+    ///
+    /// Returns:
+    ///     EmailGatewayBridge instance
+    ///
+    /// Raises:
+    ///     ValueError: If mode is not supported or required env vars are missing for m365
+    #[new]
+    pub fn new(mode: &str) -> PyResult<Self> {
+        match mode {
+            "mock" | "" => Ok(Self {
+                connector: Arc::new(MockEmailGatewayConnector::with_sample_data("mock")),
+                connector_type: "mock".to_string(),
+            }),
+            "m365" => {
+                let tenant_id = std::env::var("TW_M365_TENANT_ID").map_err(|_| {
+                    PyValueError::new_err(
+                        "TW_M365_TENANT_ID environment variable not set. \
+                         Please set your Microsoft 365 tenant ID.",
+                    )
+                })?;
+
+                let client_id = std::env::var("TW_M365_CLIENT_ID").map_err(|_| {
+                    PyValueError::new_err(
+                        "TW_M365_CLIENT_ID environment variable not set. \
+                         Please set your Microsoft 365 application client ID.",
+                    )
+                })?;
+
+                let client_secret = std::env::var("TW_M365_CLIENT_SECRET").map_err(|_| {
+                    PyValueError::new_err(
+                        "TW_M365_CLIENT_SECRET environment variable not set. \
+                         Please set your Microsoft 365 application client secret.",
+                    )
+                })?;
+
+                if tenant_id.trim().is_empty()
+                    || client_id.trim().is_empty()
+                    || client_secret.trim().is_empty()
+                {
+                    return Err(PyValueError::new_err(
+                        "One or more M365 environment variables are empty. \
+                         Please provide valid values for TW_M365_TENANT_ID, \
+                         TW_M365_CLIENT_ID, and TW_M365_CLIENT_SECRET.",
+                    ));
+                }
+
+                let token_url = format!(
+                    "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
+                    tenant_id
+                );
+
+                let config = M365Config {
+                    connector: ConnectorConfig {
+                        name: "m365".to_string(),
+                        base_url: "https://graph.microsoft.com/v1.0".to_string(),
+                        auth: AuthConfig::OAuth2 {
+                            client_id,
+                            client_secret,
+                            token_url,
+                            scopes: vec!["https://graph.microsoft.com/.default".to_string()],
+                        },
+                        timeout_secs: 30,
+                        max_retries: 3,
+                        verify_tls: true,
+                        headers: std::collections::HashMap::new(),
+                    },
+                    tenant_id,
+                    target_mailbox: None,
+                    use_security_center: false,
+                };
+
+                let connector = M365Connector::new(config).map_err(|e| {
+                    PyRuntimeError::new_err(format!("Failed to create M365 connector: {}", e))
+                })?;
+
+                Ok(Self {
+                    connector: Arc::new(connector),
+                    connector_type: "m365".to_string(),
+                })
+            }
+            _ => Err(PyValueError::new_err(format!(
+                "Unsupported connector mode: '{}'. Supported modes: 'mock', 'm365'",
+                mode
+            ))),
+        }
+    }
+
+    /// Returns the connector type.
+    pub fn get_connector_type(&self) -> String {
+        self.connector_type.clone()
+    }
+
+    /// Search for emails matching the specified criteria.
+    ///
+    /// Args:
+    ///     query: Optional search query (subject contains)
+    ///     sender: Optional sender email address filter
+    ///     recipient: Optional recipient email address filter
+    ///     days: Number of days to search back (default: 7)
+    ///
+    /// Returns:
+    ///     list of email dicts, each containing:
+    ///         - id: Message ID
+    ///         - internet_message_id: RFC 2822 message ID
+    ///         - sender: Sender email address
+    ///         - recipients: List of recipient addresses
+    ///         - subject: Email subject
+    ///         - received_at: Timestamp when received
+    ///         - has_attachments: Whether email has attachments
+    ///         - attachments: List of attachment metadata
+    ///         - urls: URLs found in the email body
+    ///         - headers: Email headers
+    ///
+    /// Raises:
+    ///     RuntimeError: If search fails
+    #[pyo3(signature = (query=None, sender=None, recipient=None, days=7))]
+    pub fn search_emails(
+        &self,
+        py: Python<'_>,
+        query: Option<&str>,
+        sender: Option<&str>,
+        recipient: Option<&str>,
+        days: i64,
+    ) -> PyResult<PyObject> {
+        let connector = Arc::clone(&self.connector);
+        let search_query = EmailSearchQuery {
+            sender: sender.map(|s| s.to_string()),
+            recipient: recipient.map(|r| r.to_string()),
+            subject_contains: query.map(|q| q.to_string()),
+            timerange: TimeRange::last_days(days),
+            has_attachments: None,
+            threat_type: None,
+            limit: 100,
+        };
+
+        let result = get_runtime()
+            .block_on(async move { connector.search_emails(search_query).await })
+            .map_err(connector_error_to_py)?;
+
+        pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+    }
+
+    /// Get a specific email by message ID.
+    ///
+    /// Args:
+    ///     message_id: The message ID to retrieve
+    ///
+    /// Returns:
+    ///     dict with email details
+    ///
+    /// Raises:
+    ///     RuntimeError: If email not found or retrieval fails
+    pub fn get_email(&self, py: Python<'_>, message_id: &str) -> PyResult<PyObject> {
+        let connector = Arc::clone(&self.connector);
+        let message_id = message_id.to_string();
+
+        let result = get_runtime()
+            .block_on(async move { connector.get_email(&message_id).await })
+            .map_err(connector_error_to_py)?;
+
+        pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+    }
+
+    /// Quarantine an email (move to junk/quarantine folder).
+    ///
+    /// Args:
+    ///     message_id: The message ID to quarantine
+    ///
+    /// Returns:
+    ///     bool: True if quarantine succeeded
+    ///
+    /// Raises:
+    ///     RuntimeError: If quarantine fails or email not found
+    pub fn quarantine_email(&self, message_id: &str) -> PyResult<bool> {
+        let connector = Arc::clone(&self.connector);
+        let message_id = message_id.to_string();
+
+        let result = get_runtime()
+            .block_on(async move { connector.quarantine_email(&message_id).await })
+            .map_err(connector_error_to_py)?;
+
+        Ok(result.success)
+    }
+
+    /// Release an email from quarantine (move back to inbox).
+    ///
+    /// Args:
+    ///     message_id: The message ID to release
+    ///
+    /// Returns:
+    ///     bool: True if release succeeded
+    ///
+    /// Raises:
+    ///     RuntimeError: If release fails or email not found/not quarantined
+    pub fn release_email(&self, message_id: &str) -> PyResult<bool> {
+        let connector = Arc::clone(&self.connector);
+        let message_id = message_id.to_string();
+
+        let result = get_runtime()
+            .block_on(async move { connector.release_email(&message_id).await })
+            .map_err(connector_error_to_py)?;
+
+        Ok(result.success)
+    }
+
+    /// Block a sender address.
+    ///
+    /// Args:
+    ///     sender_address: The sender email address to block
+    ///
+    /// Returns:
+    ///     bool: True if block succeeded
+    ///
+    /// Raises:
+    ///     RuntimeError: If blocking fails
+    pub fn block_sender(&self, sender_address: &str) -> PyResult<bool> {
+        let connector = Arc::clone(&self.connector);
+        let sender = sender_address.to_string();
+
+        let result = get_runtime()
+            .block_on(async move { connector.block_sender(&sender).await })
+            .map_err(connector_error_to_py)?;
+
+        Ok(result.success)
+    }
+
+    /// Unblock a sender address.
+    ///
+    /// Args:
+    ///     sender_address: The sender email address to unblock
+    ///
+    /// Returns:
+    ///     bool: True if unblock succeeded
+    ///
+    /// Raises:
+    ///     RuntimeError: If unblocking fails or sender not blocked
+    pub fn unblock_sender(&self, sender_address: &str) -> PyResult<bool> {
+        let connector = Arc::clone(&self.connector);
+        let sender = sender_address.to_string();
+
+        let result = get_runtime()
+            .block_on(async move { connector.unblock_sender(&sender).await })
+            .map_err(connector_error_to_py)?;
+
+        Ok(result.success)
+    }
+
+    /// Check the health of the email gateway connector.
+    ///
+    /// Returns:
+    ///     dict with health status including:
+    ///         - status: "healthy", "degraded", "unhealthy", or "unknown"
+    ///         - connector_type: The type of connector ("mock" or "m365")
+    ///         - message: Additional details (for degraded/unhealthy status)
+    pub fn health_check(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let connector = Arc::clone(&self.connector);
+        let connector_type = self.connector_type.clone();
+
+        let health = get_runtime()
+            .block_on(async move {
+                use tw_connectors::traits::Connector;
+                connector.health_check().await
+            })
+            .map_err(connector_error_to_py)?;
+
+        let result = match health {
+            ConnectorHealth::Healthy => serde_json::json!({
+                "status": "healthy",
+                "connector_type": connector_type,
+                "message": null
+            }),
+            ConnectorHealth::Degraded(msg) => serde_json::json!({
+                "status": "degraded",
+                "connector_type": connector_type,
+                "message": msg
+            }),
+            ConnectorHealth::Unhealthy(msg) => serde_json::json!({
+                "status": "unhealthy",
+                "connector_type": connector_type,
+                "message": msg
+            }),
+            ConnectorHealth::Unknown => serde_json::json!({
+                "status": "unknown",
+                "connector_type": connector_type,
+                "message": null
+            }),
+        };
 
         pythonize::pythonize(py, &result)
             .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
@@ -1155,6 +1700,399 @@ impl Default for PolicyBridge {
 }
 
 // ============================================================================
+// TicketingBridge - Ticketing System Connector Bridge
+// ============================================================================
+
+/// Enum to hold different ticketing connector types.
+enum TicketingConnectorType {
+    Mock(MockTicketingConnector),
+    Jira(JiraConnector),
+}
+
+/// Bridge for ticketing system operations (Jira, Mock).
+///
+/// Provides Python access to ticketing connectors for creating, updating,
+/// and managing security incident tickets.
+///
+/// Example:
+///     # Using mock connector for testing
+///     ticketing = TicketingBridge("mock")
+///     ticket = ticketing.create_ticket("Security Alert", "Malware detected", "high", ["security"])
+///
+///     # Using Jira connector (requires env vars)
+///     ticketing = TicketingBridge("jira")
+///     ticket = ticketing.create_ticket("Security Alert", "Malware detected", "high", ["security"])
+#[pyclass]
+pub struct TicketingBridge {
+    connector: TicketingConnectorType,
+    connector_type: String,
+}
+
+#[pymethods]
+impl TicketingBridge {
+    /// Creates a new TicketingBridge.
+    ///
+    /// Args:
+    ///     mode: Type of connector to use ("mock" or "jira")
+    ///
+    /// For "jira" mode, the following environment variables are required:
+    ///     - TW_JIRA_URL: Base URL of your Jira instance
+    ///     - TW_JIRA_EMAIL: Email address for authentication
+    ///     - TW_JIRA_API_TOKEN: API token for authentication
+    ///     - TW_JIRA_PROJECT: Project key (e.g., "SEC")
+    ///
+    /// Returns:
+    ///     TicketingBridge instance
+    ///
+    /// Raises:
+    ///     ValueError: If mode is not supported or required env vars are missing
+    #[new]
+    pub fn new(mode: &str) -> PyResult<Self> {
+        match mode {
+            "mock" => Ok(Self {
+                connector: TicketingConnectorType::Mock(MockTicketingConnector::new("mock")),
+                connector_type: mode.to_string(),
+            }),
+            "jira" => {
+                // Read configuration from environment variables
+                let base_url = std::env::var("TW_JIRA_URL").map_err(|_| {
+                    PyValueError::new_err(
+                        "TW_JIRA_URL environment variable not set. Required for Jira mode.",
+                    )
+                })?;
+
+                let email = std::env::var("TW_JIRA_EMAIL").map_err(|_| {
+                    PyValueError::new_err(
+                        "TW_JIRA_EMAIL environment variable not set. Required for Jira mode.",
+                    )
+                })?;
+
+                let api_token = std::env::var("TW_JIRA_API_TOKEN").map_err(|_| {
+                    PyValueError::new_err(
+                        "TW_JIRA_API_TOKEN environment variable not set. Required for Jira mode.",
+                    )
+                })?;
+
+                let project_key = std::env::var("TW_JIRA_PROJECT").map_err(|_| {
+                    PyValueError::new_err(
+                        "TW_JIRA_PROJECT environment variable not set. Required for Jira mode.",
+                    )
+                })?;
+
+                let config = JiraConfig {
+                    connector: ConnectorConfig {
+                        name: "jira".to_string(),
+                        base_url,
+                        auth: AuthConfig::Basic {
+                            username: email,
+                            password: api_token,
+                        },
+                        timeout_secs: 30,
+                        max_retries: 3,
+                        verify_tls: true,
+                        headers: std::collections::HashMap::new(),
+                    },
+                    project_key,
+                    default_issue_type: "Task".to_string(),
+                    field_mappings: std::collections::HashMap::new(),
+                    priority_mappings: std::collections::HashMap::new(),
+                    is_server: false,
+                    default_component: None,
+                    security_level: None,
+                };
+
+                let connector = JiraConnector::new(config).map_err(|e| {
+                    PyRuntimeError::new_err(format!("Failed to create Jira connector: {}", e))
+                })?;
+
+                Ok(Self {
+                    connector: TicketingConnectorType::Jira(connector),
+                    connector_type: mode.to_string(),
+                })
+            }
+            _ => Err(PyValueError::new_err(format!(
+                "Unsupported mode: {}. Supported: mock, jira",
+                mode
+            ))),
+        }
+    }
+
+    /// Returns the connector type.
+    pub fn get_connector_type(&self) -> String {
+        self.connector_type.clone()
+    }
+
+    /// Create a new ticket.
+    ///
+    /// Args:
+    ///     summary: Ticket title/summary
+    ///     description: Detailed description of the issue
+    ///     priority: Priority level ("lowest", "low", "medium", "high", "highest")
+    ///     labels: List of labels/tags to apply
+    ///
+    /// Returns:
+    ///     dict with ticket information including:
+    ///         - id: Ticket ID
+    ///         - key: Ticket key (e.g., "SEC-123")
+    ///         - title: Ticket title
+    ///         - description: Ticket description
+    ///         - status: Current status
+    ///         - priority: Priority level
+    ///         - url: URL to view the ticket
+    ///         - created_at: Creation timestamp
+    ///         - updated_at: Last update timestamp
+    ///
+    /// Raises:
+    ///     ValueError: If priority is invalid
+    ///     RuntimeError: If ticket creation fails
+    pub fn create_ticket(
+        &self,
+        py: Python<'_>,
+        summary: &str,
+        description: &str,
+        priority: &str,
+        labels: Vec<String>,
+    ) -> PyResult<PyObject> {
+        let ticket_priority = match priority.to_lowercase().as_str() {
+            "lowest" => TicketPriority::Lowest,
+            "low" => TicketPriority::Low,
+            "medium" => TicketPriority::Medium,
+            "high" => TicketPriority::High,
+            "highest" => TicketPriority::Highest,
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "Invalid priority: {}. Must be one of: lowest, low, medium, high, highest",
+                    priority
+                )))
+            }
+        };
+
+        let request = CreateTicketRequest {
+            title: summary.to_string(),
+            description: description.to_string(),
+            ticket_type: "Task".to_string(),
+            priority: ticket_priority,
+            labels,
+            assignee: None,
+            custom_fields: std::collections::HashMap::new(),
+        };
+
+        let result = match &self.connector {
+            TicketingConnectorType::Mock(c) => {
+                get_runtime().block_on(async { c.create_ticket(request).await })
+            }
+            TicketingConnectorType::Jira(c) => {
+                get_runtime().block_on(async { c.create_ticket(request).await })
+            }
+        }
+        .map_err(connector_error_to_py)?;
+
+        pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+    }
+
+    /// Get a ticket by ID or key.
+    ///
+    /// Args:
+    ///     ticket_id: Ticket ID or key (e.g., "SEC-123" or "MOCK-1")
+    ///
+    /// Returns:
+    ///     dict with ticket information
+    ///
+    /// Raises:
+    ///     RuntimeError: If ticket not found or retrieval fails
+    pub fn get_ticket(&self, py: Python<'_>, ticket_id: &str) -> PyResult<PyObject> {
+        let result = match &self.connector {
+            TicketingConnectorType::Mock(c) => {
+                get_runtime().block_on(async { c.get_ticket(ticket_id).await })
+            }
+            TicketingConnectorType::Jira(c) => {
+                get_runtime().block_on(async { c.get_ticket(ticket_id).await })
+            }
+        }
+        .map_err(connector_error_to_py)?;
+
+        pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+    }
+
+    /// Update an existing ticket.
+    ///
+    /// Args:
+    ///     ticket_id: Ticket ID or key to update
+    ///     updates: Dict with fields to update. Supported fields:
+    ///         - title: New title (optional)
+    ///         - description: New description (optional)
+    ///         - status: New status (optional)
+    ///         - priority: New priority (optional)
+    ///         - assignee: New assignee (optional)
+    ///         - add_labels: Labels to add (optional, list)
+    ///         - remove_labels: Labels to remove (optional, list)
+    ///
+    /// Returns:
+    ///     dict with updated ticket information
+    ///
+    /// Raises:
+    ///     RuntimeError: If ticket not found or update fails
+    pub fn update_ticket(
+        &self,
+        py: Python<'_>,
+        ticket_id: &str,
+        updates: &PyAny,
+    ) -> PyResult<PyObject> {
+        // Parse updates from Python dict
+        let updates_dict: std::collections::HashMap<String, PyObject> = updates
+            .extract()
+            .map_err(|e| PyValueError::new_err(format!("updates must be a dict: {}", e)))?;
+
+        let mut update_request = UpdateTicketRequest::default();
+
+        // Extract optional fields from the dict
+        if let Some(title) = updates_dict.get("title") {
+            if let Ok(t) = title.extract::<String>(py) {
+                update_request.title = Some(t);
+            }
+        }
+
+        if let Some(description) = updates_dict.get("description") {
+            if let Ok(d) = description.extract::<String>(py) {
+                update_request.description = Some(d);
+            }
+        }
+
+        if let Some(status) = updates_dict.get("status") {
+            if let Ok(s) = status.extract::<String>(py) {
+                update_request.status = Some(s);
+            }
+        }
+
+        if let Some(priority) = updates_dict.get("priority") {
+            if let Ok(p) = priority.extract::<String>(py) {
+                let ticket_priority = match p.to_lowercase().as_str() {
+                    "lowest" => TicketPriority::Lowest,
+                    "low" => TicketPriority::Low,
+                    "medium" => TicketPriority::Medium,
+                    "high" => TicketPriority::High,
+                    "highest" => TicketPriority::Highest,
+                    _ => return Err(PyValueError::new_err(format!("Invalid priority: {}", p))),
+                };
+                update_request.priority = Some(ticket_priority);
+            }
+        }
+
+        if let Some(assignee) = updates_dict.get("assignee") {
+            if let Ok(a) = assignee.extract::<String>(py) {
+                update_request.assignee = Some(a);
+            }
+        }
+
+        if let Some(add_labels) = updates_dict.get("add_labels") {
+            if let Ok(labels) = add_labels.extract::<Vec<String>>(py) {
+                update_request.add_labels = labels;
+            }
+        }
+
+        if let Some(remove_labels) = updates_dict.get("remove_labels") {
+            if let Ok(labels) = remove_labels.extract::<Vec<String>>(py) {
+                update_request.remove_labels = labels;
+            }
+        }
+
+        let ticket_id = ticket_id.to_string();
+        let result =
+            match &self.connector {
+                TicketingConnectorType::Mock(c) => get_runtime()
+                    .block_on(async { c.update_ticket(&ticket_id, update_request).await }),
+                TicketingConnectorType::Jira(c) => get_runtime()
+                    .block_on(async { c.update_ticket(&ticket_id, update_request).await }),
+            }
+            .map_err(connector_error_to_py)?;
+
+        pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+    }
+
+    /// Add a comment to a ticket.
+    ///
+    /// Args:
+    ///     ticket_id: Ticket ID or key
+    ///     comment: Comment text to add
+    ///
+    /// Returns:
+    ///     bool: True if comment was added successfully
+    ///
+    /// Raises:
+    ///     RuntimeError: If ticket not found or comment fails
+    pub fn add_comment(&self, ticket_id: &str, comment: &str) -> PyResult<bool> {
+        let ticket_id = ticket_id.to_string();
+        let comment = comment.to_string();
+
+        match &self.connector {
+            TicketingConnectorType::Mock(c) => {
+                get_runtime().block_on(async { c.add_comment(&ticket_id, &comment).await })
+            }
+            TicketingConnectorType::Jira(c) => {
+                get_runtime().block_on(async { c.add_comment(&ticket_id, &comment).await })
+            }
+        }
+        .map_err(connector_error_to_py)?;
+
+        Ok(true)
+    }
+
+    /// Search for tickets matching a query.
+    ///
+    /// Args:
+    ///     query: Search query string (matches title, description, labels)
+    ///
+    /// Returns:
+    ///     list of ticket dicts matching the query
+    ///
+    /// Raises:
+    ///     RuntimeError: If search fails
+    #[pyo3(signature = (query, limit=100))]
+    pub fn search_tickets(&self, py: Python<'_>, query: &str, limit: usize) -> PyResult<PyObject> {
+        let query = query.to_string();
+
+        let result = match &self.connector {
+            TicketingConnectorType::Mock(c) => {
+                get_runtime().block_on(async { c.search_tickets(&query, limit).await })
+            }
+            TicketingConnectorType::Jira(c) => {
+                get_runtime().block_on(async { c.search_tickets(&query, limit).await })
+            }
+        }
+        .map_err(connector_error_to_py)?;
+
+        pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+    }
+
+    /// Check the health of the ticketing connector.
+    ///
+    /// Returns:
+    ///     dict with health status:
+    ///         - status: "healthy", "degraded", or "unhealthy"
+    ///         - message: Optional message with details
+    pub fn health_check(&self, py: Python<'_>) -> PyResult<PyObject> {
+        use tw_connectors::traits::Connector;
+
+        let result = match &self.connector {
+            TicketingConnectorType::Mock(c) => {
+                get_runtime().block_on(async { c.health_check().await })
+            }
+            TicketingConnectorType::Jira(c) => {
+                get_runtime().block_on(async { c.health_check().await })
+            }
+        }
+        .map_err(connector_error_to_py)?;
+
+        pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+    }
+}
+
+// ============================================================================
 // Legacy TriageWardenBridge (kept for backward compatibility)
 // ============================================================================
 
@@ -1357,7 +2295,9 @@ fn tw_bridge(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<ThreatIntelBridge>()?;
     m.add_class::<SIEMBridge>()?;
     m.add_class::<EDRBridge>()?;
+    m.add_class::<EmailGatewayBridge>()?;
     m.add_class::<PolicyBridge>()?;
+    m.add_class::<TicketingBridge>()?;
 
     // Add version
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
