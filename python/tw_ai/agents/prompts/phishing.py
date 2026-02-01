@@ -5,6 +5,8 @@ Specialized system prompt for analyzing phishing-related alerts,
 covering MITRE ATT&CK techniques T1566.* (Phishing).
 """
 
+from typing import Any
+
 from tw_ai.agents.prompts.system import (
     AVAILABLE_TOOLS,
     CHAIN_OF_THOUGHT_GUIDANCE,
@@ -261,9 +263,9 @@ tools as needed, then provide your structured assessment.""")
 
 def build_phishing_alert_context(
     alert_id: str,
-    email_headers: dict,
+    email_headers: dict[str, Any],
     email_body: str | None = None,
-    attachments: list[dict] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
     urls: list[str] | None = None,
     reporter: str | None = None,
     reporter_action: str | None = None,

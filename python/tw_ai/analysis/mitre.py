@@ -715,8 +715,8 @@ def map_to_mitre(description: str) -> list[MITRETechnique]:
     matches.sort(key=lambda x: (-x[0], len(x[1].id)))
 
     # Convert to MITRETechnique objects
-    seen_ids = set()
-    results = []
+    seen_ids: set[str] = set()
+    results: list[MITRETechnique] = []
 
     for score, info in matches:
         # Skip if we already have this technique (prefer subtechnique)

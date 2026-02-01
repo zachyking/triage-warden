@@ -223,9 +223,9 @@ class EvaluationRunner:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Convert exceptions to CaseResult
-        processed_results = []
+        processed_results: list[CaseResult] = []
         for case, result in zip(cases, results):
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 processed_results.append(
                     CaseResult(
                         test_case_id=case.id,
@@ -386,7 +386,8 @@ class EvaluationRunner:
             return result.get("severity")
 
         if hasattr(result, "severity"):
-            return result.severity
+            severity: str | None = getattr(result, "severity", None)
+            return severity
 
         return None
 

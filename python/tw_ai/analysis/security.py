@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Literal
+from typing import Any, Literal
 
 from tw_ai.agents.models import Indicator
 
@@ -174,7 +174,7 @@ def extract_indicators(text: str) -> list[Indicator]:
     return indicators
 
 
-def calculate_severity(factors: dict) -> dict:
+def calculate_severity(factors: dict[str, Any]) -> dict[str, Any]:
     """Calculate incident severity based on multiple factors.
 
     Takes into account:
@@ -286,7 +286,7 @@ def calculate_severity(factors: dict) -> dict:
     }
 
 
-def identify_attack_pattern(events: list[dict]) -> dict:
+def identify_attack_pattern(events: list[dict[str, Any]]) -> dict[str, Any]:
     """Identify attack patterns from a sequence of security events.
 
     Analyzes events to detect common attack patterns:
@@ -359,7 +359,7 @@ def identify_attack_pattern(events: list[dict]) -> dict:
     }
 
 
-def _detect_brute_force(events: list[dict]) -> dict:
+def _detect_brute_force(events: list[dict[str, Any]]) -> dict[str, Any]:
     """Detect brute force attack pattern."""
     auth_failures = [
         e
@@ -418,7 +418,7 @@ def _detect_brute_force(events: list[dict]) -> dict:
     }
 
 
-def _detect_lateral_movement(events: list[dict]) -> dict:
+def _detect_lateral_movement(events: list[dict[str, Any]]) -> dict[str, Any]:
     """Detect lateral movement pattern."""
     network_events = [
         e
@@ -467,7 +467,11 @@ def _detect_lateral_movement(events: list[dict]) -> dict:
 
     # Check for use of admin tools
     admin_tools = {"psexec", "wmi", "rdp", "ssh", "smb"}
-    tools_used = {e.get("event_type") for e in network_events if e.get("event_type") in admin_tools}
+    tools_used: set[str] = {
+        e.get("event_type")  # type: ignore[misc]
+        for e in network_events
+        if e.get("event_type") in admin_tools
+    }
     if tools_used:
         indicators.append(f"Admin tools detected: {', '.join(tools_used)}")
         confidence = min(confidence + 10, 98)
@@ -479,7 +483,7 @@ def _detect_lateral_movement(events: list[dict]) -> dict:
     }
 
 
-def _detect_data_exfiltration(events: list[dict]) -> dict:
+def _detect_data_exfiltration(events: list[dict[str, Any]]) -> dict[str, Any]:
     """Detect data exfiltration pattern."""
     data_events = [
         e
@@ -523,7 +527,13 @@ def _detect_data_exfiltration(events: list[dict]) -> dict:
         confidence = 55
 
     # Check for suspicious destinations
-    destinations = list({e.get("destination") for e in external_transfers if e.get("destination")})
+    destinations: list[str] = [
+        e.get("destination")  # type: ignore[misc]
+        for e in external_transfers
+        if e.get("destination")
+    ]
+    # Remove duplicates while preserving order
+    destinations = list(dict.fromkeys(destinations))
 
     indicators = [
         f"External data transfer: {external_bytes / mb:.2f} MB",
@@ -547,7 +557,7 @@ def _detect_data_exfiltration(events: list[dict]) -> dict:
     }
 
 
-def _detect_credential_theft(events: list[dict]) -> dict:
+def _detect_credential_theft(events: list[dict[str, Any]]) -> dict[str, Any]:
     """Detect credential theft pattern."""
     credential_events = [
         e
@@ -622,7 +632,7 @@ def _detect_credential_theft(events: list[dict]) -> dict:
     }
 
 
-def _is_credential_related(event: dict) -> bool:
+def _is_credential_related(event: dict[str, Any]) -> bool:
     """Check if an event is related to credential access."""
     credential_indicators = [
         "lsass",

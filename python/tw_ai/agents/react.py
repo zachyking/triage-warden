@@ -16,6 +16,7 @@ import asyncio
 import json
 import sys
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
@@ -23,13 +24,16 @@ from typing import Any, Protocol
 
 import structlog
 
-try:
-    import tiktoken
+_tiktoken_module: Any = None
+_TIKTOKEN_AVAILABLE = False
 
+try:
+    import tiktoken as _tiktoken_import
+
+    _tiktoken_module = _tiktoken_import
     _TIKTOKEN_AVAILABLE = True
 except ImportError:
-    tiktoken = None
-    _TIKTOKEN_AVAILABLE = False
+    pass
 
 
 # =============================================================================
@@ -42,7 +46,7 @@ if sys.version_info >= (3, 11):
 else:
     # Fallback for Python 3.9/3.10
     @asynccontextmanager
-    async def async_timeout(delay: float | None):
+    async def async_timeout(delay: float | None) -> AsyncIterator[None]:
         """Async context manager for timeout (Python 3.9/3.10 compatibility).
 
         Args:
@@ -67,10 +71,10 @@ else:
             handle.cancel()
 
 
-from tw_ai.agents.models import TriageAnalysis
-from tw_ai.agents.output_parser import ParseError, parse_triage_analysis
-from tw_ai.agents.tools import ToolRegistry
-from tw_ai.llm.base import LLMProvider, Message
+from tw_ai.agents.models import TriageAnalysis  # noqa: E402
+from tw_ai.agents.output_parser import ParseError, parse_triage_analysis  # noqa: E402
+from tw_ai.agents.tools import ToolRegistry  # noqa: E402
+from tw_ai.llm.base import LLMProvider, Message  # noqa: E402
 
 logger = structlog.get_logger()
 
@@ -202,7 +206,7 @@ class AgentResult:
     tool_calls: int = 0
     total_tokens: int = 0
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Populate legacy fields from new fields."""
         if self.analysis:
             self.output = self.analysis.summary
@@ -260,13 +264,13 @@ class TokenCounter:
         self.model = model
         self._encoder = None
 
-        if _TIKTOKEN_AVAILABLE:
+        if _TIKTOKEN_AVAILABLE and _tiktoken_module is not None:
             try:
-                self._encoder = tiktoken.encoding_for_model(model)
+                self._encoder = _tiktoken_module.encoding_for_model(model)
             except KeyError:
                 # Fall back to cl100k_base for unknown models
                 try:
-                    self._encoder = tiktoken.get_encoding("cl100k_base")
+                    self._encoder = _tiktoken_module.get_encoding("cl100k_base")
                 except Exception:
                     logger.warning("tiktoken_encoding_failed", model=model)
 

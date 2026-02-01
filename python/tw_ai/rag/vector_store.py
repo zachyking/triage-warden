@@ -5,12 +5,12 @@ Provides collection management and document operations for the RAG system.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, cast
 
 import structlog
 
 if TYPE_CHECKING:
-    import chromadb
     from chromadb.api.models.Collection import Collection
 
     from tw_ai.rag.config import RAGConfig
@@ -46,17 +46,17 @@ class VectorStore:
 
         self._config = config or RAGConfig()
         self._embedding_service = embedding_service or EmbeddingService(self._config)
-        self._client: chromadb.ClientAPI | None = None
+        self._client: Any = None
         self._collections: dict[str, Collection] = {}
 
     @property
-    def client(self) -> chromadb.ClientAPI:
+    def client(self) -> Any:
         """Lazy-load and return the ChromaDB client."""
         if self._client is None:
             self._client = self._create_client()
         return self._client
 
-    def _create_client(self) -> chromadb.ClientAPI:
+    def _create_client(self) -> Any:
         """Create ChromaDB client.
 
         Returns:
@@ -114,7 +114,7 @@ class VectorStore:
 
             collection.add(
                 ids=[document.id],
-                embeddings=[embedding],
+                embeddings=cast(list[Sequence[float]], [embedding]),
                 documents=[document.content],
                 metadatas=[document.to_metadata()],
             )
@@ -164,7 +164,7 @@ class VectorStore:
             # Add to collection
             collection.add(
                 ids=[doc.id for doc in documents],
-                embeddings=embeddings,
+                embeddings=cast(list[Sequence[float]], embeddings),
                 documents=contents,
                 metadatas=[doc.to_metadata() for doc in documents],
             )
@@ -208,7 +208,7 @@ class VectorStore:
             query_embedding = self._embedding_service.embed(query_text)
 
             results = collection.query(
-                query_embeddings=[query_embedding],
+                query_embeddings=cast(list[Sequence[float]], [query_embedding]),
                 n_results=n_results,
                 where=where,
                 include=["documents", "distances", "metadatas"],
@@ -221,7 +221,8 @@ class VectorStore:
                 has_filters=where is not None,
             )
 
-            return results
+            # Cast to dict for consistent return type
+            return cast(dict[str, Any], results)
         except Exception as e:
             logger.error(
                 "query_failed",

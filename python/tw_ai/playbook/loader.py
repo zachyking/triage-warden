@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import structlog
-import yaml
+import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 logger = structlog.get_logger()
@@ -173,7 +173,7 @@ class Condition(BaseModel):
     def _resolve_path(self, path: str, context: dict[str, Any]) -> Any:
         """Resolve a dotted path like 'input.reported_by' from context."""
         parts = path.split(".")
-        value = context
+        value: Any = context
         for part in parts:
             if isinstance(value, dict):
                 value = value.get(part)
@@ -223,8 +223,9 @@ class Step(BaseModel):
                 elif isinstance(item, str):
                     # Handle string conditions like "confidence_above: 0.95"
                     if ":" in item:
-                        key, value = item.split(":", 1)
-                        result.append(Condition(**{key.strip(): float(value.strip())}))
+                        key, val = item.split(":", 1)
+                        condition_kwargs = cast(dict[str, Any], {key.strip(): float(val.strip())})
+                        result.append(Condition(**condition_kwargs))
                     else:
                         result.append(Condition(expression=item))
             return result

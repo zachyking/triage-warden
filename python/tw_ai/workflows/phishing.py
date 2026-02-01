@@ -94,7 +94,7 @@ class DecisionThresholds:
     min_confidence_for_action: float = 0.85
     sender_reputation_low_threshold: int = 30
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Validate threshold values."""
         if not 0 <= self.auto_quarantine_score <= 100:
             raise ValueError("auto_quarantine_score must be between 0 and 100")
@@ -287,9 +287,9 @@ class TriageResult:
     analysis: Any | None = None  # TriageAnalysis from agents.models
     email_analysis: EmailAnalysis | None = None
     phishing_indicators: PhishingIndicators | None = None
-    proposed_actions: list[dict] = field(default_factory=list)
-    approved_actions: list[dict] = field(default_factory=list)
-    rejected_actions: list[dict] = field(default_factory=list)
+    proposed_actions: list[dict[str, Any]] = field(default_factory=list)
+    approved_actions: list[dict[str, Any]] = field(default_factory=list)
+    rejected_actions: list[dict[str, Any]] = field(default_factory=list)
     execution_time_seconds: float = 0.0
     stages_completed: list[str] = field(default_factory=list)
     error: str | None = None
@@ -417,7 +417,7 @@ class PhishingTriageWorkflow:
         # AI-integrated mode parameters
         agent: Any | None = None,  # ReActAgent
         tools: Any | None = None,  # ToolRegistry
-        policy_checker: Callable[[dict], dict] | None = None,
+        policy_checker: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         on_stage_complete: Callable[[str, Any], None] | None = None,
     ):
         """Initialize the phishing triage workflow.
@@ -714,20 +714,20 @@ class PhishingTriageWorkflow:
         }
 
         if domain in trusted_domains:
-            info = trusted_domains[domain]
+            trusted_info = trusted_domains[domain]
             return {
-                "score": info["score"],
+                "score": trusted_info["score"],
                 "is_known_sender": True,
-                "domain_age_days": info["domain_age_days"],
+                "domain_age_days": trusted_info["domain_age_days"],
                 "risk_level": "low",
             }
 
         if domain in suspicious_domains:
-            info = suspicious_domains[domain]
+            suspicious_info = suspicious_domains[domain]
             return {
-                "score": info["score"],
+                "score": suspicious_info["score"],
                 "is_known_sender": False,
-                "domain_age_days": info["domain_age_days"],
+                "domain_age_days": suspicious_info["domain_age_days"],
                 "risk_level": "high",
             }
 
@@ -1462,9 +1462,9 @@ class PhishingTriageWorkflow:
         phishing_indicators: PhishingIndicators | None = None
         enrichment_data: dict[str, Any] = {}
         analysis: Any | None = None  # TriageAnalysis
-        proposed_actions: list[dict] = []
-        approved_actions: list[dict] = []
-        rejected_actions: list[dict] = []
+        proposed_actions: list[dict[str, Any]] = []
+        approved_actions: list[dict[str, Any]] = []
+        rejected_actions: list[dict[str, Any]] = []
         error: str | None = None
 
         logger.info(
@@ -1670,6 +1670,7 @@ class PhishingTriageWorkflow:
             domain = email_analysis.sender.split("@")[-1].lower().strip()
             if domain:
                 try:
+                    assert self.tools is not None
                     domain_result = await self.tools.execute("lookup_domain", {"domain": domain})
                     results["domain_result"] = {
                         "domain": domain,
@@ -1683,6 +1684,7 @@ class PhishingTriageWorkflow:
                     )
 
         # Lookup URLs (limit to first 5 to avoid excessive calls)
+        assert self.tools is not None
         for url_info in email_analysis.urls[:5]:
             try:
                 domain = url_info.domain
@@ -1741,6 +1743,7 @@ class PhishingTriageWorkflow:
         )
 
         # Run the agent
+        assert self.agent is not None
         return await self.agent.run(request)
 
     def _build_ai_agent_context(
@@ -1791,7 +1794,7 @@ class PhishingTriageWorkflow:
 
         return context
 
-    def _extract_ai_proposed_actions(self, analysis: Any) -> list[dict]:
+    def _extract_ai_proposed_actions(self, analysis: Any) -> list[dict[str, Any]]:
         """Extract proposed actions from AI agent analysis.
 
         Args:
@@ -1800,7 +1803,7 @@ class PhishingTriageWorkflow:
         Returns:
             List of action dictionaries
         """
-        actions = []
+        actions: list[dict[str, Any]] = []
         for rec in analysis.recommended_actions:
             actions.append(
                 {
@@ -1814,9 +1817,9 @@ class PhishingTriageWorkflow:
 
     def _check_ai_actions_against_policy(
         self,
-        proposed_actions: list[dict],
+        proposed_actions: list[dict[str, Any]],
         confidence: float,
-    ) -> tuple[list[dict], list[dict]]:
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Check proposed actions against policy for AI mode.
 
         Args:

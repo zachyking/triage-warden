@@ -10,7 +10,7 @@ Provides tools for the ReAct agent to search the security knowledge base:
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import structlog
 
@@ -114,7 +114,7 @@ def create_rag_tools(retrieval: RetrievalService) -> list[Tool]:
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Description of the current incident or pattern to search for",
+                        "description": "Incident description or pattern to search for",
                     },
                     "top_k": {
                         "type": "integer",
@@ -275,9 +275,11 @@ def create_rag_tools(retrieval: RetrievalService) -> list[Tool]:
                         "tactic": result.metadata.get("tactic", ""),
                         "similarity": round(result.similarity, 3),
                         "is_subtechnique": result.metadata.get("is_subtechnique", False),
-                        "keywords": result.metadata.get("keywords", "").split(",")
-                        if result.metadata.get("keywords")
-                        else [],
+                        "keywords": (
+                            result.metadata.get("keywords", "").split(",")
+                            if result.metadata.get("keywords")
+                            else []
+                        ),
                     }
                 )
 
@@ -319,7 +321,7 @@ def create_rag_tools(retrieval: RetrievalService) -> list[Tool]:
                     },
                     "tactic": {
                         "type": "string",
-                        "description": "Filter by MITRE tactic (e.g., 'Initial Access', 'Execution')",
+                        "description": "Filter by MITRE tactic (e.g., 'Initial Access')",
                     },
                     "include_subtechniques": {
                         "type": "boolean",

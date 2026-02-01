@@ -34,29 +34,32 @@ logger = structlog.get_logger()
 _THREAT_INTEL_BRIDGE_AVAILABLE = False
 _EDR_BRIDGE_AVAILABLE = False
 _SIEM_BRIDGE_AVAILABLE = False
-ThreatIntelBridge = None
-EDRBridge = None
-SIEMBridge = None
+_ThreatIntelBridgeClass: type[Any] | None = None
+_EDRBridgeClass: type[Any] | None = None
+_SIEMBridgeClass: type[Any] | None = None
 
 try:
-    from tw_bridge import ThreatIntelBridge
+    from tw_bridge import ThreatIntelBridge as _ThreatIntelBridgeImport
 
+    _ThreatIntelBridgeClass = _ThreatIntelBridgeImport
     _THREAT_INTEL_BRIDGE_AVAILABLE = True
     logger.info("tw_bridge.ThreatIntelBridge available")
 except ImportError:
     logger.warning("tw_bridge.ThreatIntelBridge not available, using mock fallback")
 
 try:
-    from tw_bridge import EDRBridge
+    from tw_bridge import EDRBridge as _EDRBridgeImport
 
+    _EDRBridgeClass = _EDRBridgeImport
     _EDR_BRIDGE_AVAILABLE = True
     logger.info("tw_bridge.EDRBridge available")
 except ImportError:
     logger.warning("tw_bridge.EDRBridge not available, using mock fallback")
 
 try:
-    from tw_bridge import SIEMBridge
+    from tw_bridge import SIEMBridge as _SIEMBridgeImport
 
+    _SIEMBridgeClass = _SIEMBridgeImport
     _SIEM_BRIDGE_AVAILABLE = True
     logger.info("tw_bridge.SIEMBridge available")
 except ImportError:
@@ -64,11 +67,12 @@ except ImportError:
 
 # Try to import PolicyBridge from the Rust PyO3 bridge
 _POLICY_BRIDGE_AVAILABLE = False
-PolicyBridge = None
+_PolicyBridgeClass: type[Any] | None = None
 
 try:
-    from tw_bridge import PolicyBridge
+    from tw_bridge import PolicyBridge as _PolicyBridgeImport
 
+    _PolicyBridgeClass = _PolicyBridgeImport
     _POLICY_BRIDGE_AVAILABLE = True
     logger.info("tw_bridge.PolicyBridge available")
 except ImportError:
@@ -112,10 +116,14 @@ _siem_bridge: Any = None
 def get_threat_intel_bridge() -> Any:
     """Get or create the ThreatIntel bridge instance."""
     global _threat_intel_bridge
-    if _threat_intel_bridge is None and _THREAT_INTEL_BRIDGE_AVAILABLE:
+    if (
+        _threat_intel_bridge is None
+        and _THREAT_INTEL_BRIDGE_AVAILABLE
+        and _ThreatIntelBridgeClass is not None
+    ):
         try:
             mode = os.environ.get("TW_THREAT_INTEL_MODE", "mock")
-            _threat_intel_bridge = ThreatIntelBridge(mode)
+            _threat_intel_bridge = _ThreatIntelBridgeClass(mode)
             logger.info("ThreatIntelBridge initialized", mode=mode)
         except Exception as e:
             logger.error("Failed to initialize ThreatIntelBridge", error=str(e))
@@ -125,11 +133,11 @@ def get_threat_intel_bridge() -> Any:
 def get_edr_bridge() -> Any:
     """Get or create the EDR bridge instance."""
     global _edr_bridge
-    if _edr_bridge is None and _EDR_BRIDGE_AVAILABLE:
+    if _edr_bridge is None and _EDR_BRIDGE_AVAILABLE and _EDRBridgeClass is not None:
         try:
             mode = os.environ.get("TW_EDR_MODE", "mock")
             with_sample_data = os.environ.get("TW_BRIDGE_SAMPLE_DATA", "true").lower() == "true"
-            _edr_bridge = EDRBridge(mode, with_sample_data=with_sample_data)
+            _edr_bridge = _EDRBridgeClass(mode, with_sample_data=with_sample_data)
             logger.info("EDRBridge initialized", mode=mode, with_sample_data=with_sample_data)
         except Exception as e:
             logger.error("Failed to initialize EDRBridge", error=str(e))
@@ -139,11 +147,11 @@ def get_edr_bridge() -> Any:
 def get_siem_bridge() -> Any:
     """Get or create the SIEM bridge instance."""
     global _siem_bridge
-    if _siem_bridge is None and _SIEM_BRIDGE_AVAILABLE:
+    if _siem_bridge is None and _SIEM_BRIDGE_AVAILABLE and _SIEMBridgeClass is not None:
         try:
             mode = os.environ.get("TW_SIEM_MODE", "mock")
             with_sample_data = os.environ.get("TW_BRIDGE_SAMPLE_DATA", "true").lower() == "true"
-            _siem_bridge = SIEMBridge(mode, with_sample_data=with_sample_data)
+            _siem_bridge = _SIEMBridgeClass(mode, with_sample_data=with_sample_data)
             logger.info("SIEMBridge initialized", mode=mode, with_sample_data=with_sample_data)
         except Exception as e:
             logger.error("Failed to initialize SIEMBridge", error=str(e))
@@ -181,9 +189,9 @@ _policy_bridge: Any = None
 def get_policy_bridge() -> Any:
     """Get or create the Policy bridge instance."""
     global _policy_bridge
-    if _policy_bridge is None and _POLICY_BRIDGE_AVAILABLE:
+    if _policy_bridge is None and _POLICY_BRIDGE_AVAILABLE and _PolicyBridgeClass is not None:
         try:
-            _policy_bridge = PolicyBridge()
+            _policy_bridge = _PolicyBridgeClass()
             logger.info("PolicyBridge initialized successfully")
         except Exception as e:
             logger.error("Failed to initialize PolicyBridge", error=str(e))
@@ -623,14 +631,14 @@ def is_action_allowed(action_type: str, target: str, confidence: float) -> bool:
     if bridge is not None:
         try:
             result = bridge.check_action(action_type, target, confidence)
-            return result.get("decision") == "allowed"
+            return bool(result.get("decision") == "allowed")
         except Exception as e:
             logger.error("Policy check failed", error=str(e))
             return False
 
     # Mock fallback
     result = _mock_check_action(action_type, target, confidence)
-    return result.get("decision") == "allowed"
+    return bool(result.get("decision") == "allowed")
 
 
 def _format_event_for_llm(event: dict[str, Any]) -> str:
@@ -1314,7 +1322,7 @@ def create_triage_tools() -> ToolRegistry:
                 execution_time_ms=execution_time_ms,
             )
 
-    def _format_detections_for_llm(data: list[dict], hostname: str) -> dict[str, Any]:
+    def _format_detections_for_llm(data: list[dict[str, Any]], hostname: str) -> dict[str, Any]:
         """Format detections for LLM readability."""
         formatted = []
         for det in data:
@@ -1458,7 +1466,9 @@ def create_triage_tools() -> ToolRegistry:
                 execution_time_ms=execution_time_ms,
             )
 
-    def _format_processes_for_llm(data: list[dict], hostname: str, hours: int) -> dict[str, Any]:
+    def _format_processes_for_llm(
+        data: list[dict[str, Any]], hostname: str, hours: int
+    ) -> dict[str, Any]:
         """Format process list for LLM readability."""
         formatted = []
         for proc in data:
@@ -1611,7 +1621,7 @@ def create_triage_tools() -> ToolRegistry:
             )
 
     def _format_network_connections_for_llm(
-        data: list[dict], hostname: str, hours: int
+        data: list[dict[str, Any]], hostname: str, hours: int
     ) -> dict[str, Any]:
         """Format network connections for LLM readability."""
         formatted = []
@@ -2695,7 +2705,7 @@ def create_triage_tools() -> ToolRegistry:
         title: str,
         description: str,
         severity: str,
-        indicators: list,
+        indicators: list[str],
     ) -> ToolResult:
         """Create a security incident ticket.
 

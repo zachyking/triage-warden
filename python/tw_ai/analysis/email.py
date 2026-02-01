@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from html.parser import HTMLParser
+from typing import Any
 
 # ============================================================================
 # Data Classes
@@ -304,7 +305,7 @@ def extract_urls(text: str) -> list[ExtractedURL]:
 class _HTMLLinkExtractor(HTMLParser):
     """HTML parser to extract links with their display text."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.links: list[tuple[str, str]] = []  # (href, display_text)
         self._current_link: str | None = None
@@ -479,7 +480,7 @@ def _parse_dmarc_result(auth_header: str) -> str:
     return "none"
 
 
-def parse_authentication_headers(headers: dict) -> EmailAuthResult:
+def parse_authentication_headers(headers: dict[str, Any]) -> EmailAuthResult:
     """Parse email authentication results from headers.
 
     Parses SPF, DKIM, and DMARC results from Authentication-Results
@@ -582,7 +583,7 @@ def _parse_email_list(value: str) -> list[str]:
     return addresses
 
 
-def _parse_received_timestamps(headers: dict) -> list[datetime]:
+def _parse_received_timestamps(headers: dict[str, Any]) -> list[datetime]:
     """Parse timestamps from Received headers.
 
     Args:
@@ -627,7 +628,7 @@ def _parse_received_timestamps(headers: dict) -> list[datetime]:
     return timestamps
 
 
-def _parse_attachments(attachments_data: list) -> list[AttachmentInfo]:
+def _parse_attachments(attachments_data: list[Any]) -> list[AttachmentInfo]:
     """Parse attachment information from alert data.
 
     Args:
@@ -640,9 +641,11 @@ def _parse_attachments(attachments_data: list) -> list[AttachmentInfo]:
 
     for att in attachments_data:
         if isinstance(att, dict):
-            filename = att.get("filename", att.get("name", "unknown"))
-            content_type = att.get("content_type", att.get("mime_type", "application/octet-stream"))
-            size = att.get("size_bytes", att.get("size", 0))
+            filename: str = att.get("filename") or att.get("name") or "unknown"
+            content_type: str = (
+                att.get("content_type") or att.get("mime_type") or "application/octet-stream"
+            )
+            size: int = att.get("size_bytes") or att.get("size") or 0
             md5 = att.get("md5")
             sha256 = att.get("sha256")
 
@@ -671,7 +674,7 @@ def _parse_attachments(attachments_data: list) -> list[AttachmentInfo]:
     return attachments
 
 
-def parse_email_alert(alert_data: dict) -> EmailAnalysis:
+def parse_email_alert(alert_data: dict[str, Any]) -> EmailAnalysis:
     """Parse an email alert into an EmailAnalysis object.
 
     Extracts security-relevant information from email alert JSON data,

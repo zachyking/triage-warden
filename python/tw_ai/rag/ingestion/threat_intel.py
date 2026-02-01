@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import structlog
 
@@ -105,7 +105,7 @@ class ThreatIntelIngester(BaseIngester):
 
     async def ingest_batch(
         self,
-        indicators: list[dict],
+        indicators: list[dict[str, Any]],
     ) -> int:
         """Ingest multiple threat intelligence indicators.
 

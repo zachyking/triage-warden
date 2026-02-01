@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 
 @dataclass
@@ -38,7 +38,7 @@ class TestCase:
     category: str | None = None
     tags: list[str] = field(default_factory=list)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Validate test case after initialization."""
         if not self.id:
             raise ValueError("TestCase id cannot be empty")
@@ -171,20 +171,21 @@ def save_test_cases(test_cases: list[TestCase], path: str) -> None:
         path: Output file path
     """
     # Convert to YAML-friendly format with nested 'expected' structure
-    yaml_data = []
+    yaml_data: list[dict[str, Any]] = []
     for tc in test_cases:
-        case_dict = {
+        expected: dict[str, Any] = {
+            "verdict": tc.expected_verdict,
+        }
+        if tc.expected_severity:
+            expected["severity"] = tc.expected_severity
+        if tc.expected_techniques:
+            expected["techniques"] = tc.expected_techniques
+        case_dict: dict[str, Any] = {
             "id": tc.id,
             "name": tc.name,
             "alert": tc.alert_data,
-            "expected": {
-                "verdict": tc.expected_verdict,
-            },
+            "expected": expected,
         }
-        if tc.expected_severity:
-            case_dict["expected"]["severity"] = tc.expected_severity
-        if tc.expected_techniques:
-            case_dict["expected"]["techniques"] = tc.expected_techniques
         if tc.category:
             case_dict["category"] = tc.category
         if tc.tags:

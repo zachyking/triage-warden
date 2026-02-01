@@ -182,14 +182,16 @@ def parse_json_from_response(text: str) -> dict[str, Any]:
 
     # Try to parse as-is first
     try:
-        return json.loads(json_str)
+        result: dict[str, Any] = json.loads(json_str)
+        return result
     except json.JSONDecodeError:
         pass
 
     # Try with common fixes applied
     fixed_json = _fix_json_common_issues(json_str)
     try:
-        return json.loads(fixed_json)
+        fixed_result: dict[str, Any] = json.loads(fixed_json)
+        return fixed_result
     except json.JSONDecodeError as e:
         raise ParseError(
             f"Failed to parse JSON: {e.msg} at position {e.pos}",

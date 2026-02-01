@@ -7,6 +7,8 @@ covering MITRE ATT&CK techniques:
 - T1110.* (Brute Force)
 """
 
+from typing import Any
+
 from tw_ai.agents.prompts.system import (
     AVAILABLE_TOOLS,
     CHAIN_OF_THOUGHT_GUIDANCE,
@@ -380,11 +382,11 @@ structured assessment.""")
 def build_login_alert_context(
     alert_id: str,
     user: str,
-    login_event: dict,
-    previous_logins: list[dict] | None = None,
-    failed_attempts: list[dict] | None = None,
-    user_context: dict | None = None,
-    device_info: dict | None = None,
+    login_event: dict[str, Any],
+    previous_logins: list[dict[str, Any]] | None = None,
+    failed_attempts: list[dict[str, Any]] | None = None,
+    user_context: dict[str, Any] | None = None,
+    device_info: dict[str, Any] | None = None,
     risk_signals: list[str] | None = None,
 ) -> str:
     """
@@ -441,7 +443,7 @@ def calculate_travel_feasibility(
     location1: tuple[float, float],
     location2: tuple[float, float],
     time_delta_minutes: int,
-) -> dict:
+) -> dict[str, Any]:
     """
     Calculate if travel between two locations is feasible.
 

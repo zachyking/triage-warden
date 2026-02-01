@@ -111,7 +111,7 @@ class EmbeddingService:
         """
         try:
             embedding = self.model.encode(text, convert_to_numpy=True)
-            return embedding.tolist()
+            return list(embedding.tolist())
         except Exception as e:
             logger.error(
                 "embed_failed",

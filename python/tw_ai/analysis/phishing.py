@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 # ============================================================================
@@ -190,7 +190,7 @@ LOW_RISK_EXTENSIONS = {
 # ============================================================================
 
 
-def analyze_phishing_indicators(email_data: dict) -> PhishingIndicators:
+def analyze_phishing_indicators(email_data: dict[str, Any]) -> PhishingIndicators:
     """Analyze email data for phishing indicators.
 
     Args:
@@ -648,7 +648,7 @@ def _check_sender_mismatch(sender_email: str, display_name: str) -> bool:
     return False
 
 
-def _check_url_text_mismatch(url_text_mappings: list[dict]) -> bool:
+def _check_url_text_mismatch(url_text_mappings: list[dict[str, Any]]) -> bool:
     """Check if any URL's display text suggests a different destination.
 
     Args:
@@ -698,8 +698,14 @@ def _assess_attachment_risk(
     if not attachments:
         return "none"
 
-    highest_risk = "none"
-    risk_order = ["none", "low", "medium", "high", "critical"]
+    highest_risk: Literal["none", "low", "medium", "high", "critical"] = "none"
+    risk_order: list[Literal["none", "low", "medium", "high", "critical"]] = [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "critical",
+    ]
 
     for attachment in attachments:
         ext = _get_file_extension(attachment)

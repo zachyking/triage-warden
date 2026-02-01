@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from tw_ai.rag.models import QueryRequest, QueryResponse, QueryResult
+from tw_ai.rag.models import QueryResponse, QueryResult
 
 if TYPE_CHECKING:
     from tw_ai.rag.config import RAGConfig
@@ -187,9 +187,7 @@ class RetrievalService:
         # Apply confidence filter post-query (ChromaDB doesn't support >= operators well)
         if min_confidence is not None:
             response.results = [
-                r
-                for r in response.results
-                if r.metadata.get("confidence", 0) >= min_confidence
+                r for r in response.results if r.metadata.get("confidence", 0) >= min_confidence
             ]
 
         return response
@@ -240,7 +238,7 @@ class RetrievalService:
         Returns:
             Matching MITRE techniques.
         """
-        filters = {}
+        filters: dict[str, Any] = {}
 
         if tactic:
             filters["tactic"] = tactic

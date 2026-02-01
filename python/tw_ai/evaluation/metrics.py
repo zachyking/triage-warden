@@ -70,7 +70,7 @@ class EvaluationReport:
     avg_execution_time: float = 0.0
     results: list[dict[str, Any]] = field(default_factory=list)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Populate verdict_metrics if not provided."""
         if self.verdict_metrics is None:
             self.verdict_metrics = VerdictMetrics(

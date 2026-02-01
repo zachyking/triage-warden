@@ -181,15 +181,16 @@ class ExecutionContext:
         else:
             return default
 
+        current: Any = value
         for part in rest:
-            if isinstance(value, dict):
-                value = value.get(part)
-                if value is None:
+            if isinstance(current, dict):
+                current = current.get(part)
+                if current is None:
                     return default
             else:
                 return default
 
-        return value
+        return current
 
     def set_stage_output(self, stage_name: str, outputs: dict[str, Any]) -> None:
         """Set outputs for a stage.
@@ -494,7 +495,7 @@ class PlaybookExecutor:
         # Convert exceptions to StepResults
         processed_results: list[StepResult] = []
         for i, result in enumerate(results):
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 processed_results.append(
                     StepResult(
                         action=steps[i].action,
@@ -503,6 +504,7 @@ class PlaybookExecutor:
                     )
                 )
             else:
+                # After the isinstance check, result is StepResult
                 processed_results.append(result)
 
         return processed_results
@@ -629,14 +631,14 @@ class PlaybookExecutor:
         """
         if isinstance(data, str):
             # Check for template pattern
-            def replace_match(match: re.Match) -> str:
+            def replace_match(match: re.Match[str]) -> str:
                 path = match.group(1)
                 value = context.get(path, match.group(0))  # Return original if not found
                 if isinstance(value, str):
                     return value
                 elif value is not None:
                     return str(value)
-                return match.group(0)
+                return str(match.group(0))
 
             # Check if the entire string is a single template
             full_match = self.TEMPLATE_PATTERN.fullmatch(data.strip())

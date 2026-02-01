@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import structlog
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from tw_ai.rag.ingestion.base import BaseIngester
 from tw_ai.rag.models import PlaybookDocument
@@ -45,9 +45,7 @@ class PlaybookIngester(BaseIngester):
             logger.warning("playbooks_dir_not_found", path=str(playbooks_dir))
             return 0
 
-        yaml_files = list(playbooks_dir.glob("*.yaml")) + list(
-            playbooks_dir.glob("*.yml")
-        )
+        yaml_files = list(playbooks_dir.glob("*.yaml")) + list(playbooks_dir.glob("*.yml"))
 
         logger.info(
             "ingesting_playbooks",

@@ -6,6 +6,7 @@ Defines the interface that all ingesters must implement.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -54,7 +55,7 @@ class BaseIngester(ABC):
         """
         return self._vector_store.add_document(self.collection_name, document)
 
-    def _add_documents(self, documents: list[BaseDocument]) -> list[str]:
+    def _add_documents(self, documents: Sequence[BaseDocument]) -> list[str]:
         """Add multiple documents to the collection.
 
         Args:
@@ -63,4 +64,4 @@ class BaseIngester(ABC):
         Returns:
             List of document IDs.
         """
-        return self._vector_store.add_documents(self.collection_name, documents)
+        return self._vector_store.add_documents(self.collection_name, list(documents))

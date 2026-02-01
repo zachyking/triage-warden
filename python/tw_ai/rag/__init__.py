@@ -14,7 +14,7 @@ Public API:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, cast
 
 from tw_ai.rag.config import RAGConfig
 from tw_ai.rag.embeddings import EmbeddingService
@@ -174,8 +174,14 @@ class RAGService:
         ingester = ThreatIntelIngester(self.vector_store)
         return await ingester.ingest_indicator(
             indicator=indicator,
-            indicator_type=indicator_type,
-            verdict=verdict,
+            indicator_type=cast(
+                Literal["ip", "domain", "url", "hash", "email", "other"],
+                indicator_type,
+            ),
+            verdict=cast(
+                Literal["malicious", "suspicious", "benign", "unknown"],
+                verdict,
+            ),
             context=context,
             threat_actor=threat_actor,
         )

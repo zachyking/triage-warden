@@ -45,24 +45,38 @@ fi
 if [ -n "$PYTHON_CHANGED" ]; then
     echo -e "${YELLOW}Checking Python code...${NC}"
 
-    # Check if tools are available
-    if command -v ruff &> /dev/null; then
+    # Run Python checks from the python directory using uv
+    pushd python > /dev/null
+
+    if command -v uv &> /dev/null; then
         echo "  Running ruff..."
-        if ! ruff check python/tw_ai; then
-            echo -e "${RED}Ruff found issues.${NC}"
+        if ! uv run ruff check tw_ai; then
+            echo -e "${RED}Ruff found issues. Run 'cd python && uv run ruff check tw_ai --fix' to auto-fix.${NC}"
+            popd > /dev/null
             exit 1
         fi
         echo -e "  ${GREEN}Ruff OK${NC}"
-    fi
 
-    if command -v black &> /dev/null; then
         echo "  Checking black formatting..."
-        if ! black --check python/tw_ai 2>/dev/null; then
-            echo -e "${RED}Black formatting check failed. Run 'black python/tw_ai' to fix.${NC}"
+        if ! uv run black --check tw_ai 2>/dev/null; then
+            echo -e "${RED}Black formatting check failed. Run 'cd python && uv run black tw_ai' to fix.${NC}"
+            popd > /dev/null
             exit 1
         fi
         echo -e "  ${GREEN}Black OK${NC}"
+
+        echo "  Running mypy..."
+        if ! uv run mypy tw_ai 2>/dev/null; then
+            echo -e "${RED}Mypy found type errors.${NC}"
+            popd > /dev/null
+            exit 1
+        fi
+        echo -e "  ${GREEN}Mypy OK${NC}"
+    else
+        echo -e "${YELLOW}  uv not found, skipping Python checks${NC}"
     fi
+
+    popd > /dev/null
 fi
 
 echo -e "${GREEN}All pre-commit checks passed!${NC}"

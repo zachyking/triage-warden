@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from tw_ai.analysis.mitre import TechniqueInfo
 from tw_ai.rag.ingestion.base import BaseIngester
 from tw_ai.rag.models import MITREDocument
 
@@ -71,7 +72,7 @@ class MITREIngester(BaseIngester):
         logger.info("mitre_ingestion_complete", count=len(documents))
         return len(documents)
 
-    def _build_content(self, info: "TechniqueInfo") -> str:  # noqa: F821
+    def _build_content(self, info: TechniqueInfo) -> str:
         """Build rich text content for a MITRE technique.
 
         Args:
