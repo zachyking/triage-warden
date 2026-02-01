@@ -1180,9 +1180,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::test_helpers::{inject_test_user, TestUser};
     use axum::{
         body::Body,
         http::{Request, StatusCode},
+        middleware,
     };
     use tower::ServiceExt;
     use tw_core::db::{create_playbook_repository, DbPool};
@@ -1212,35 +1214,35 @@ mod tests {
 
         // Run additional migrations for playbooks, connectors, policies, notifications, and settings
         sqlx::query(include_str!(
-            "../../../tw-core/src/db/migrations/sqlite/20240130_000001_create_playbooks.sql"
+            "../../../tw-core/src/db/migrations/sqlite/20240102_000001_create_playbooks.sql"
         ))
         .execute(&pool)
         .await
         .expect("Failed to run playbooks schema");
 
         sqlx::query(include_str!(
-            "../../../tw-core/src/db/migrations/sqlite/20240130_000002_create_connectors.sql"
+            "../../../tw-core/src/db/migrations/sqlite/20240103_000001_create_connectors.sql"
         ))
         .execute(&pool)
         .await
         .expect("Failed to run connectors schema");
 
         sqlx::query(include_str!(
-            "../../../tw-core/src/db/migrations/sqlite/20240130_000003_create_policies.sql"
+            "../../../tw-core/src/db/migrations/sqlite/20240104_000001_create_policies.sql"
         ))
         .execute(&pool)
         .await
         .expect("Failed to run policies schema");
 
         sqlx::query(include_str!(
-            "../../../tw-core/src/db/migrations/sqlite/20240130_000004_create_notification_channels.sql"
+            "../../../tw-core/src/db/migrations/sqlite/20240105_000001_create_notification_channels.sql"
         ))
         .execute(&pool)
         .await
         .expect("Failed to run notification channels schema");
 
         sqlx::query(include_str!(
-            "../../../tw-core/src/db/migrations/sqlite/20240130_000005_create_settings.sql"
+            "../../../tw-core/src/db/migrations/sqlite/20240106_000001_create_settings.sql"
         ))
         .execute(&pool)
         .await
@@ -1250,7 +1252,10 @@ mod tests {
         let event_bus = EventBus::new(100);
         let state = AppState::new(db, event_bus);
 
-        create_web_router(state)
+        // Add test user middleware to bypass authentication
+        create_web_router(state).layer(middleware::from_fn(move |req, next| {
+            inject_test_user(TestUser::admin(), req, next)
+        }))
     }
 
     /// Sets up a test app and returns both the router and state for additional DB operations.
@@ -1275,35 +1280,35 @@ mod tests {
         .expect("Failed to run initial schema");
 
         sqlx::query(include_str!(
-            "../../../tw-core/src/db/migrations/sqlite/20240130_000001_create_playbooks.sql"
+            "../../../tw-core/src/db/migrations/sqlite/20240102_000001_create_playbooks.sql"
         ))
         .execute(&pool)
         .await
         .expect("Failed to run playbooks schema");
 
         sqlx::query(include_str!(
-            "../../../tw-core/src/db/migrations/sqlite/20240130_000002_create_connectors.sql"
+            "../../../tw-core/src/db/migrations/sqlite/20240103_000001_create_connectors.sql"
         ))
         .execute(&pool)
         .await
         .expect("Failed to run connectors schema");
 
         sqlx::query(include_str!(
-            "../../../tw-core/src/db/migrations/sqlite/20240130_000003_create_policies.sql"
+            "../../../tw-core/src/db/migrations/sqlite/20240104_000001_create_policies.sql"
         ))
         .execute(&pool)
         .await
         .expect("Failed to run policies schema");
 
         sqlx::query(include_str!(
-            "../../../tw-core/src/db/migrations/sqlite/20240130_000004_create_notification_channels.sql"
+            "../../../tw-core/src/db/migrations/sqlite/20240105_000001_create_notification_channels.sql"
         ))
         .execute(&pool)
         .await
         .expect("Failed to run notification channels schema");
 
         sqlx::query(include_str!(
-            "../../../tw-core/src/db/migrations/sqlite/20240130_000005_create_settings.sql"
+            "../../../tw-core/src/db/migrations/sqlite/20240106_000001_create_settings.sql"
         ))
         .execute(&pool)
         .await
@@ -1312,7 +1317,11 @@ mod tests {
         let db = DbPool::Sqlite(pool);
         let event_bus = EventBus::new(100);
         let state = AppState::new(db, event_bus);
-        let router = create_web_router(state.clone());
+        // Add test user middleware to bypass authentication
+        let router =
+            create_web_router(state.clone()).layer(middleware::from_fn(move |req, next| {
+                inject_test_user(TestUser::admin(), req, next)
+            }));
         (router, state)
     }
 
@@ -3028,7 +3037,9 @@ mod tests {
         let repo = create_incident_repository(&state.db);
 
         // First request - empty
-        let app1 = create_web_router(state.clone());
+        let app1 = create_web_router(state.clone()).layer(middleware::from_fn(move |req, next| {
+            inject_test_user(TestUser::admin(), req, next)
+        }));
         let response1 = app1
             .oneshot(
                 Request::builder()
@@ -3054,7 +3065,9 @@ mod tests {
         .unwrap();
 
         // Second request - with data
-        let app2 = create_web_router(state);
+        let app2 = create_web_router(state).layer(middleware::from_fn(move |req, next| {
+            inject_test_user(TestUser::admin(), req, next)
+        }));
         let response2 = app2
             .oneshot(
                 Request::builder()

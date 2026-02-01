@@ -722,31 +722,31 @@ mod tests {
         .expect("Failed to create initial schema");
 
         pool.execute(include_str!(
-            "../../../tw-core/src/db/migrations/sqlite/20240130_000001_create_playbooks.sql"
+            "../../../tw-core/src/db/migrations/sqlite/20240102_000001_create_playbooks.sql"
         ))
         .await
         .expect("Failed to create playbooks table");
 
         pool.execute(include_str!(
-            "../../../tw-core/src/db/migrations/sqlite/20240130_000002_create_connectors.sql"
+            "../../../tw-core/src/db/migrations/sqlite/20240103_000001_create_connectors.sql"
         ))
         .await
         .expect("Failed to create connectors table");
 
         pool.execute(include_str!(
-            "../../../tw-core/src/db/migrations/sqlite/20240130_000003_create_policies.sql"
+            "../../../tw-core/src/db/migrations/sqlite/20240104_000001_create_policies.sql"
         ))
         .await
         .expect("Failed to create policies table");
 
         pool.execute(include_str!(
-            "../../../tw-core/src/db/migrations/sqlite/20240130_000004_create_notification_channels.sql"
+            "../../../tw-core/src/db/migrations/sqlite/20240105_000001_create_notification_channels.sql"
         ))
         .await
         .expect("Failed to create notification_channels table");
 
         pool.execute(include_str!(
-            "../../../tw-core/src/db/migrations/sqlite/20240130_000005_create_settings.sql"
+            "../../../tw-core/src/db/migrations/sqlite/20240106_000001_create_settings.sql"
         ))
         .await
         .expect("Failed to create settings table");

@@ -12,6 +12,12 @@ pub mod extractors;
 pub use csrf::{generate_csrf_token, validate_csrf_token, CsrfToken};
 pub use extractors::{AuthenticatedUser, OptionalUser, RequireAdmin, RequireAnalyst};
 
+#[cfg(test)]
+pub mod test_helpers;
+
+#[cfg(test)]
+pub use test_helpers::TestUser;
+
 use tower_sessions::Session;
 use tw_core::auth::SessionData;
 

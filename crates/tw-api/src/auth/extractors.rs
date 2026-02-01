@@ -44,6 +44,14 @@ where
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        // In tests, check for injected test user first
+        #[cfg(test)]
+        {
+            if let Some(test_user) = parts.extensions.get::<super::test_helpers::TestUser>() {
+                return Ok(AuthenticatedUser(test_user.0.clone()));
+            }
+        }
+
         let app_state = AppState::from_ref(state);
 
         // First, try session-based auth

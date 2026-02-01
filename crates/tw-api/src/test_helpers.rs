@@ -121,7 +121,7 @@ async fn run_migrations(pool: &SqlitePool) {
 
     // Playbooks table
     sqlx::query(include_str!(
-        "../../tw-core/src/db/migrations/sqlite/20240130_000001_create_playbooks.sql"
+        "../../tw-core/src/db/migrations/sqlite/20240102_000001_create_playbooks.sql"
     ))
     .execute(pool)
     .await
@@ -129,7 +129,7 @@ async fn run_migrations(pool: &SqlitePool) {
 
     // Connectors table
     sqlx::query(include_str!(
-        "../../tw-core/src/db/migrations/sqlite/20240130_000002_create_connectors.sql"
+        "../../tw-core/src/db/migrations/sqlite/20240103_000001_create_connectors.sql"
     ))
     .execute(pool)
     .await
@@ -137,7 +137,7 @@ async fn run_migrations(pool: &SqlitePool) {
 
     // Policies table
     sqlx::query(include_str!(
-        "../../tw-core/src/db/migrations/sqlite/20240130_000003_create_policies.sql"
+        "../../tw-core/src/db/migrations/sqlite/20240104_000001_create_policies.sql"
     ))
     .execute(pool)
     .await
@@ -145,7 +145,7 @@ async fn run_migrations(pool: &SqlitePool) {
 
     // Notification channels table
     sqlx::query(include_str!(
-        "../../tw-core/src/db/migrations/sqlite/20240130_000004_create_notification_channels.sql"
+        "../../tw-core/src/db/migrations/sqlite/20240105_000001_create_notification_channels.sql"
     ))
     .execute(pool)
     .await
@@ -153,7 +153,7 @@ async fn run_migrations(pool: &SqlitePool) {
 
     // Settings table
     sqlx::query(include_str!(
-        "../../tw-core/src/db/migrations/sqlite/20240130_000005_create_settings.sql"
+        "../../tw-core/src/db/migrations/sqlite/20240106_000001_create_settings.sql"
     ))
     .execute(pool)
     .await
