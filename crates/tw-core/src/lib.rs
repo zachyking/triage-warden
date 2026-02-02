@@ -7,6 +7,7 @@
 
 pub mod auth;
 pub mod connector;
+pub mod crypto;
 pub mod events;
 pub mod incident;
 pub mod notification;
@@ -37,3 +38,9 @@ pub use auth::password::{
     hash_password, validate_password_strength, verify_password, PasswordError,
 };
 pub use auth::{ApiKey, Role, SessionData, User, UserFilter, UserUpdate};
+
+// Crypto exports
+pub use crypto::{
+    create_encryptor, generate_encryption_key, Aes256GcmEncryptor, CredentialEncryptor,
+    CryptoError, PlaintextEncryptor,
+};
