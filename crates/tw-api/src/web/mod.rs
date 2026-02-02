@@ -18,7 +18,8 @@ use uuid::Uuid;
 use tw_core::db::{
     create_audit_repository, create_connector_repository, create_incident_repository,
     create_notification_repository, create_playbook_repository, create_policy_repository,
-    IncidentFilter, IncidentRepository, Pagination, PlaybookFilter, PolicyRepository,
+    create_settings_repository, GeneralSettings, IncidentFilter, IncidentRepository, Pagination,
+    PlaybookFilter, PolicyRepository, RateLimits,
 };
 use tw_core::incident::{ApprovalStatus, IncidentStatus, Severity};
 
@@ -465,10 +466,34 @@ async fn settings(
     let repo = create_incident_repository(&state.db);
     let nav = fetch_nav_counts(repo.as_ref()).await;
 
+    // Load general settings from database
+    let settings_repo = create_settings_repository(&state.db);
+    let general_settings = settings_repo
+        .get_general()
+        .await
+        .unwrap_or(GeneralSettings {
+            org_name: "Triage Warden".to_string(),
+            timezone: "UTC".to_string(),
+            mode: "supervised".to_string(),
+        });
+
+    // Use defaults if settings are empty (first run)
     let settings_data = SettingsData {
-        org_name: "Triage Warden".to_string(),
-        timezone: "UTC".to_string(),
-        mode: "supervised".to_string(),
+        org_name: if general_settings.org_name.is_empty() {
+            "Triage Warden".to_string()
+        } else {
+            general_settings.org_name
+        },
+        timezone: if general_settings.timezone.is_empty() {
+            "UTC".to_string()
+        } else {
+            general_settings.timezone
+        },
+        mode: if general_settings.mode.is_empty() {
+            "supervised".to_string()
+        } else {
+            general_settings.mode
+        },
     };
 
     // Load connectors from repository
@@ -491,10 +516,30 @@ async fn settings(
     let policy_repo = create_policy_repository(&state.db);
     let policies = fetch_policies(policy_repo.as_ref()).await;
 
-    let rate_limits = RateLimitsData {
+    // Load rate limits from database
+    let db_rate_limits = settings_repo.get_rate_limits().await.unwrap_or(RateLimits {
         isolate_host_hour: 5,
         disable_user_hour: 10,
         block_ip_hour: 20,
+    });
+
+    // Use defaults if settings are zero (first run)
+    let rate_limits = RateLimitsData {
+        isolate_host_hour: if db_rate_limits.isolate_host_hour == 0 {
+            5
+        } else {
+            db_rate_limits.isolate_host_hour
+        },
+        disable_user_hour: if db_rate_limits.disable_user_hour == 0 {
+            10
+        } else {
+            db_rate_limits.disable_user_hour
+        },
+        block_ip_hour: if db_rate_limits.block_ip_hour == 0 {
+            20
+        } else {
+            db_rate_limits.block_ip_hour
+        },
     };
 
     // Load notification channels from repository
