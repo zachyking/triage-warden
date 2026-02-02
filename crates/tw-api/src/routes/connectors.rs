@@ -16,6 +16,8 @@ use validator::Validate;
 
 use crate::error::ApiError;
 use crate::state::AppState;
+use tw_connectors::threat_intel::virustotal::{VirusTotalConfig, VirusTotalConnector};
+use tw_connectors::traits::{AuthConfig, Connector, ConnectorConfig as ConnectorTraitConfig};
 use tw_core::connector::{ConnectorConfig, ConnectorStatus, ConnectorType};
 use tw_core::db::{create_connector_repository, ConnectorRepository, ConnectorUpdate};
 use tw_core::CredentialEncryptor;
@@ -349,9 +351,12 @@ async fn test_connector(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Connector {} not found", id)))?;
 
+    // Decrypt the config before testing - credentials need to be in plaintext for API calls
+    let decrypted_config = decrypt_sensitive_config(&connector.config, &state.encryptor);
+
     // Test connection based on connector type
     let start = std::time::Instant::now();
-    let test_result = test_connection_for_type(&connector).await;
+    let test_result = test_connection_for_type(&connector.connector_type, &decrypted_config).await;
     let latency_ms = start.elapsed().as_millis() as u64;
 
     // Update connector status based on test result
@@ -410,154 +415,213 @@ struct InternalTestResult {
     message: String,
 }
 
-/// Tests connection for a given connector type.
+/// Tests connection for a given connector type with decrypted configuration.
 ///
-/// For MVP, this performs basic validation and returns mock success.
-/// In production, this would instantiate the actual connector and call test_connection().
-async fn test_connection_for_type(connector: &ConnectorConfig) -> InternalTestResult {
-    // Validate that required config fields exist based on connector type
-    let validation_result = validate_connector_config(connector);
-
-    if let Err(msg) = validation_result {
-        return InternalTestResult {
-            success: false,
-            message: msg,
-        };
-    }
-
-    // For MVP, we simulate connection testing
-    // In a full implementation, we would:
-    // 1. Instantiate the appropriate connector (VirusTotalConnector, JiraConnector, etc.)
-    // 2. Call connector.test_connection()
-    // 3. Return the actual result
-
-    match connector.connector_type {
-        ConnectorType::VirusTotal => {
-            // Check for api_key in config
-            if connector.config.get("api_key").is_some() {
-                InternalTestResult {
-                    success: true,
-                    message: "VirusTotal API connection validated successfully.".to_string(),
-                }
-            } else {
-                InternalTestResult {
-                    success: false,
-                    message: "VirusTotal requires an 'api_key' in configuration.".to_string(),
-                }
-            }
-        }
-        ConnectorType::Jira => {
-            let has_url = connector.config.get("base_url").is_some();
-            let has_auth = connector.config.get("api_token").is_some()
-                || connector.config.get("username").is_some();
-
-            if has_url && has_auth {
-                InternalTestResult {
-                    success: true,
-                    message: "Jira connection validated successfully.".to_string(),
-                }
-            } else {
-                InternalTestResult {
-                    success: false,
-                    message:
-                        "Jira requires 'base_url' and authentication credentials in configuration."
-                            .to_string(),
-                }
-            }
-        }
-        ConnectorType::Splunk => {
-            let has_url = connector.config.get("base_url").is_some();
-            let has_token = connector.config.get("token").is_some();
-
-            if has_url && has_token {
-                InternalTestResult {
-                    success: true,
-                    message: "Splunk connection validated successfully.".to_string(),
-                }
-            } else {
-                InternalTestResult {
-                    success: false,
-                    message: "Splunk requires 'base_url' and 'token' in configuration.".to_string(),
-                }
-            }
-        }
-        ConnectorType::CrowdStrike => {
-            let has_client_id = connector.config.get("client_id").is_some();
-            let has_client_secret = connector.config.get("client_secret").is_some();
-
-            if has_client_id && has_client_secret {
-                InternalTestResult {
-                    success: true,
-                    message: "CrowdStrike connection validated successfully.".to_string(),
-                }
-            } else {
-                InternalTestResult {
-                    success: false,
-                    message:
-                        "CrowdStrike requires 'client_id' and 'client_secret' in configuration."
-                            .to_string(),
-                }
-            }
-        }
+/// This function instantiates the actual connector and calls test_connection().
+async fn test_connection_for_type(
+    connector_type: &ConnectorType,
+    config: &serde_json::Value,
+) -> InternalTestResult {
+    match connector_type {
+        ConnectorType::VirusTotal => test_virustotal_connection(config).await,
+        ConnectorType::Jira => test_jira_connection(config).await,
+        ConnectorType::Splunk => test_splunk_connection(config).await,
+        ConnectorType::CrowdStrike => test_crowdstrike_connection(config).await,
         ConnectorType::Defender | ConnectorType::M365 => {
-            let has_tenant_id = connector.config.get("tenant_id").is_some();
-            let has_client_id = connector.config.get("client_id").is_some();
+            test_microsoft_connection(connector_type, config).await
+        }
+        ConnectorType::GoogleWorkspace => test_google_workspace_connection(config).await,
+        ConnectorType::Generic => test_generic_connection(config).await,
+    }
+}
 
-            if has_tenant_id && has_client_id {
-                InternalTestResult {
-                    success: true,
-                    message: format!(
-                        "{} connection validated successfully.",
-                        connector.connector_type
-                    ),
-                }
-            } else {
-                InternalTestResult {
-                    success: false,
-                    message: format!(
-                        "{} requires 'tenant_id' and 'client_id' in configuration.",
-                        connector.connector_type
-                    ),
-                }
+/// Tests VirusTotal connection using the actual connector.
+async fn test_virustotal_connection(config: &serde_json::Value) -> InternalTestResult {
+    let api_key = match config.get("api_key").and_then(|v| v.as_str()) {
+        Some(key) if !key.is_empty() => key,
+        _ => {
+            return InternalTestResult {
+                success: false,
+                message: "VirusTotal requires an 'api_key' in configuration.".to_string(),
             }
         }
-        ConnectorType::GoogleWorkspace => {
-            let has_credentials = connector.config.get("service_account_json").is_some()
-                || connector.config.get("credentials_file").is_some();
+    };
 
-            if has_credentials {
-                InternalTestResult {
-                    success: true,
-                    message: "Google Workspace connection validated successfully.".to_string(),
-                }
-            } else {
-                InternalTestResult {
-                    success: false,
-                    message:
-                        "Google Workspace requires service account credentials in configuration."
-                            .to_string(),
-                }
-            }
+    // Build the connector config
+    let base_url = config
+        .get("base_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("https://www.virustotal.com");
+
+    let vt_config = VirusTotalConfig {
+        connector: ConnectorTraitConfig {
+            name: "virustotal".to_string(),
+            base_url: base_url.to_string(),
+            auth: AuthConfig::ApiKey {
+                key: api_key.to_string(),
+                header_name: "x-apikey".to_string(),
+            },
+            timeout_secs: 30,
+            max_retries: 3,
+            verify_tls: true,
+            headers: std::collections::HashMap::new(),
+        },
+        cache_ttl_secs: 3600,
+        max_cache_entries: 1000,
+        requests_per_minute: 4,
+    };
+
+    // Create connector and test connection
+    match VirusTotalConnector::new(vt_config) {
+        Ok(connector) => match connector.test_connection().await {
+            Ok(true) => InternalTestResult {
+                success: true,
+                message: "VirusTotal API connection successful.".to_string(),
+            },
+            Ok(false) => InternalTestResult {
+                success: false,
+                message: "VirusTotal API connection failed - authentication error.".to_string(),
+            },
+            Err(e) => InternalTestResult {
+                success: false,
+                message: format!("VirusTotal connection error: {}", e),
+            },
+        },
+        Err(e) => InternalTestResult {
+            success: false,
+            message: format!("Failed to initialize VirusTotal connector: {}", e),
+        },
+    }
+}
+
+/// Tests Jira connection - validates config for now (full implementation requires JiraConnector).
+async fn test_jira_connection(config: &serde_json::Value) -> InternalTestResult {
+    let has_url = config.get("base_url").and_then(|v| v.as_str()).is_some();
+    let has_auth = config.get("api_token").and_then(|v| v.as_str()).is_some()
+        || config.get("username").and_then(|v| v.as_str()).is_some();
+
+    if has_url && has_auth {
+        // TODO: Implement real Jira connection test when JiraConnector is available
+        InternalTestResult {
+            success: true,
+            message: "Jira configuration validated. Real connection test pending.".to_string(),
         }
-        ConnectorType::Generic => {
-            // Generic connectors just need a base_url
-            if connector.config.get("base_url").is_some() {
-                InternalTestResult {
-                    success: true,
-                    message: "Generic connector configuration validated successfully.".to_string(),
-                }
-            } else {
-                InternalTestResult {
-                    success: false,
-                    message: "Generic connector requires at least a 'base_url' in configuration."
-                        .to_string(),
-                }
-            }
+    } else {
+        InternalTestResult {
+            success: false,
+            message: "Jira requires 'base_url' and authentication credentials.".to_string(),
+        }
+    }
+}
+
+/// Tests Splunk connection - validates config for now.
+async fn test_splunk_connection(config: &serde_json::Value) -> InternalTestResult {
+    let has_url = config.get("base_url").and_then(|v| v.as_str()).is_some();
+    let has_token = config.get("token").and_then(|v| v.as_str()).is_some();
+
+    if has_url && has_token {
+        // TODO: Implement real Splunk connection test
+        InternalTestResult {
+            success: true,
+            message: "Splunk configuration validated. Real connection test pending.".to_string(),
+        }
+    } else {
+        InternalTestResult {
+            success: false,
+            message: "Splunk requires 'base_url' and 'token'.".to_string(),
+        }
+    }
+}
+
+/// Tests CrowdStrike connection - validates config for now.
+async fn test_crowdstrike_connection(config: &serde_json::Value) -> InternalTestResult {
+    let has_client_id = config.get("client_id").and_then(|v| v.as_str()).is_some();
+    let has_client_secret = config
+        .get("client_secret")
+        .and_then(|v| v.as_str())
+        .is_some();
+
+    if has_client_id && has_client_secret {
+        // TODO: Implement real CrowdStrike connection test
+        InternalTestResult {
+            success: true,
+            message: "CrowdStrike configuration validated. Real connection test pending."
+                .to_string(),
+        }
+    } else {
+        InternalTestResult {
+            success: false,
+            message: "CrowdStrike requires 'client_id' and 'client_secret'.".to_string(),
+        }
+    }
+}
+
+/// Tests Microsoft (Defender/M365) connection - validates config for now.
+async fn test_microsoft_connection(
+    connector_type: &ConnectorType,
+    config: &serde_json::Value,
+) -> InternalTestResult {
+    let has_tenant_id = config.get("tenant_id").and_then(|v| v.as_str()).is_some();
+    let has_client_id = config.get("client_id").and_then(|v| v.as_str()).is_some();
+
+    if has_tenant_id && has_client_id {
+        InternalTestResult {
+            success: true,
+            message: format!(
+                "{} configuration validated. Real connection test pending.",
+                connector_type
+            ),
+        }
+    } else {
+        InternalTestResult {
+            success: false,
+            message: format!("{} requires 'tenant_id' and 'client_id'.", connector_type),
+        }
+    }
+}
+
+/// Tests Google Workspace connection - validates config for now.
+async fn test_google_workspace_connection(config: &serde_json::Value) -> InternalTestResult {
+    let has_credentials = config
+        .get("service_account_json")
+        .and_then(|v| v.as_str())
+        .is_some()
+        || config
+            .get("credentials_file")
+            .and_then(|v| v.as_str())
+            .is_some();
+
+    if has_credentials {
+        InternalTestResult {
+            success: true,
+            message: "Google Workspace configuration validated. Real connection test pending."
+                .to_string(),
+        }
+    } else {
+        InternalTestResult {
+            success: false,
+            message: "Google Workspace requires service account credentials.".to_string(),
+        }
+    }
+}
+
+/// Tests Generic connector - validates config for now.
+async fn test_generic_connection(config: &serde_json::Value) -> InternalTestResult {
+    if config.get("base_url").and_then(|v| v.as_str()).is_some() {
+        InternalTestResult {
+            success: true,
+            message: "Generic connector configuration validated.".to_string(),
+        }
+    } else {
+        InternalTestResult {
+            success: false,
+            message: "Generic connector requires at least a 'base_url'.".to_string(),
         }
     }
 }
 
 /// Validates connector configuration has minimum required fields.
+#[allow(dead_code)] // May be used for create/update validation in the future
 fn validate_connector_config(connector: &ConnectorConfig) -> Result<(), String> {
     if connector.name.is_empty() {
         return Err("Connector name cannot be empty.".to_string());
@@ -709,7 +773,6 @@ fn encrypt_sensitive_config(
 
 /// Decrypts sensitive fields in configuration JSON after retrieval.
 /// Used when testing connections or when credentials need to be read.
-#[allow(dead_code)] // Will be used when real connector testing is implemented
 fn decrypt_sensitive_config(
     config: &serde_json::Value,
     encryptor: &Arc<dyn CredentialEncryptor>,
@@ -1978,10 +2041,11 @@ mod api_tests {
     // ==================== TEST CONNECTION TESTS ====================
 
     #[tokio::test]
-    async fn test_test_connector_success_virustotal() {
+    async fn test_test_connector_virustotal_invalid_key() {
         let app = setup_test_app().await;
 
-        // Create a VirusTotal connector with valid config
+        // Create a VirusTotal connector with an invalid API key
+        // Real connector testing will fail authentication with fake keys
         let body = serde_json::json!({
             "name": "VT Test",
             "connector_type": "virustotal",
@@ -2006,7 +2070,7 @@ mod api_tests {
             .unwrap();
         let created: ConnectorResponse = serde_json::from_slice(&body_bytes).unwrap();
 
-        // Test the connection
+        // Test the connection - should fail because we're using a fake API key
         let request = Request::builder()
             .method("POST")
             .uri(format!("/api/connectors/{}/test", created.id))
@@ -2022,7 +2086,8 @@ mod api_tests {
             .unwrap();
         let result: TestConnectionResponse = serde_json::from_slice(&body_bytes).unwrap();
 
-        assert!(result.success);
+        // Real connector test with fake API key should fail authentication
+        assert!(!result.success);
         assert!(result.latency_ms.is_some());
         assert!(result.message.contains("VirusTotal"));
     }
