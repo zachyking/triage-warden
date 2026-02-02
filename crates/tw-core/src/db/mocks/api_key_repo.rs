@@ -262,4 +262,114 @@ mod tests {
         let remaining = repo.list(&ApiKeyFilter::default()).await.unwrap();
         assert_eq!(remaining.len(), 1);
     }
+
+    #[tokio::test]
+    async fn test_delete_single_key() {
+        let repo = MockApiKeyRepository::new();
+        let user_id = Uuid::new_v4();
+        let key = test_api_key(Uuid::new_v4(), user_id, "tw_todelete");
+        repo.create(&key).await.unwrap();
+
+        let deleted = repo.delete(key.id).await.unwrap();
+        assert!(deleted);
+
+        let not_found = repo.get(key.id).await.unwrap();
+        assert!(not_found.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_delete_nonexistent_key() {
+        let repo = MockApiKeyRepository::new();
+        let deleted = repo.delete(Uuid::new_v4()).await.unwrap();
+        assert!(!deleted);
+    }
+
+    #[tokio::test]
+    async fn test_update_last_used() {
+        let repo = MockApiKeyRepository::new();
+        let user_id = Uuid::new_v4();
+        let key = test_api_key(Uuid::new_v4(), user_id, "tw_used");
+        repo.create(&key).await.unwrap();
+
+        assert!(repo
+            .get(key.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .last_used_at
+            .is_none());
+
+        repo.update_last_used(key.id).await.unwrap();
+
+        let updated = repo.get(key.id).await.unwrap().unwrap();
+        assert!(updated.last_used_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_prefix_rejected() {
+        let repo = MockApiKeyRepository::new();
+        let user_id = Uuid::new_v4();
+        let key1 = test_api_key(Uuid::new_v4(), user_id, "tw_same");
+        let key2 = test_api_key(Uuid::new_v4(), user_id, "tw_same");
+
+        repo.create(&key1).await.unwrap();
+        let result = repo.create(&key2).await;
+
+        assert!(matches!(result, Err(DbError::Constraint(_))));
+    }
+
+    #[tokio::test]
+    async fn test_key_without_expiry_always_active() {
+        let repo = MockApiKeyRepository::new();
+        let user_id = Uuid::new_v4();
+
+        // Key with no expiry
+        let key = ApiKey {
+            expires_at: None,
+            ..test_api_key(Uuid::new_v4(), user_id, "tw_noexpiry")
+        };
+
+        repo.create(&key).await.unwrap();
+
+        let filter = ApiKeyFilter {
+            active_only: Some(true),
+            ..Default::default()
+        };
+
+        let active_keys = repo.list(&filter).await.unwrap();
+        assert_eq!(active_keys.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_count_keys() {
+        let repo = MockApiKeyRepository::new();
+        let user_id = Uuid::new_v4();
+
+        for i in 0..5 {
+            repo.create(&test_api_key(
+                Uuid::new_v4(),
+                user_id,
+                &format!("tw_key{}", i),
+            ))
+            .await
+            .unwrap();
+        }
+
+        let count = repo.count(&ApiKeyFilter::default()).await.unwrap();
+        assert_eq!(count, 5);
+    }
+
+    #[tokio::test]
+    async fn test_with_keys_constructor() {
+        let user_id = Uuid::new_v4();
+        let keys = vec![
+            test_api_key(Uuid::new_v4(), user_id, "tw_pre1"),
+            test_api_key(Uuid::new_v4(), user_id, "tw_pre2"),
+        ];
+
+        let repo = MockApiKeyRepository::with_keys(keys);
+
+        let all_keys = repo.list(&ApiKeyFilter::default()).await.unwrap();
+        assert_eq!(all_keys.len(), 2);
+    }
 }

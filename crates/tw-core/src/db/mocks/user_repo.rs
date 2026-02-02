@@ -311,4 +311,158 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].username, "admin");
     }
+
+    #[tokio::test]
+    async fn test_update_user() {
+        let repo = MockUserRepository::new();
+        let user = test_user(Uuid::new_v4(), "original", "original@example.com");
+        repo.create(&user).await.unwrap();
+
+        let update = UserUpdate {
+            email: Some("updated@example.com".to_string()),
+            username: Some("updated".to_string()),
+            role: Some(Role::Admin),
+            display_name: Some(Some("Updated Name".to_string())),
+            enabled: Some(false),
+        };
+
+        let updated = repo.update(user.id, &update).await.unwrap();
+        assert_eq!(updated.email, "updated@example.com");
+        assert_eq!(updated.username, "updated");
+        assert_eq!(updated.role, Role::Admin);
+        assert_eq!(updated.display_name, Some("Updated Name".to_string()));
+        assert!(!updated.enabled);
+    }
+
+    #[tokio::test]
+    async fn test_update_nonexistent_user() {
+        let repo = MockUserRepository::new();
+        let update = UserUpdate::default();
+
+        let result = repo.update(Uuid::new_v4(), &update).await;
+        assert!(matches!(result, Err(DbError::NotFound { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_delete_user() {
+        let repo = MockUserRepository::new();
+        let user = test_user(Uuid::new_v4(), "deleteme", "delete@example.com");
+        repo.create(&user).await.unwrap();
+
+        let deleted = repo.delete(user.id).await.unwrap();
+        assert!(deleted);
+
+        let not_found = repo.get(user.id).await.unwrap();
+        assert!(not_found.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_delete_nonexistent_user() {
+        let repo = MockUserRepository::new();
+        let deleted = repo.delete(Uuid::new_v4()).await.unwrap();
+        assert!(!deleted);
+    }
+
+    #[tokio::test]
+    async fn test_update_password() {
+        let repo = MockUserRepository::new();
+        let user = test_user(Uuid::new_v4(), "passuser", "pass@example.com");
+        repo.create(&user).await.unwrap();
+
+        repo.update_password(user.id, "new_hash").await.unwrap();
+
+        let updated = repo.get(user.id).await.unwrap().unwrap();
+        assert_eq!(updated.password_hash, "new_hash");
+    }
+
+    #[tokio::test]
+    async fn test_update_last_login() {
+        let repo = MockUserRepository::new();
+        let user = test_user(Uuid::new_v4(), "loginuser", "login@example.com");
+        repo.create(&user).await.unwrap();
+
+        assert!(repo
+            .get(user.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .last_login_at
+            .is_none());
+
+        repo.update_last_login(user.id).await.unwrap();
+
+        let updated = repo.get(user.id).await.unwrap().unwrap();
+        assert!(updated.last_login_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_get_by_username() {
+        let repo = MockUserRepository::new();
+        let user = test_user(Uuid::new_v4(), "uniquename", "unique@example.com");
+        repo.create(&user).await.unwrap();
+
+        let found = repo.get_by_username("uniquename").await.unwrap();
+        assert!(found.is_some());
+
+        let not_found = repo.get_by_username("nonexistent").await.unwrap();
+        assert!(not_found.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_username_rejected() {
+        let repo = MockUserRepository::new();
+        let user1 = test_user(Uuid::new_v4(), "sameuser", "user1@example.com");
+        let user2 = test_user(Uuid::new_v4(), "sameuser", "user2@example.com");
+
+        repo.create(&user1).await.unwrap();
+        let result = repo.create(&user2).await;
+
+        assert!(matches!(result, Err(DbError::Constraint(_))));
+    }
+
+    #[tokio::test]
+    async fn test_list_with_enabled_filter() {
+        let repo = MockUserRepository::new();
+
+        let enabled = test_user(Uuid::new_v4(), "enabled", "enabled@example.com");
+        let disabled = User {
+            enabled: false,
+            ..test_user(Uuid::new_v4(), "disabled", "disabled@example.com")
+        };
+
+        repo.create(&enabled).await.unwrap();
+        repo.create(&disabled).await.unwrap();
+
+        let filter = UserFilter {
+            enabled: Some(true),
+            ..Default::default()
+        };
+
+        let result = repo.list(&filter).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].username, "enabled");
+    }
+
+    #[tokio::test]
+    async fn test_list_with_search_filter() {
+        let repo = MockUserRepository::new();
+
+        repo.create(&test_user(Uuid::new_v4(), "john_doe", "john@example.com"))
+            .await
+            .unwrap();
+        repo.create(&test_user(Uuid::new_v4(), "jane_doe", "jane@example.com"))
+            .await
+            .unwrap();
+        repo.create(&test_user(Uuid::new_v4(), "bob_smith", "bob@example.com"))
+            .await
+            .unwrap();
+
+        let filter = UserFilter {
+            search: Some("doe".to_string()),
+            ..Default::default()
+        };
+
+        let result = repo.list(&filter).await.unwrap();
+        assert_eq!(result.len(), 2);
+    }
 }
