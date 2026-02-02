@@ -7,6 +7,7 @@ mod error;
 mod pool;
 mod schema;
 
+pub mod api_key_repo;
 pub mod audit_repo;
 pub mod connector_repo;
 pub mod incident_repo;
@@ -22,6 +23,7 @@ pub use pool::{create_pool, create_pool_with_options, DbPool, PoolOptions};
 pub use schema::run_migrations;
 
 // Re-export repository traits and types
+pub use api_key_repo::{ApiKeyFilter, ApiKeyRepository};
 pub use audit_repo::AuditRepository;
 pub use connector_repo::{ConnectorRepository, ConnectorUpdate};
 pub use incident_repo::{IncidentFilter, IncidentRepository, IncidentUpdate, Pagination};
@@ -32,6 +34,7 @@ pub use settings_repo::{GeneralSettings, LlmSettings, RateLimits, SettingsReposi
 pub use user_repo::UserRepository;
 
 // Re-export factory functions
+pub use api_key_repo::create_api_key_repository;
 pub use audit_repo::create_audit_repository;
 pub use connector_repo::create_connector_repository;
 pub use incident_repo::create_incident_repository;

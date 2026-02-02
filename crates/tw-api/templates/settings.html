@@ -16,6 +16,7 @@
   <a href="/settings?tab=policies" class="tab{% if tab == "policies" %} active{% endif %}">Policies</a>
   <a href="/settings?tab=notifications" class="tab{% if tab == "notifications" %} active{% endif %}">Notifications</a>
   <a href="/settings?tab=llm" class="tab{% if tab == "llm" %} active{% endif %}">AI / LLM</a>
+  <a href="/settings?tab=api-keys" class="tab{% if tab == "api-keys" %} active{% endif %}">API Keys</a>
 </div>
 
 {% if tab == "general" %}
@@ -430,6 +431,89 @@
   </div>
 </div>
 
+{% else if tab == "api-keys" %}
+<!-- API Keys -->
+<div class="card mb-4">
+  <div class="card-header">
+    <div>
+      <h3 class="card-title">API Keys</h3>
+      <p class="text-sm text-muted">Create and manage API keys for programmatic access to Triage Warden.</p>
+    </div>
+    <button class="btn btn-primary btn-sm"
+            hx-get="/web/modals/add-api-key"
+            hx-target="#modal-container"
+            hx-swap="innerHTML">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M12 5v14m-7-7h14"/>
+      </svg>
+      Create API Key
+    </button>
+  </div>
+  <div class="card-body no-padding">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Key Prefix</th>
+          <th>Scopes</th>
+          <th>Last Used</th>
+          <th>Expires</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="api-keys-table-body">
+        {% for key in api_keys %}
+        <tr id="api-key-row-{{ key.id }}">
+          <td class="font-semibold">{{ key.name }}</td>
+          <td>
+            <code class="text-sm bg-surface px-2 py-1 rounded">{{ key.key_prefix }}...</code>
+          </td>
+          <td>
+            {% for scope in key.scopes %}
+            <span class="badge badge-info mr-1">{{ scope }}</span>
+            {% endfor %}
+          </td>
+          <td class="text-sm text-muted">
+            {% if let Some(last_used) = key.last_used_at %}
+              {{ last_used }}
+            {% else %}
+              Never
+            {% endif %}
+          </td>
+          <td class="text-sm">
+            {% if let Some(expires) = key.expires_at %}
+              <span class="text-warning">{{ expires }}</span>
+            {% else %}
+              <span class="text-muted">Never</span>
+            {% endif %}
+          </td>
+          <td>
+            <button class="btn btn-ghost btn-sm text-critical"
+                    hx-delete="/api/api-keys/{{ key.id }}"
+                    hx-confirm="Are you sure you want to revoke this API key? This action cannot be undone and any applications using this key will stop working."
+                    hx-swap="none"
+                    hx-on::after-request="if(event.detail.successful) { showToast('success', 'API Key Revoked', 'The API key has been permanently deleted.'); document.getElementById('api-key-row-{{ key.id }}').remove(); }">
+              Revoke
+            </button>
+          </td>
+        </tr>
+        {% endfor %}
+        {% if api_keys.is_empty() %}
+        <tr>
+          <td colspan="6" class="text-center text-muted py-8">
+            <svg class="mx-auto mb-2" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity: 0.5">
+              <path d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/>
+            </svg>
+            <p class="mb-2">No API keys configured</p>
+            <p class="text-xs">Create an API key to enable programmatic access to the Triage Warden API.</p>
+          </td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
 <script>
 function toggleApiKeyVisibility() {
   const input = document.getElementById('llm-api-key');
@@ -448,5 +532,34 @@ function updateModelOptions() {
   }
 }
 </script>
+
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">API Documentation</h3>
+  </div>
+  <div class="card-body">
+    <p class="text-sm text-muted mb-4">
+      API keys can be used to authenticate requests to the Triage Warden API. Include your API key in the
+      <code class="bg-surface px-1 rounded">Authorization</code> header as a Bearer token.
+    </p>
+    <div class="bg-surface p-4 rounded font-mono text-sm">
+      <span class="text-muted">curl</span> -H <span class="text-success">"Authorization: Bearer tw_your_key_here"</span> \<br>
+      &nbsp;&nbsp;{{ "https://your-server/api/incidents" }}
+    </div>
+    <div class="mt-4">
+      <h4 class="font-semibold mb-2">Available Scopes</h4>
+      <ul class="text-sm text-muted space-y-1">
+        <li><code class="bg-surface px-1 rounded">read</code> - Read access to incidents and data</li>
+        <li><code class="bg-surface px-1 rounded">write</code> - Create and update resources</li>
+        <li><code class="bg-surface px-1 rounded">incidents</code> - Full access to incidents</li>
+        <li><code class="bg-surface px-1 rounded">connectors</code> - Manage connectors</li>
+        <li><code class="bg-surface px-1 rounded">playbooks</code> - Manage playbooks</li>
+        <li><code class="bg-surface px-1 rounded">settings</code> - Access settings</li>
+        <li><code class="bg-surface px-1 rounded">admin</code> - Administrative access (admin users only)</li>
+        <li><code class="bg-surface px-1 rounded">*</code> - Full access to all scopes (admin users only)</li>
+      </ul>
+    </div>
+  </div>
+</div>
 {% endif %}
 {% endblock %}

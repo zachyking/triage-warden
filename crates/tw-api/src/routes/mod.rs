@@ -1,5 +1,6 @@
 //! API routes.
 
+pub mod api_keys;
 pub mod auth;
 pub mod connectors;
 pub mod health;
@@ -29,6 +30,7 @@ pub fn create_router(state: AppState) -> Router {
 fn api_routes() -> Router<AppState> {
     Router::new()
         .nest("/admin/users", users::routes())
+        .nest("/api-keys", api_keys::routes())
         .nest("/connectors", connectors::routes())
         .nest("/incidents", incidents::routes())
         .nest("/notifications", notifications::routes())
