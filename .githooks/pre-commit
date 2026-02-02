@@ -81,13 +81,13 @@ if [ -n "$PYTHON_CHANGED" ]; then
         fi
         echo -e "  ${GREEN}Mypy OK${NC}"
 
-        echo "  Running pytest..."
-        if ! uv run pytest tests/ -v --tb=short 2>&1 | tail -20; then
+        echo "  Running Python tests..."
+        if ! ./scripts/run_tests.sh; then
             echo -e "${RED}Python tests failed.${NC}"
             popd > /dev/null
             exit 1
         fi
-        echo -e "  ${GREEN}Pytest OK${NC}"
+        echo -e "  ${GREEN}Python tests OK${NC}"
     else
         echo -e "${YELLOW}  uv not found, skipping Python checks${NC}"
     fi

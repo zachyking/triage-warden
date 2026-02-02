@@ -877,14 +877,15 @@ class TestSearchSIEMTool:
                 registry = create_triage_tools()
                 result = await registry.execute("search_siem", {"query": "login_failure"})
 
-                assert result["source"] == "mock"
-                assert result["total_count"] == 0
-                assert result["events"] == []
-                assert result["events_raw"] == []
-                assert "search_stats" in result
-                assert result["search_stats"]["query"] == "login_failure"
-                assert result["search_stats"]["timerange_hours"] == 24
-                assert result["search_stats"]["limit_applied"] == 100
+                assert result.success is True
+                assert result.data["is_mock"] is True
+                assert result.data["total_count"] == 0
+                assert result.data["events"] == []
+                assert result.data["events_raw"] == []
+                assert "search_stats" in result.data
+                assert result.data["search_stats"]["query"] == "login_failure"
+                assert result.data["search_stats"]["timerange_hours"] == 24
+                assert result.data["search_stats"]["limit_applied"] == 100
 
     @pytest.mark.asyncio
     async def test_search_siem_with_custom_hours(self):
@@ -896,7 +897,7 @@ class TestSearchSIEMTool:
                     "search_siem", {"query": "malware", "hours": 48}
                 )
 
-                assert result["search_stats"]["timerange_hours"] == 48
+                assert result.data["search_stats"]["timerange_hours"] == 48
 
     @pytest.mark.asyncio
     async def test_search_siem_with_custom_limit(self):
@@ -908,7 +909,7 @@ class TestSearchSIEMTool:
                     "search_siem", {"query": "test", "limit": 50}
                 )
 
-                assert result["search_stats"]["limit_applied"] == 50
+                assert result.data["search_stats"]["limit_applied"] == 50
 
     @pytest.mark.asyncio
     async def test_search_siem_with_bridge(self):
@@ -925,12 +926,13 @@ class TestSearchSIEMTool:
                     )
 
                     mock_bridge.search.assert_called_once_with("login_failure", 24)
-                    assert result["source"] == "siem_bridge"
-                    assert result["total_count"] == 5
-                    assert len(result["events"]) == 2
-                    assert len(result["events_raw"]) == 2
-                    assert result["search_stats"]["search_id"] == "search-123"
-                    assert result["search_stats"]["execution_time_ms"] == 150
+                    assert result.success is True
+                    assert result.data["is_mock"] is False
+                    assert result.data["total_count"] == 5
+                    assert len(result.data["events"]) == 2
+                    assert len(result.data["events_raw"]) == 2
+                    assert result.data["search_stats"]["search_id"] == "search-123"
+                    assert result.data["search_stats"]["execution_time_ms"] == 150
 
     @pytest.mark.asyncio
     async def test_search_siem_applies_limit_to_events(self):
@@ -952,12 +954,12 @@ class TestSearchSIEMTool:
                         "search_siem", {"query": "test", "limit": 10}
                     )
 
-                    assert len(result["events_raw"]) == 10
-                    assert result["total_count"] == 100  # Original count preserved
+                    assert len(result.data["events_raw"]) == 10
+                    assert result.data["total_count"] == 100  # Original count preserved
 
     @pytest.mark.asyncio
-    async def test_search_siem_bridge_error_fallback(self):
-        """Test search_siem falls back to mock on bridge error."""
+    async def test_search_siem_bridge_error_returns_failure(self):
+        """Test search_siem returns failure on bridge error."""
         mock_bridge = MagicMock()
         mock_bridge.search.side_effect = RuntimeError("Bridge error")
 
@@ -969,8 +971,8 @@ class TestSearchSIEMTool:
                         "search_siem", {"query": "test"}
                     )
 
-                    assert result["source"] == "mock"
-                    assert result["total_count"] == 0
+                    assert result.success is False
+                    assert "SIEM search failed" in result.error
 
     @pytest.mark.asyncio
     async def test_search_siem_formats_events(self):
@@ -987,11 +989,11 @@ class TestSearchSIEMTool:
                     )
 
                     # Check formatted events are strings
-                    assert all(isinstance(e, str) for e in result["events"])
+                    assert all(isinstance(e, str) for e in result.data["events"])
                     # Check raw events are dicts
-                    assert all(isinstance(e, dict) for e in result["events_raw"])
+                    assert all(isinstance(e, dict) for e in result.data["events_raw"])
                     # Check formatted event contains expected data
-                    assert "login_failure" in result["events"][0]
+                    assert "login_failure" in result.data["events"][0]
 
 
 # ============================================================================
@@ -1010,10 +1012,11 @@ class TestGetRecentAlertsTool:
                 registry = create_triage_tools()
                 result = await registry.execute("get_recent_alerts", {})
 
-                assert result["source"] == "mock"
-                assert result["total_count"] == 0
-                assert result["alerts"] == []
-                assert result["alerts_raw"] == []
+                assert result.success is True
+                assert result.data["is_mock"] is True
+                assert result.data["total_count"] == 0
+                assert result.data["alerts"] == []
+                assert result.data["alerts_raw"] == []
 
     @pytest.mark.asyncio
     async def test_get_recent_alerts_with_default_limit(self):
@@ -1029,8 +1032,9 @@ class TestGetRecentAlertsTool:
                     result = await registry.execute("get_recent_alerts", {})
 
                     mock_bridge.get_recent_alerts.assert_called_once_with(10)
-                    assert result["source"] == "siem_bridge"
-                    assert result["total_count"] == 2
+                    assert result.success is True
+                    assert result.data["is_mock"] is False
+                    assert result.data["total_count"] == 2
 
     @pytest.mark.asyncio
     async def test_get_recent_alerts_with_custom_limit(self):
@@ -1048,8 +1052,8 @@ class TestGetRecentAlertsTool:
                     mock_bridge.get_recent_alerts.assert_called_once_with(5)
 
     @pytest.mark.asyncio
-    async def test_get_recent_alerts_bridge_error_fallback(self):
-        """Test get_recent_alerts falls back to mock on bridge error."""
+    async def test_get_recent_alerts_bridge_error_returns_failure(self):
+        """Test get_recent_alerts returns failure on bridge error."""
         mock_bridge = MagicMock()
         mock_bridge.get_recent_alerts.side_effect = RuntimeError("Bridge error")
 
@@ -1059,8 +1063,8 @@ class TestGetRecentAlertsTool:
                     registry = create_triage_tools()
                     result = await registry.execute("get_recent_alerts", {})
 
-                    assert result["source"] == "mock"
-                    assert result["total_count"] == 0
+                    assert result.success is False
+                    assert "Get recent alerts failed" in result.error
 
     @pytest.mark.asyncio
     async def test_get_recent_alerts_formats_alerts(self):
@@ -1076,12 +1080,12 @@ class TestGetRecentAlertsTool:
                     result = await registry.execute("get_recent_alerts", {})
 
                     # Check formatted alerts are strings
-                    assert all(isinstance(a, str) for a in result["alerts"])
+                    assert all(isinstance(a, str) for a in result.data["alerts"])
                     # Check raw alerts are dicts
-                    assert all(isinstance(a, dict) for a in result["alerts_raw"])
+                    assert all(isinstance(a, dict) for a in result.data["alerts_raw"])
                     # Check formatted alert contains expected data
-                    assert "Brute Force Attack" in result["alerts"][0]
-                    assert "ALERT-001" in result["alerts"][0]
+                    assert "Brute Force Attack" in result.data["alerts"][0]
+                    assert "ALERT-001" in result.data["alerts"][0]
 
 
 # ============================================================================
@@ -1121,14 +1125,15 @@ class TestSIEMToolsIntegration:
                 result = await registry.execute("search_siem", {"query": "test"})
 
                 # Verify all required keys present
-                assert "events" in result
-                assert "events_raw" in result
-                assert "total_count" in result
-                assert "search_stats" in result
-                assert "source" in result
+                assert result.success is True
+                assert "events" in result.data
+                assert "events_raw" in result.data
+                assert "total_count" in result.data
+                assert "search_stats" in result.data
+                assert "is_mock" in result.data
 
                 # Verify search_stats structure
-                stats = result["search_stats"]
+                stats = result.data["search_stats"]
                 assert "search_id" in stats
                 assert "query" in stats
                 assert "timerange_hours" in stats
@@ -1144,10 +1149,11 @@ class TestSIEMToolsIntegration:
                 result = await registry.execute("get_recent_alerts", {})
 
                 # Verify all required keys present
-                assert "alerts" in result
-                assert "alerts_raw" in result
-                assert "total_count" in result
-                assert "source" in result
+                assert result.success is True
+                assert "alerts" in result.data
+                assert "alerts_raw" in result.data
+                assert "total_count" in result.data
+                assert "is_mock" in result.data
 
 
 # ============================================================================
@@ -1738,13 +1744,14 @@ class TestGetHostInfoTool:
                     "get_host_info", {"hostname": "workstation-001"}
                 )
 
-                assert result["source"] == "mock"
-                assert result["hostname"] == "workstation-001"
-                assert "status" in result
-                assert "os" in result
-                assert "isolated" in result
-                assert isinstance(result["ip_addresses"], list)
-                assert isinstance(result["tags"], list)
+                assert result.success is True
+                assert result.data["is_mock"] is True
+                assert result.data["hostname"] == "workstation-001"
+                assert "status" in result.data
+                assert "os" in result.data
+                assert "isolated" in result.data
+                assert isinstance(result.data["ip_addresses"], list)
+                assert isinstance(result.data["tags"], list)
 
     @pytest.mark.asyncio
     async def test_get_host_info_with_bridge(self):
@@ -1761,13 +1768,14 @@ class TestGetHostInfoTool:
                     )
 
                     mock_bridge.get_host_info.assert_called_once_with("workstation-001")
-                    assert result["source"] == "edr_bridge"
-                    assert result["hostname"] == "workstation-001"
-                    assert result["status"] == "online"
+                    assert result.success is True
+                    assert result.data["is_mock"] is False
+                    assert result.data["hostname"] == "workstation-001"
+                    assert result.data["status"] == "online"
 
     @pytest.mark.asyncio
-    async def test_get_host_info_bridge_error_fallback(self):
-        """Test get_host_info falls back to mock on bridge error."""
+    async def test_get_host_info_bridge_error_returns_failure(self):
+        """Test get_host_info returns failure on bridge error."""
         mock_bridge = MagicMock()
         mock_bridge.get_host_info.side_effect = RuntimeError("Bridge error")
 
@@ -1779,8 +1787,8 @@ class TestGetHostInfoTool:
                         "get_host_info", {"hostname": "workstation-001"}
                     )
 
-                    assert result["source"] == "mock"
-                    assert "hostname" in result
+                    assert result.success is False
+                    assert "Get host info failed" in result.error
 
     @pytest.mark.asyncio
     async def test_get_host_info_result_structure(self):
@@ -1793,17 +1801,18 @@ class TestGetHostInfoTool:
                 )
 
                 # Verify all required keys present
-                assert "hostname" in result
-                assert "host_id" in result
-                assert "ip_addresses" in result
-                assert "os" in result
-                assert "os_version" in result
-                assert "status" in result
-                assert "isolated" in result
-                assert "last_seen" in result
-                assert "agent_version" in result
-                assert "tags" in result
-                assert "source" in result
+                assert result.success is True
+                assert "hostname" in result.data
+                assert "host_id" in result.data
+                assert "ip_addresses" in result.data
+                assert "os" in result.data
+                assert "os_version" in result.data
+                assert "status" in result.data
+                assert "isolated" in result.data
+                assert "last_seen" in result.data
+                assert "agent_version" in result.data
+                assert "tags" in result.data
+                assert "is_mock" in result.data
 
 
 # ============================================================================
@@ -1824,12 +1833,13 @@ class TestGetDetectionsTool:
                     "get_detections", {"hostname": "workstation-001"}
                 )
 
-                assert result["source"] == "mock"
-                assert result["hostname"] == "workstation-001"
-                assert "total_count" in result
-                assert "detections" in result
-                assert isinstance(result["detections"], list)
-                assert len(result["detections"]) > 0
+                assert result.success is True
+                assert result.data["is_mock"] is True
+                assert result.data["hostname"] == "workstation-001"
+                assert "total_count" in result.data
+                assert "detections" in result.data
+                assert isinstance(result.data["detections"], list)
+                assert len(result.data["detections"]) > 0
 
     @pytest.mark.asyncio
     async def test_get_detections_with_bridge(self):
@@ -1846,8 +1856,9 @@ class TestGetDetectionsTool:
                     )
 
                     mock_bridge.get_detections.assert_called_once_with("workstation-001")
-                    assert result["source"] == "edr_bridge"
-                    assert result["total_count"] == 1
+                    assert result.success is True
+                    assert result.data["is_mock"] is False
+                    assert result.data["total_count"] == 1
 
     @pytest.mark.asyncio
     async def test_get_detections_with_hours_parameter(self):
@@ -1859,7 +1870,7 @@ class TestGetDetectionsTool:
                     "get_detections", {"hostname": "workstation-001", "hours": 48}
                 )
 
-                assert result["timerange_hours"] == 48
+                assert result.data["timerange_hours"] == 48
 
     @pytest.mark.asyncio
     async def test_get_detections_includes_mitre_info(self):
@@ -1871,7 +1882,7 @@ class TestGetDetectionsTool:
                     "get_detections", {"hostname": "workstation-001"}
                 )
 
-                detection = result["detections"][0]
+                detection = result.data["detections"][0]
                 assert "technique" in detection
                 assert "tactic" in detection
                 assert detection["technique"].startswith("T")
@@ -1887,14 +1898,15 @@ class TestGetDetectionsTool:
                 )
 
                 # Verify top-level structure
-                assert "hostname" in result
-                assert "total_count" in result
-                assert "detections" in result
-                assert "source" in result
+                assert result.success is True
+                assert "hostname" in result.data
+                assert "total_count" in result.data
+                assert "detections" in result.data
+                assert "is_mock" in result.data
 
                 # Verify detection structure
-                if result["detections"]:
-                    det = result["detections"][0]
+                if result.data["detections"]:
+                    det = result.data["detections"][0]
                     assert "id" in det
                     assert "name" in det
                     assert "severity" in det
@@ -1921,12 +1933,13 @@ class TestGetProcessesTool:
                     "get_processes", {"hostname": "workstation-001"}
                 )
 
-                assert result["source"] == "mock"
-                assert result["hostname"] == "workstation-001"
-                assert "total_count" in result
-                assert "processes" in result
-                assert isinstance(result["processes"], list)
-                assert len(result["processes"]) > 0
+                assert result.success is True
+                assert result.data["is_mock"] is True
+                assert result.data["hostname"] == "workstation-001"
+                assert "total_count" in result.data
+                assert "processes" in result.data
+                assert isinstance(result.data["processes"], list)
+                assert len(result.data["processes"]) > 0
 
     @pytest.mark.asyncio
     async def test_get_processes_with_bridge(self):
@@ -1943,8 +1956,9 @@ class TestGetProcessesTool:
                     )
 
                     mock_bridge.get_processes.assert_called_once_with("workstation-001", 24)
-                    assert result["source"] == "edr_bridge"
-                    assert result["total_count"] == 1
+                    assert result.success is True
+                    assert result.data["is_mock"] is False
+                    assert result.data["total_count"] == 1
 
     @pytest.mark.asyncio
     async def test_get_processes_with_hours_parameter(self):
@@ -1956,7 +1970,7 @@ class TestGetProcessesTool:
                     "get_processes", {"hostname": "workstation-001", "hours": 72}
                 )
 
-                assert result["timerange_hours"] == 72
+                assert result.data["timerange_hours"] == 72
 
     @pytest.mark.asyncio
     async def test_get_processes_includes_parent_info(self):
@@ -1968,7 +1982,7 @@ class TestGetProcessesTool:
                     "get_processes", {"hostname": "workstation-001"}
                 )
 
-                process = result["processes"][0]
+                process = result.data["processes"][0]
                 assert "parent_pid" in process or "parent_name" in process
 
     @pytest.mark.asyncio
@@ -1982,15 +1996,16 @@ class TestGetProcessesTool:
                 )
 
                 # Verify top-level structure
-                assert "hostname" in result
-                assert "timerange_hours" in result
-                assert "total_count" in result
-                assert "processes" in result
-                assert "source" in result
+                assert result.success is True
+                assert "hostname" in result.data
+                assert "timerange_hours" in result.data
+                assert "total_count" in result.data
+                assert "processes" in result.data
+                assert "is_mock" in result.data
 
                 # Verify process structure
-                if result["processes"]:
-                    proc = result["processes"][0]
+                if result.data["processes"]:
+                    proc = result.data["processes"][0]
                     assert "pid" in proc
                     assert "name" in proc
                     assert "command_line" in proc
@@ -2015,12 +2030,13 @@ class TestGetNetworkConnectionsTool:
                     "get_network_connections", {"hostname": "workstation-001"}
                 )
 
-                assert result["source"] == "mock"
-                assert result["hostname"] == "workstation-001"
-                assert "total_count" in result
-                assert "connections" in result
-                assert isinstance(result["connections"], list)
-                assert len(result["connections"]) > 0
+                assert result.success is True
+                assert result.data["is_mock"] is True
+                assert result.data["hostname"] == "workstation-001"
+                assert "total_count" in result.data
+                assert "connections" in result.data
+                assert isinstance(result.data["connections"], list)
+                assert len(result.data["connections"]) > 0
 
     @pytest.mark.asyncio
     async def test_get_network_connections_with_bridge(self):
@@ -2037,8 +2053,9 @@ class TestGetNetworkConnectionsTool:
                     )
 
                     mock_bridge.get_network_connections.assert_called_once_with("workstation-001", 24)
-                    assert result["source"] == "edr_bridge"
-                    assert result["total_count"] == 1
+                    assert result.success is True
+                    assert result.data["is_mock"] is False
+                    assert result.data["total_count"] == 1
 
     @pytest.mark.asyncio
     async def test_get_network_connections_with_hours_parameter(self):
@@ -2050,7 +2067,7 @@ class TestGetNetworkConnectionsTool:
                     "get_network_connections", {"hostname": "workstation-001", "hours": 48}
                 )
 
-                assert result["timerange_hours"] == 48
+                assert result.data["timerange_hours"] == 48
 
     @pytest.mark.asyncio
     async def test_get_network_connections_includes_process_info(self):
@@ -2062,7 +2079,7 @@ class TestGetNetworkConnectionsTool:
                     "get_network_connections", {"hostname": "workstation-001"}
                 )
 
-                conn = result["connections"][0]
+                conn = result.data["connections"][0]
                 assert "process_name" in conn
                 assert "process_pid" in conn
 
@@ -2077,15 +2094,16 @@ class TestGetNetworkConnectionsTool:
                 )
 
                 # Verify top-level structure
-                assert "hostname" in result
-                assert "timerange_hours" in result
-                assert "total_count" in result
-                assert "connections" in result
-                assert "source" in result
+                assert result.success is True
+                assert "hostname" in result.data
+                assert "timerange_hours" in result.data
+                assert "total_count" in result.data
+                assert "connections" in result.data
+                assert "is_mock" in result.data
 
                 # Verify connection structure
-                if result["connections"]:
-                    conn = result["connections"][0]
+                if result.data["connections"]:
+                    conn = result.data["connections"][0]
                     assert "remote_ip" in conn
                     assert "remote_port" in conn
                     assert "direction" in conn
@@ -2133,22 +2151,26 @@ class TestEDRToolsIntegration:
                 host_info = await registry.execute(
                     "get_host_info", {"hostname": "test-host"}
                 )
-                assert host_info["source"] == "mock"
+                assert host_info.success is True
+                assert host_info.data["is_mock"] is True
 
                 detections = await registry.execute(
                     "get_detections", {"hostname": "test-host"}
                 )
-                assert detections["source"] == "mock"
+                assert detections.success is True
+                assert detections.data["is_mock"] is True
 
                 processes = await registry.execute(
                     "get_processes", {"hostname": "test-host"}
                 )
-                assert processes["source"] == "mock"
+                assert processes.success is True
+                assert processes.data["is_mock"] is True
 
                 connections = await registry.execute(
                     "get_network_connections", {"hostname": "test-host"}
                 )
-                assert connections["source"] == "mock"
+                assert connections.success is True
+                assert connections.data["is_mock"] is True
 
     def test_edr_tool_definitions_are_valid(self):
         """Test that all EDR tool definitions are valid for LLM."""

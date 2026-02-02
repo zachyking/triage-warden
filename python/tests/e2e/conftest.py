@@ -258,6 +258,23 @@ class MockTool:
         )
 
 
+@dataclass
+class MockToolResult:
+    """Mock ToolResult for testing."""
+    success: bool
+    data: dict = field(default_factory=dict)
+    error: str | None = None
+    execution_time_ms: int = 0
+
+    @classmethod
+    def ok(cls, data: dict, execution_time_ms: int = 0) -> "MockToolResult":
+        return cls(success=True, data=data, execution_time_ms=execution_time_ms)
+
+    @classmethod
+    def fail(cls, error: str, execution_time_ms: int = 0) -> "MockToolResult":
+        return cls(success=False, error=error, execution_time_ms=execution_time_ms)
+
+
 class MockToolRegistry:
     """Mock tool registry with test implementations."""
 
@@ -283,9 +300,65 @@ class MockToolRegistry:
         return await tool.handler(**arguments)
 
 
+# Mock functions for policy bridge compatibility
+def _mock_create_triage_tools():
+    return MockToolRegistry()
+
+
+def _mock_get_policy_bridge():
+    return None
+
+
+def _mock_is_policy_bridge_available():
+    return False
+
+
+def _mock_is_action_allowed(action_type: str, target: str, confidence: float = 0.0):
+    return True
+
+
+def _mock_check_action(action_type: str, target: str, confidence: float) -> dict:
+    return {"decision": "allowed", "reason": None, "approval_level": None}
+
+
+def _mock_get_operation_mode() -> str:
+    return "autonomous"
+
+
+def _mock_is_kill_switch_active() -> bool:
+    return False
+
+
+def _mock_submit_approval_request(action_type: str, target: str, reason: str, level: str = "standard") -> dict:
+    import uuid
+    return {
+        "request_id": str(uuid.uuid4()),
+        "status": "pending",
+        "expires_at": "2025-01-30T12:00:00Z",
+    }
+
+
+def _mock_check_approval_status(request_id: str) -> dict:
+    return {"status": "pending", "approved_by": None, "approved_at": None}
+
+
+_mock_approval_requests = {}
+
+
 class _MockTools:
     Tool = MockTool
+    ToolResult = MockToolResult
     ToolRegistry = MockToolRegistry
+    create_triage_tools = staticmethod(_mock_create_triage_tools)
+    get_policy_bridge = staticmethod(_mock_get_policy_bridge)
+    is_policy_bridge_available = staticmethod(_mock_is_policy_bridge_available)
+    is_action_allowed = staticmethod(_mock_is_action_allowed)
+    _mock_check_action = staticmethod(_mock_check_action)
+    _mock_get_operation_mode = staticmethod(_mock_get_operation_mode)
+    _mock_is_kill_switch_active = staticmethod(_mock_is_kill_switch_active)
+    _mock_submit_approval_request = staticmethod(_mock_submit_approval_request)
+    _mock_check_approval_status = staticmethod(_mock_check_approval_status)
+    _mock_approval_requests = _mock_approval_requests
 
 
 sys.modules["tw_ai.agents.tools"] = _MockTools
