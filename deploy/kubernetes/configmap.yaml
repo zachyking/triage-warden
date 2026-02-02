@@ -1,0 +1,48 @@
+# Triage Warden ConfigMap
+# Non-sensitive configuration values
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: triage-warden-config
+  namespace: triage-warden
+  labels:
+    app.kubernetes.io/name: triage-warden
+data:
+  # Server configuration
+  TW_BIND_ADDRESS: "0.0.0.0:8080"
+  TW_BASE_URL: "https://triage.company.com"
+  TW_TRUSTED_PROXIES: "10.0.0.0/8,172.16.0.0/12"
+
+  # LLM configuration
+  TW_LLM_PROVIDER: "anthropic"
+  TW_LLM_MODEL: "claude-3-sonnet-20240229"
+  TW_LLM_TEMPERATURE: "0.2"
+  TW_LLM_MAX_TOKENS: "4096"
+
+  # Logging
+  RUST_LOG: "info"
+  TW_LOG_FORMAT: "json"
+
+  # Security settings
+  TW_COOKIE_SECURE: "true"
+  TW_COOKIE_SAME_SITE: "strict"
+  TW_CSRF_ENABLED: "true"
+
+  # Metrics
+  TW_METRICS_ENABLED: "true"
+  TW_METRICS_PATH: "/metrics"
+
+  # Database pool
+  DATABASE_MAX_CONNECTIONS: "25"
+  DATABASE_MIN_CONNECTIONS: "5"
+  DATABASE_CONNECT_TIMEOUT: "30"
+
+  # Rate limiting
+  TW_RATE_LIMIT_ENABLED: "true"
+  TW_RATE_LIMIT_REQUESTS: "200"
+  TW_RATE_LIMIT_WINDOW: "1m"
+
+  # Feature flags
+  TW_FEATURE_PLAYBOOKS: "true"
+  TW_FEATURE_AUTO_ENRICH: "true"
+  TW_FEATURE_API_KEYS: "true"

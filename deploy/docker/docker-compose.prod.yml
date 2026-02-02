@@ -1,0 +1,95 @@
+# Triage Warden - Production Docker Compose
+# Usage: docker-compose -f docker-compose.prod.yml up -d
+#
+# Prerequisites:
+# 1. Copy .env.example to .env and configure all values
+# 2. Generate encryption keys: openssl rand -base64 32
+# 3. Configure external PostgreSQL or use managed database
+
+version: '3.8'
+
+services:
+  app:
+    image: ghcr.io/your-org/triage-warden:latest
+    ports:
+      - "8080:8080"
+    environment:
+      # Database - use external managed database in production
+      - DATABASE_URL=${DATABASE_URL}
+      - DATABASE_MAX_CONNECTIONS=${DATABASE_MAX_CONNECTIONS:-25}
+
+      # Security - REQUIRED
+      - TW_ENCRYPTION_KEY=${TW_ENCRYPTION_KEY}
+      - TW_JWT_SECRET=${TW_JWT_SECRET}
+      - TW_SESSION_SECRET=${TW_SESSION_SECRET}
+
+      # Server
+      - TW_BASE_URL=${TW_BASE_URL}
+      - TW_BIND_ADDRESS=0.0.0.0:8080
+      - TW_TRUSTED_PROXIES=${TW_TRUSTED_PROXIES:-}
+
+      # LLM Configuration
+      - TW_LLM_PROVIDER=${TW_LLM_PROVIDER:-anthropic}
+      - TW_LLM_MODEL=${TW_LLM_MODEL:-claude-3-sonnet-20240229}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+
+      # Logging
+      - RUST_LOG=${RUST_LOG:-info}
+      - TW_LOG_FORMAT=json
+
+      # Security settings
+      - TW_COOKIE_SECURE=true
+      - TW_COOKIE_SAME_SITE=strict
+      - TW_CSRF_ENABLED=true
+
+      # Metrics
+      - TW_METRICS_ENABLED=true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+  # Optional: Use only if not using external managed database
+  # postgres:
+  #   image: postgres:16-alpine
+  #   environment:
+  #     - POSTGRES_USER=${DB_USER}
+  #     - POSTGRES_PASSWORD=${DB_PASSWORD}
+  #     - POSTGRES_DB=${DB_NAME}
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #   restart: always
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: '1'
+  #         memory: 1G
+
+# volumes:
+#   postgres_data:
+
+networks:
+  default:
+    name: triage-warden-prod

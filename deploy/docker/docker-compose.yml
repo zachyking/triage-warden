@@ -1,0 +1,52 @@
+# Triage Warden - Development Docker Compose
+# Usage: docker-compose up -d
+
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_URL=postgres://triage:triage@postgres:5432/triage_warden
+      - TW_ENCRYPTION_KEY=${TW_ENCRYPTION_KEY}
+      - TW_JWT_SECRET=${TW_JWT_SECRET:-dev-jwt-secret-change-in-production}
+      - TW_SESSION_SECRET=${TW_SESSION_SECRET:-dev-session-secret-change-in-production}
+      - TW_BASE_URL=http://localhost:8080
+      - RUST_LOG=info,triage_warden=debug
+      - TW_LOG_FORMAT=pretty
+      - TW_DEV_MODE=true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=triage
+      - POSTGRES_PASSWORD=triage
+      - POSTGRES_DB=triage_warden
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U triage -d triage_warden"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+networks:
+  default:
+    name: triage-warden

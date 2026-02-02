@@ -1,0 +1,36 @@
+# Triage Warden Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: triage-warden
+  namespace: triage-warden
+  labels:
+    app.kubernetes.io/name: triage-warden
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: triage-warden
+
+---
+# Headless service for direct pod access (optional)
+apiVersion: v1
+kind: Service
+metadata:
+  name: triage-warden-headless
+  namespace: triage-warden
+  labels:
+    app.kubernetes.io/name: triage-warden
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: triage-warden

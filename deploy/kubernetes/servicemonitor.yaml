@@ -1,0 +1,94 @@
+# Prometheus ServiceMonitor for Triage Warden
+# Requires prometheus-operator / kube-prometheus-stack
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: triage-warden
+  namespace: triage-warden
+  labels:
+    app.kubernetes.io/name: triage-warden
+    release: prometheus  # Match your prometheus-operator release name
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: triage-warden
+  namespaceSelector:
+    matchNames:
+      - triage-warden
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+
+---
+# PrometheusRule for alerting
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: triage-warden-alerts
+  namespace: triage-warden
+  labels:
+    app.kubernetes.io/name: triage-warden
+    release: prometheus
+spec:
+  groups:
+    - name: triage-warden.rules
+      rules:
+        - alert: TriageWardenDown
+          expr: up{job="triage-warden"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Triage Warden is down"
+            description: "Triage Warden has been unreachable for more than 2 minutes."
+
+        - alert: TriageWardenHighErrorRate
+          expr: |
+            sum(rate(http_requests_total{job="triage-warden",status=~"5.."}[5m])) /
+            sum(rate(http_requests_total{job="triage-warden"}[5m])) > 0.05
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "High error rate detected"
+            description: "More than 5% of requests are returning 5xx errors."
+
+        - alert: TriageWardenKillSwitchActive
+          expr: kill_switch_active == 1
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Kill switch is active"
+            description: "All automation has been halted by the kill switch."
+
+        - alert: TriageWardenDatabaseUnhealthy
+          expr: component_healthy{component="database"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Database connection lost"
+            description: "Triage Warden cannot connect to the database."
+
+        - alert: TriageWardenHighLatency
+          expr: |
+            histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{job="triage-warden"}[5m])) > 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High API latency"
+            description: "P99 latency is above 1 second for the last 10 minutes."
+
+        - alert: TriageWardenConnectorUnhealthy
+          expr: component_healthy{component=~"connector_.*"} == 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Connector {{ $labels.component }} is unhealthy"
+            description: "Connector has been unhealthy for more than 10 minutes."

@@ -62,6 +62,30 @@
   - [Playbooks](./api/playbooks.md)
   - [Webhooks](./api/webhooks.md)
 
+# Configuration
+
+- [Configuration Guide](./configuration/README.md)
+  - [Environment Variables](./configuration/environment-variables.md)
+  - [Connectors Setup](./configuration/connectors-setup.md)
+  - [Playbooks Guide](./configuration/playbooks-guide.md)
+  - [Notifications Setup](./configuration/notifications-setup.md)
+  - [Policies Guide](./configuration/policies-guide.md)
+
+# Deployment
+
+- [Deployment Guide](./deployment/README.md)
+  - [Production Checklist](./deployment/production-checklist.md)
+  - [Docker Deployment](./deployment/docker.md)
+  - [Kubernetes Deployment](./deployment/kubernetes.md)
+  - [Configuration Reference](./deployment/configuration.md)
+
+# Operations
+
+- [Operations Guide](./operations/README.md)
+  - [Monitoring](./operations/monitoring.md)
+  - [Backup & Restore](./operations/backup-restore.md)
+  - [Troubleshooting](./operations/troubleshooting.md)
+
 # Development
 
 - [Contributing](./development/contributing.md)

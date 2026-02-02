@@ -1,0 +1,8 @@
+# Triage Warden Kubernetes Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: triage-warden
+  labels:
+    app.kubernetes.io/name: triage-warden
+    app.kubernetes.io/component: security
