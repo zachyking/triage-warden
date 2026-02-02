@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::ApiError;
 use crate::state::AppState;
-use tw_core::db::{create_settings_repository, GeneralSettings, RateLimits, SettingsRepository};
+use tw_core::db::{
+    create_settings_repository, GeneralSettings, LlmSettings, RateLimits, SettingsRepository,
+};
 
 /// Creates settings routes.
 pub fn routes() -> Router<AppState> {
@@ -20,6 +22,7 @@ pub fn routes() -> Router<AppState> {
             get(get_general_settings).post(save_general_settings),
         )
         .route("/rate-limits", get(get_rate_limits).post(save_rate_limits))
+        .route("/llm", get(get_llm_settings).post(save_llm_settings))
 }
 
 /// Form data for general settings (matches HTML form fields).
@@ -52,6 +55,34 @@ pub struct RateLimitsResponse {
     pub isolate_host_hour: u32,
     pub disable_user_hour: u32,
     pub block_ip_hour: u32,
+}
+
+/// Form data for LLM settings (matches HTML form fields).
+#[derive(Debug, Deserialize)]
+pub struct LlmSettingsForm {
+    pub provider: String,
+    pub model: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub base_url: String,
+    pub max_tokens: u32,
+    pub temperature: f32,
+    #[serde(default)]
+    pub enabled: Option<String>,
+}
+
+/// Response wrapper for LLM settings.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LlmSettingsResponse {
+    pub provider: String,
+    pub model: String,
+    /// API key is masked for security (only shows if set or not)
+    pub api_key_set: bool,
+    pub base_url: String,
+    pub max_tokens: u32,
+    pub temperature: f32,
+    pub enabled: bool,
 }
 
 /// Get general settings.
@@ -139,6 +170,73 @@ async fn save_rate_limits(
             "type": "success",
             "title": "Rate Limits Saved",
             "message": "Rate limit settings have been updated."
+        }
+    });
+
+    Ok((
+        [(
+            axum::http::header::HeaderName::from_static("hx-trigger"),
+            trigger_json.to_string(),
+        )],
+        "",
+    )
+        .into_response())
+}
+
+/// Get LLM settings.
+async fn get_llm_settings(
+    State(state): State<AppState>,
+) -> Result<Json<LlmSettingsResponse>, ApiError> {
+    let repo: Box<dyn SettingsRepository> = create_settings_repository(&state.db);
+
+    let settings = repo.get_llm().await?;
+
+    Ok(Json(LlmSettingsResponse {
+        provider: settings.provider,
+        model: settings.model,
+        api_key_set: !settings.api_key.is_empty(),
+        base_url: settings.base_url,
+        max_tokens: settings.max_tokens,
+        temperature: settings.temperature,
+        enabled: settings.enabled,
+    }))
+}
+
+/// Save LLM settings.
+async fn save_llm_settings(
+    State(state): State<AppState>,
+    Form(form): Form<LlmSettingsForm>,
+) -> Result<Response, ApiError> {
+    let repo: Box<dyn SettingsRepository> = create_settings_repository(&state.db);
+
+    // Get existing settings to preserve API key if not provided
+    let existing = repo.get_llm().await?;
+
+    // Only update API key if a new one is provided (not empty)
+    let api_key = if form.api_key.is_empty() {
+        existing.api_key
+    } else {
+        form.api_key
+    };
+
+    let settings = LlmSettings {
+        provider: form.provider,
+        model: form.model,
+        api_key,
+        base_url: form.base_url,
+        max_tokens: form.max_tokens,
+        temperature: form.temperature,
+        enabled: form.enabled.as_deref() == Some("on"),
+    };
+
+    repo.save_llm(&settings).await?;
+
+    // Return HX-Trigger header for toast notification
+    let trigger_json = serde_json::json!({
+        "showToast": {
+            "type": "success",
+            "title": "LLM Settings Saved",
+            "message": "AI/LLM configuration has been updated."
         }
     });
 

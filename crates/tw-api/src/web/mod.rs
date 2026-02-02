@@ -18,8 +18,8 @@ use uuid::Uuid;
 use tw_core::db::{
     create_audit_repository, create_connector_repository, create_incident_repository,
     create_notification_repository, create_playbook_repository, create_policy_repository,
-    create_settings_repository, GeneralSettings, IncidentFilter, IncidentRepository, Pagination,
-    PlaybookFilter, PolicyRepository, RateLimits,
+    create_settings_repository, GeneralSettings, IncidentFilter, IncidentRepository, LlmSettings,
+    Pagination, PlaybookFilter, PolicyRepository, RateLimits,
 };
 use tw_core::incident::{ApprovalStatus, IncidentStatus, Severity};
 
@@ -558,6 +558,21 @@ async fn settings(
         })
         .collect();
 
+    // Load LLM settings from repository
+    let llm = settings_repo
+        .get_llm()
+        .await
+        .unwrap_or(LlmSettings::default());
+    let llm_settings = LlmSettingsData {
+        provider: llm.provider,
+        model: llm.model,
+        api_key_set: !llm.api_key.is_empty(),
+        base_url: llm.base_url,
+        max_tokens: llm.max_tokens,
+        temperature: llm.temperature,
+        enabled: llm.enabled,
+    };
+
     let template = SettingsTemplate {
         active_nav: "settings".to_string(),
         critical_count: nav.critical_count,
@@ -571,6 +586,7 @@ async fn settings(
         policies,
         rate_limits,
         notification_channels,
+        llm_settings,
     };
 
     Ok(HtmlTemplate(template))

@@ -15,6 +15,7 @@
   <a href="/settings?tab=connectors" class="tab{% if tab == "connectors" %} active{% endif %}">Connectors</a>
   <a href="/settings?tab=policies" class="tab{% if tab == "policies" %} active{% endif %}">Policies</a>
   <a href="/settings?tab=notifications" class="tab{% if tab == "notifications" %} active{% endif %}">Notifications</a>
+  <a href="/settings?tab=llm" class="tab{% if tab == "llm" %} active{% endif %}">AI / LLM</a>
 </div>
 
 {% if tab == "general" %}
@@ -281,5 +282,171 @@
     </table>
   </div>
 </div>
+
+{% else if tab == "llm" %}
+<!-- AI / LLM Configuration -->
+<div class="card mb-4">
+  <div class="card-header">
+    <div>
+      <h3 class="card-title">AI / LLM Configuration</h3>
+      <p class="text-sm text-muted">Configure the AI model used for incident analysis, triage decisions, and action recommendations.</p>
+    </div>
+    <label class="flex items-center gap-2">
+      <span class="text-sm">LLM Features</span>
+      <label class="switch">
+        <input type="checkbox" id="llm-enabled-toggle" {% if llm_settings.enabled %}checked{% endif %}
+               form="llm-settings-form" name="enabled">
+        <span class="switch-track"></span>
+        <span class="switch-thumb"></span>
+      </label>
+      <span class="badge badge-{% if llm_settings.enabled %}success{% else %}info{% endif %}">
+        {% if llm_settings.enabled %}Enabled{% else %}Disabled{% endif %}
+      </span>
+    </label>
+  </div>
+  <div class="card-body">
+    <form id="llm-settings-form" hx-post="/api/settings/llm" hx-swap="none"
+          hx-on::after-request="if(event.detail.successful) showToast('success', 'LLM Settings Saved', 'AI/LLM configuration has been updated.')">
+      <div class="grid grid-2 gap-4 mb-4">
+        <div class="form-group">
+          <label class="form-label">Provider</label>
+          <select name="provider" class="form-input form-select" id="llm-provider"
+                  onchange="updateModelOptions()">
+            <option value="openai" {% if llm_settings.provider == "openai" %}selected{% endif %}>OpenAI</option>
+            <option value="anthropic" {% if llm_settings.provider == "anthropic" %}selected{% endif %}>Anthropic</option>
+            <option value="azure" {% if llm_settings.provider == "azure" %}selected{% endif %}>Azure OpenAI</option>
+            <option value="local" {% if llm_settings.provider == "local" %}selected{% endif %}>Local (Ollama, etc.)</option>
+          </select>
+          <p class="text-xs text-muted mt-1">The AI provider to use for analysis and recommendations.</p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Model</label>
+          <select name="model" class="form-input form-select" id="llm-model">
+            <!-- OpenAI models -->
+            <optgroup label="OpenAI" id="openai-models">
+              <option value="gpt-4-turbo" {% if llm_settings.model == "gpt-4-turbo" %}selected{% endif %}>GPT-4 Turbo (Recommended)</option>
+              <option value="gpt-4" {% if llm_settings.model == "gpt-4" %}selected{% endif %}>GPT-4</option>
+              <option value="gpt-4o" {% if llm_settings.model == "gpt-4o" %}selected{% endif %}>GPT-4o</option>
+              <option value="gpt-3.5-turbo" {% if llm_settings.model == "gpt-3.5-turbo" %}selected{% endif %}>GPT-3.5 Turbo</option>
+            </optgroup>
+            <!-- Anthropic models -->
+            <optgroup label="Anthropic" id="anthropic-models">
+              <option value="claude-3-opus-20240229" {% if llm_settings.model == "claude-3-opus-20240229" %}selected{% endif %}>Claude 3 Opus</option>
+              <option value="claude-3-sonnet-20240229" {% if llm_settings.model == "claude-3-sonnet-20240229" %}selected{% endif %}>Claude 3 Sonnet (Recommended)</option>
+              <option value="claude-3-haiku-20240307" {% if llm_settings.model == "claude-3-haiku-20240307" %}selected{% endif %}>Claude 3 Haiku</option>
+            </optgroup>
+            <!-- Local models -->
+            <optgroup label="Local Models" id="local-models">
+              <option value="llama3" {% if llm_settings.model == "llama3" %}selected{% endif %}>Llama 3</option>
+              <option value="mistral" {% if llm_settings.model == "mistral" %}selected{% endif %}>Mistral</option>
+              <option value="mixtral" {% if llm_settings.model == "mixtral" %}selected{% endif %}>Mixtral</option>
+              <option value="custom" {% if llm_settings.model == "custom" %}selected{% endif %}>Custom Model</option>
+            </optgroup>
+          </select>
+          <p class="text-xs text-muted mt-1">Select the specific model to use. Better models provide more accurate analysis.</p>
+        </div>
+      </div>
+
+      <div class="form-group mb-4">
+        <label class="form-label">API Key</label>
+        <div class="flex gap-2">
+          <input type="password" name="api_key" class="form-input" id="llm-api-key"
+                 placeholder="{% if llm_settings.api_key_set %}••••••••••••••••{% else %}Enter API key{% endif %}">
+          <button type="button" class="btn btn-secondary" onclick="toggleApiKeyVisibility()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+          </button>
+        </div>
+        {% if llm_settings.api_key_set %}
+        <p class="text-xs text-success mt-1">API key is configured. Leave blank to keep the existing key.</p>
+        {% else %}
+        <p class="text-xs text-warning mt-1">No API key configured. LLM features will not work without a valid API key.</p>
+        {% endif %}
+      </div>
+
+      <div class="form-group mb-4" id="base-url-group" {% if llm_settings.provider != "local" && llm_settings.provider != "azure" %}style="display: none;"{% endif %}>
+        <label class="form-label">API Base URL</label>
+        <input type="text" name="base_url" class="form-input" value="{{ llm_settings.base_url }}"
+               placeholder="http://localhost:11434">
+        <p class="text-xs text-muted mt-1">Required for local providers or Azure OpenAI. Example: http://localhost:11434 for Ollama.</p>
+      </div>
+
+      <div class="grid grid-2 gap-4 mb-4">
+        <div class="form-group">
+          <label class="form-label">Max Tokens</label>
+          <input type="number" name="max_tokens" class="form-input" value="{{ llm_settings.max_tokens }}"
+                 min="256" max="128000" step="256">
+          <p class="text-xs text-muted mt-1">Maximum tokens for AI responses (256-128000). Higher values allow more detailed analysis.</p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Temperature</label>
+          <input type="number" name="temperature" class="form-input" value="{{ llm_settings.temperature }}"
+                 min="0" max="2" step="0.1">
+          <p class="text-xs text-muted mt-1">Response randomness (0-2). Lower values (0.1-0.3) are recommended for consistent triage decisions.</p>
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary">Save LLM Settings</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">Environment Variables</h3>
+  </div>
+  <div class="card-body">
+    <p class="text-sm text-muted mb-4">
+      API keys can also be configured via environment variables. Environment variables take precedence over database settings.
+    </p>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Provider</th>
+          <th>Environment Variable</th>
+          <th>Example</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>OpenAI</td>
+          <td><code class="bg-surface px-2 py-1 rounded">OPENAI_API_KEY</code></td>
+          <td class="text-sm text-muted">sk-proj-...</td>
+        </tr>
+        <tr>
+          <td>Anthropic</td>
+          <td><code class="bg-surface px-2 py-1 rounded">ANTHROPIC_API_KEY</code></td>
+          <td class="text-sm text-muted">sk-ant-...</td>
+        </tr>
+        <tr>
+          <td>Azure OpenAI</td>
+          <td><code class="bg-surface px-2 py-1 rounded">AZURE_OPENAI_API_KEY</code></td>
+          <td class="text-sm text-muted">Your Azure key</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+function toggleApiKeyVisibility() {
+  const input = document.getElementById('llm-api-key');
+  input.type = input.type === 'password' ? 'text' : 'password';
+}
+
+function updateModelOptions() {
+  const provider = document.getElementById('llm-provider').value;
+  const baseUrlGroup = document.getElementById('base-url-group');
+
+  // Show/hide base URL field based on provider
+  if (provider === 'local' || provider === 'azure') {
+    baseUrlGroup.style.display = 'block';
+  } else {
+    baseUrlGroup.style.display = 'none';
+  }
+}
+</script>
 {% endif %}
 {% endblock %}
