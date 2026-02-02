@@ -10,10 +10,12 @@ use std::path::PathBuf;
 mod api_client;
 mod commands;
 mod config;
+mod validator;
 
 use api_client::{ApiClient, ListIncidentsParams};
 use commands::{run_server, ServeConfig};
 use config::AppConfig;
+use validator::ConfigValidator;
 
 #[derive(Parser)]
 #[command(name = "triage-warden")]
@@ -78,6 +80,10 @@ enum Commands {
         /// Disable Swagger UI
         #[arg(long)]
         no_swagger: bool,
+
+        /// Validate configuration and exit without starting the server
+        #[arg(long)]
+        validate_only: bool,
     },
 
     /// Start the Triage Warden daemon
@@ -248,6 +254,7 @@ async fn main() -> Result<()> {
             host,
             database,
             no_swagger,
+            validate_only,
         } => {
             cmd_serve(
                 ServeConfig {
@@ -258,6 +265,7 @@ async fn main() -> Result<()> {
                     timeout_secs: 30,
                 },
                 config,
+                validate_only,
             )
             .await
         }
@@ -287,7 +295,53 @@ fn default_config_path() -> PathBuf {
     }
 }
 
-async fn cmd_serve(serve_config: ServeConfig, app_config: AppConfig) -> Result<()> {
+async fn cmd_serve(
+    serve_config: ServeConfig,
+    app_config: AppConfig,
+    validate_only: bool,
+) -> Result<()> {
+    println!("{}", "Validating configuration...".cyan());
+
+    // Run configuration validation
+    let validation_result = ConfigValidator::validate(&app_config);
+    validation_result.print();
+
+    // If validate_only mode, exit after validation
+    if validate_only {
+        if validation_result.has_errors() {
+            println!();
+            println!(
+                "{}",
+                "Configuration validation failed. Fix the errors above before starting the server."
+                    .red()
+                    .bold()
+            );
+            std::process::exit(1);
+        } else {
+            println!();
+            println!(
+                "{}",
+                "Configuration is valid. Server can be started."
+                    .green()
+                    .bold()
+            );
+            return Ok(());
+        }
+    }
+
+    // If there are errors, refuse to start
+    if validation_result.has_errors() {
+        println!();
+        println!(
+            "{}",
+            "Server startup aborted due to configuration errors. Fix the errors above and try again."
+                .red()
+                .bold()
+        );
+        std::process::exit(1);
+    }
+
+    println!();
     run_server(serve_config, app_config).await
 }
 
@@ -368,18 +422,51 @@ async fn cmd_validate(config_path: PathBuf) -> Result<()> {
         config_path.display().to_string().cyan()
     );
 
-    match AppConfig::load(&config_path) {
-        Ok(config) => {
-            println!("{}", "Configuration is valid".green());
-            println!("  Mode: {}", config.operation_mode);
-            println!("  Connectors: {}", config.connectors.len());
-            Ok(())
-        }
+    // First, check if the file can be loaded
+    let config = match AppConfig::load(&config_path) {
+        Ok(config) => config,
         Err(e) => {
-            println!("{}: {}", "Configuration error".red(), e);
+            println!("{}: {}", "Configuration file error".red().bold(), e);
             std::process::exit(1);
         }
+    };
+
+    // Run comprehensive validation
+    let validation_result = ConfigValidator::validate(&config);
+    validation_result.print();
+
+    // Summary
+    println!();
+    println!("{}", "Configuration Summary".bold());
+    println!("─────────────────────");
+    println!("  Mode: {}", config.operation_mode);
+    println!("  Connectors: {}", config.connectors.len());
+    println!("  LLM Provider: {}", config.llm.provider);
+    println!("  Database: {}", config.database.url);
+
+    if validation_result.has_errors() {
+        println!();
+        println!(
+            "{}",
+            "Configuration validation failed. Fix the errors above."
+                .red()
+                .bold()
+        );
+        std::process::exit(1);
+    } else if validation_result.has_warnings() {
+        println!();
+        println!(
+            "{}",
+            "Configuration is valid with warnings. Review the warnings above."
+                .yellow()
+                .bold()
+        );
+    } else {
+        println!();
+        println!("{}", "Configuration is valid.".green().bold());
     }
+
+    Ok(())
 }
 
 async fn cmd_config(config: AppConfig, show_secrets: bool, format: OutputFormat) -> Result<()> {
