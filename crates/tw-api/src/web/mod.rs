@@ -16,10 +16,10 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use tw_core::db::{
-    create_audit_repository, create_connector_repository, create_incident_repository,
-    create_notification_repository, create_playbook_repository, create_policy_repository,
-    create_settings_repository, GeneralSettings, IncidentFilter, IncidentRepository, Pagination,
-    PlaybookFilter, PolicyRepository, RateLimits,
+    create_api_key_repository, create_audit_repository, create_connector_repository,
+    create_incident_repository, create_notification_repository, create_playbook_repository,
+    create_policy_repository, create_settings_repository, GeneralSettings, IncidentFilter,
+    IncidentRepository, Pagination, PlaybookFilter, PolicyRepository, RateLimits,
 };
 use tw_core::incident::{ApprovalStatus, IncidentStatus, Severity};
 
@@ -64,6 +64,7 @@ pub fn create_web_router(state: AppState) -> Router {
             "/web/modals/edit-notification/:id",
             get(modal_edit_notification),
         )
+        .route("/web/modals/add-api-key", get(modal_add_api_key))
         // Policy partials for HTMX refresh
         .route("/web/partials/policies", get(partials_policies))
         // Notification partials for HTMX refresh
@@ -558,6 +559,24 @@ async fn settings(
         })
         .collect();
 
+    // Load API keys for the current user
+    let api_key_repo = create_api_key_repository(&state.db);
+    let api_keys: Vec<ApiKeyData> = api_key_repo
+        .list_by_user(user.id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|key| ApiKeyData {
+            id: key.id,
+            name: key.name,
+            key_prefix: key.key_prefix,
+            scopes: key.scopes,
+            expires_at: key.expires_at.map(|t| t.to_rfc3339()),
+            last_used_at: key.last_used_at.map(format_time_ago),
+            created_at: key.created_at.to_rfc3339(),
+        })
+        .collect();
+
     let template = SettingsTemplate {
         active_nav: "settings".to_string(),
         critical_count: nav.critical_count,
@@ -571,6 +590,7 @@ async fn settings(
         policies,
         rate_limits,
         notification_channels,
+        api_keys,
     };
 
     Ok(HtmlTemplate(template))
@@ -654,6 +674,12 @@ async fn modal_add_notification(
     AuthenticatedUser(_user): AuthenticatedUser,
 ) -> Result<impl IntoResponse, ApiError> {
     Ok(HtmlTemplate(AddNotificationModalTemplate))
+}
+
+async fn modal_add_api_key(
+    AuthenticatedUser(_user): AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(HtmlTemplate(AddApiKeyModalTemplate))
 }
 
 async fn modal_edit_notification(

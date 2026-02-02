@@ -277,6 +277,7 @@ pub struct SettingsTemplate {
     pub policies: Vec<PolicyData>,
     pub rate_limits: RateLimitsData,
     pub notification_channels: Vec<NotificationChannel>,
+    pub api_keys: Vec<ApiKeyData>,
 }
 
 pub struct SettingsData {
@@ -314,6 +315,18 @@ pub struct NotificationChannel {
     pub channel_type: String,
     pub events: Vec<String>,
     pub enabled: bool,
+}
+
+/// API key data for display in settings.
+#[allow(dead_code)]
+pub struct ApiKeyData {
+    pub id: Uuid,
+    pub name: String,
+    pub key_prefix: String,
+    pub scopes: Vec<String>,
+    pub expires_at: Option<String>,
+    pub last_used_at: Option<String>,
+    pub created_at: String,
 }
 
 // ============================================
@@ -517,3 +530,8 @@ impl EditNotificationChannel {
 pub struct NotificationsPartialTemplate {
     pub notification_channels: Vec<NotificationChannel>,
 }
+
+/// Modal template for adding a new API key.
+#[derive(Template)]
+#[template(path = "partials/modal_add_api_key.html")]
+pub struct AddApiKeyModalTemplate;
