@@ -17,6 +17,16 @@
   <a href="/settings?tab=notifications" class="tab{% if tab == "notifications" %} active{% endif %}">Notifications</a>
   <a href="/settings?tab=llm" class="tab{% if tab == "llm" %} active{% endif %}">AI / LLM</a>
   <a href="/settings?tab=api-keys" class="tab{% if tab == "api-keys" %} active{% endif %}">API Keys</a>
+  <a href="/settings?tab=safety" class="tab{% if tab == "safety" %} active{% endif %}{% if kill_switch.active %} text-critical{% endif %}">
+    {% if kill_switch.active %}
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1" aria-hidden="true">
+      <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+      <line x1="12" y1="9" x2="12" y2="13"/>
+      <line x1="12" y1="17" x2="12.01" y2="17"/>
+    </svg>
+    {% endif %}
+    Safety
+  </a>
 </div>
 
 {% if tab == "general" %}
@@ -558,6 +568,142 @@ function updateModelOptions() {
         <li><code class="bg-surface px-1 rounded">admin</code> - Administrative access (admin users only)</li>
         <li><code class="bg-surface px-1 rounded">*</code> - Full access to all scopes (admin users only)</li>
       </ul>
+    </div>
+  </div>
+</div>
+
+{% else if tab == "safety" %}
+<!-- Safety / Kill Switch -->
+<div class="card mb-4">
+  <div class="card-header">
+    <div>
+      <h3 class="card-title">Emergency Kill Switch</h3>
+      <p class="text-sm text-muted">Immediately halt all automated actions and playbook executions.</p>
+    </div>
+  </div>
+  <div class="card-body">
+    <div id="kill-switch-status" class="mb-6">
+      {% if kill_switch.active %}
+      <div class="bg-critical/10 border border-critical rounded-lg p-4 mb-4">
+        <div class="flex items-center gap-3 mb-3">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-critical" aria-hidden="true">
+            <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          <div>
+            <h4 class="font-semibold text-critical">KILL SWITCH ACTIVE</h4>
+            <p class="text-sm text-muted">All automation has been halted.</p>
+          </div>
+        </div>
+        <div class="grid grid-2 gap-4 text-sm mb-4">
+          {% if let Some(activated_by) = kill_switch.activated_by %}
+          <div>
+            <span class="text-muted">Activated by:</span>
+            <span class="font-semibold ml-1">{{ activated_by }}</span>
+          </div>
+          {% endif %}
+          {% if let Some(activated_at) = kill_switch.activated_at %}
+          <div>
+            <span class="text-muted">Activated at:</span>
+            <span class="font-semibold ml-1">{{ activated_at }}</span>
+          </div>
+          {% endif %}
+        </div>
+        <button class="btn btn-success"
+                hx-post="/api/kill-switch/deactivate"
+                hx-vals='{"reason": ""}'
+                hx-swap="none"
+                hx-confirm="Are you sure you want to re-enable automation? All playbooks and automated actions will resume."
+                hx-on::after-request="if(event.detail.successful) { showToast('success', 'Automation Resumed', 'The kill switch has been deactivated. Automation may now resume.'); location.reload(); } else { showToast('error', 'Failed', 'Could not deactivate the kill switch.'); }">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1" aria-hidden="true">
+            <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
+            <polyline points="22 4 12 14.01 9 11.01"/>
+          </svg>
+          Re-enable Automation
+        </button>
+      </div>
+      {% else %}
+      <div class="bg-success/10 border border-success rounded-lg p-4 mb-4">
+        <div class="flex items-center gap-3">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-success" aria-hidden="true">
+            <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
+            <polyline points="22 4 12 14.01 9 11.01"/>
+          </svg>
+          <div>
+            <h4 class="font-semibold text-success">System Operational</h4>
+            <p class="text-sm text-muted">Automation is enabled and running normally.</p>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="border-t border-surface pt-6">
+      <h4 class="font-semibold mb-3">Emergency Controls</h4>
+      <p class="text-sm text-muted mb-4">
+        Use the kill switch in emergency situations to immediately halt all automated actions.
+        This will prevent playbooks from executing, block automated containment actions, and
+        pause all AI-driven decisions until manually re-enabled.
+      </p>
+
+      {% if kill_switch.active %}
+      <p class="text-sm text-warning">
+        The kill switch is currently active. Deactivate it above to restore normal operations.
+      </p>
+      {% else %}
+      <div class="flex gap-4">
+        <button class="btn btn-danger"
+                hx-post="/api/kill-switch/activate"
+                hx-vals='{"reason": ""}'
+                hx-swap="none"
+                hx-confirm="WARNING: This will immediately halt ALL automated actions including playbooks, containment actions, and AI analysis. Are you sure?"
+                hx-on::after-request="if(event.detail.successful) { showToast('warning', 'Kill Switch Activated', 'All automation has been halted.'); location.reload(); } else { showToast('error', 'Failed', 'Could not activate the kill switch.'); }">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1" aria-hidden="true">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
+          </svg>
+          Activate Kill Switch
+        </button>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">Safety Information</h3>
+  </div>
+  <div class="card-body">
+    <h4 class="font-semibold mb-2">What the Kill Switch Affects</h4>
+    <ul class="text-sm text-muted space-y-1 mb-4">
+      <li>Playbook executions are immediately stopped</li>
+      <li>Automated containment actions (host isolation, user disable, IP blocking) are blocked</li>
+      <li>AI/LLM analysis and recommendations are paused</li>
+      <li>Webhook ingestion continues, but no automated response is taken</li>
+      <li>Manual actions by operators remain available</li>
+    </ul>
+
+    <h4 class="font-semibold mb-2">When to Use</h4>
+    <ul class="text-sm text-muted space-y-1 mb-4">
+      <li>During suspected false positive affecting production systems</li>
+      <li>When automated actions are causing unintended business impact</li>
+      <li>During planned maintenance windows</li>
+      <li>When investigating potential automation bugs</li>
+    </ul>
+
+    <h4 class="font-semibold mb-2">API Access</h4>
+    <p class="text-sm text-muted mb-2">
+      The kill switch can also be controlled via the API for integration with external incident management tools.
+    </p>
+    <div class="bg-surface p-4 rounded font-mono text-sm">
+      <span class="text-muted"># Get status</span><br>
+      <span class="text-primary">GET</span> /api/kill-switch<br><br>
+      <span class="text-muted"># Activate kill switch</span><br>
+      <span class="text-critical">POST</span> /api/kill-switch/activate<br><br>
+      <span class="text-muted"># Deactivate kill switch</span><br>
+      <span class="text-success">POST</span> /api/kill-switch/deactivate
     </div>
   </div>
 </div>

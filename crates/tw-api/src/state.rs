@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tracing::info;
 use tw_core::db::DbPool;
 use tw_core::EventBus;
-use tw_policy::PolicyEngine;
+use tw_policy::{KillSwitch, PolicyEngine};
 
 /// Shared application state.
 #[derive(Clone)]
@@ -20,6 +20,8 @@ pub struct AppState {
     pub policy_engine: Arc<PolicyEngine>,
     /// Prometheus metrics handle for rendering metrics.
     pub prometheus_handle: Option<Arc<PrometheusHandle>>,
+    /// Emergency kill switch for halting all automation.
+    pub kill_switch: Arc<KillSwitch>,
 }
 
 impl AppState {
@@ -37,6 +39,7 @@ impl AppState {
             webhook_secrets: Arc::new(WebhookSecrets::default()),
             policy_engine: Arc::new(policy_engine),
             prometheus_handle: None,
+            kill_switch: Arc::new(KillSwitch::new()),
         }
     }
 

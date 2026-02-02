@@ -606,6 +606,14 @@ async fn settings(
         })
         .collect();
 
+    // Load kill switch status
+    let ks_status = state.kill_switch.status().await;
+    let kill_switch = KillSwitchData {
+        active: ks_status.active,
+        activated_at: ks_status.activated_at.map(|t| t.to_rfc3339()),
+        activated_by: ks_status.activated_by,
+    };
+
     let template = SettingsTemplate {
         active_nav: "settings".to_string(),
         critical_count: nav.critical_count,
@@ -621,6 +629,7 @@ async fn settings(
         notification_channels,
         llm_settings,
         api_keys,
+        kill_switch,
     };
 
     Ok(HtmlTemplate(template))

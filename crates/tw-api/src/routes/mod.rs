@@ -5,6 +5,7 @@ pub mod auth;
 pub mod connectors;
 pub mod health;
 pub mod incidents;
+pub mod kill_switch;
 pub mod metrics;
 pub mod notifications;
 pub mod playbooks;
@@ -33,6 +34,7 @@ fn api_routes() -> Router<AppState> {
         .nest("/api-keys", api_keys::routes())
         .nest("/connectors", connectors::routes())
         .nest("/incidents", incidents::routes())
+        .nest("/kill-switch", kill_switch::routes())
         .nest("/notifications", notifications::routes())
         .nest("/playbooks", playbooks::routes())
         .nest("/policies", policies::routes())

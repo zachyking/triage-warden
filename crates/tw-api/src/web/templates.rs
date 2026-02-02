@@ -322,6 +322,14 @@ pub struct SettingsTemplate {
     pub notification_channels: Vec<NotificationChannel>,
     pub llm_settings: LlmSettingsData,
     pub api_keys: Vec<ApiKeyData>,
+    pub kill_switch: KillSwitchData,
+}
+
+/// Kill switch status data for the settings template.
+pub struct KillSwitchData {
+    pub active: bool,
+    pub activated_at: Option<String>,
+    pub activated_by: Option<String>,
 }
 
 pub struct SettingsData {
