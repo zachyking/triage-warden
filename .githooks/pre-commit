@@ -40,6 +40,14 @@ if [ -n "$RUST_CHANGED" ]; then
         exit 1
     fi
     echo -e "  ${GREEN}Compilation OK${NC}"
+
+    # Run tests
+    echo "  Running tests..."
+    if ! cargo test --workspace --exclude tw-bridge -- --test-threads=1 2>&1 | tail -20; then
+        echo -e "${RED}Tests failed.${NC}"
+        exit 1
+    fi
+    echo -e "  ${GREEN}Tests OK${NC}"
 fi
 
 if [ -n "$PYTHON_CHANGED" ]; then
@@ -72,6 +80,14 @@ if [ -n "$PYTHON_CHANGED" ]; then
             exit 1
         fi
         echo -e "  ${GREEN}Mypy OK${NC}"
+
+        echo "  Running pytest..."
+        if ! uv run pytest tests/ -v --tb=short 2>&1 | tail -20; then
+            echo -e "${RED}Python tests failed.${NC}"
+            popd > /dev/null
+            exit 1
+        fi
+        echo -e "  ${GREEN}Pytest OK${NC}"
     else
         echo -e "${YELLOW}  uv not found, skipping Python checks${NC}"
     fi
