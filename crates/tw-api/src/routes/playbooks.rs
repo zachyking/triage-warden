@@ -4,9 +4,10 @@ use axum::{
     extract::{Path, State},
     http::header,
     response::IntoResponse,
-    routing::{get, post},
+    routing::{get, post, put},
     Json, Router,
 };
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::dto::{
@@ -29,6 +30,18 @@ pub fn routes() -> Router<AppState> {
                 .delete(delete_playbook),
         )
         .route("/:id/toggle", post(toggle_playbook))
+        // Stage management routes
+        .route("/:id/stages", post(add_stage))
+        .route(
+            "/:id/stages/:stage_index",
+            put(update_stage).delete(delete_stage),
+        )
+        // Step management routes
+        .route("/:id/stages/:stage_index/steps", post(add_step))
+        .route(
+            "/:id/stages/:stage_index/steps/:step_index",
+            put(update_step).delete(delete_step),
+        )
 }
 
 /// List all playbooks.
@@ -345,6 +358,390 @@ async fn toggle_playbook(
             "type": "success",
             "title": "Playbook Updated",
             "message": format!("Playbook '{}' has been {}.", playbook.name, status_text)
+        }
+    });
+
+    Ok((
+        [(
+            header::HeaderName::from_static("hx-trigger"),
+            trigger.to_string(),
+        )],
+        "",
+    ))
+}
+
+// ============================================================================
+// Stage Management
+// ============================================================================
+
+/// Form data for adding/editing a stage.
+#[derive(Debug, Deserialize)]
+pub struct StageForm {
+    pub name: String,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub parallel: Option<bool>,
+}
+
+/// Add a new stage to a playbook.
+async fn add_stage(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    axum::Form(form): axum::Form<StageForm>,
+) -> Result<impl IntoResponse, ApiError> {
+    let repo = create_playbook_repository(&state.db);
+
+    let mut playbook = repo
+        .get(id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Playbook {} not found", id)))?;
+
+    // Create the new stage
+    let stage = PlaybookStage {
+        name: form.name.clone(),
+        description: form.description.filter(|d| !d.is_empty()),
+        parallel: form.parallel.unwrap_or(false),
+        steps: vec![],
+    };
+
+    playbook.stages.push(stage);
+
+    // Update the playbook with new stages
+    let update = PlaybookUpdate {
+        stages: Some(playbook.stages),
+        ..Default::default()
+    };
+    repo.update(id, &update).await?;
+
+    let trigger = serde_json::json!({
+        "showToast": {
+            "type": "success",
+            "title": "Stage Added",
+            "message": format!("Stage '{}' has been added.", form.name)
+        }
+    });
+
+    Ok((
+        [(
+            header::HeaderName::from_static("hx-trigger"),
+            trigger.to_string(),
+        )],
+        "",
+    ))
+}
+
+/// Update an existing stage.
+async fn update_stage(
+    State(state): State<AppState>,
+    Path((id, stage_index)): Path<(Uuid, usize)>,
+    axum::Form(form): axum::Form<StageForm>,
+) -> Result<impl IntoResponse, ApiError> {
+    let repo = create_playbook_repository(&state.db);
+
+    let mut playbook = repo
+        .get(id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Playbook {} not found", id)))?;
+
+    if stage_index >= playbook.stages.len() {
+        return Err(ApiError::NotFound(format!(
+            "Stage {} not found",
+            stage_index
+        )));
+    }
+
+    // Update the stage
+    playbook.stages[stage_index].name = form.name.clone();
+    playbook.stages[stage_index].description = form.description.filter(|d| !d.is_empty());
+    playbook.stages[stage_index].parallel = form.parallel.unwrap_or(false);
+
+    let update = PlaybookUpdate {
+        stages: Some(playbook.stages),
+        ..Default::default()
+    };
+    repo.update(id, &update).await?;
+
+    let trigger = serde_json::json!({
+        "showToast": {
+            "type": "success",
+            "title": "Stage Updated",
+            "message": format!("Stage '{}' has been updated.", form.name)
+        }
+    });
+
+    Ok((
+        [(
+            header::HeaderName::from_static("hx-trigger"),
+            trigger.to_string(),
+        )],
+        "",
+    ))
+}
+
+/// Delete a stage from a playbook.
+async fn delete_stage(
+    State(state): State<AppState>,
+    Path((id, stage_index)): Path<(Uuid, usize)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let repo = create_playbook_repository(&state.db);
+
+    let mut playbook = repo
+        .get(id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Playbook {} not found", id)))?;
+
+    if stage_index >= playbook.stages.len() {
+        return Err(ApiError::NotFound(format!(
+            "Stage {} not found",
+            stage_index
+        )));
+    }
+
+    let stage_name = playbook.stages[stage_index].name.clone();
+    playbook.stages.remove(stage_index);
+
+    let update = PlaybookUpdate {
+        stages: Some(playbook.stages),
+        ..Default::default()
+    };
+    repo.update(id, &update).await?;
+
+    let trigger = serde_json::json!({
+        "showToast": {
+            "type": "success",
+            "title": "Stage Deleted",
+            "message": format!("Stage '{}' has been deleted.", stage_name)
+        }
+    });
+
+    Ok((
+        [(
+            header::HeaderName::from_static("hx-trigger"),
+            trigger.to_string(),
+        )],
+        "",
+    ))
+}
+
+// ============================================================================
+// Step Management
+// ============================================================================
+
+/// Form data for adding/editing a step.
+#[derive(Debug, Deserialize)]
+pub struct StepForm {
+    pub action: String,
+    pub parameters: Option<String>,
+    pub input: Option<String>,
+    pub output: Option<String>,
+    pub conditions: Option<String>,
+    #[serde(default)]
+    pub requires_approval: Option<bool>,
+}
+
+/// Add a new step to a stage.
+async fn add_step(
+    State(state): State<AppState>,
+    Path((id, stage_index)): Path<(Uuid, usize)>,
+    axum::Form(form): axum::Form<StepForm>,
+) -> Result<impl IntoResponse, ApiError> {
+    let repo = create_playbook_repository(&state.db);
+
+    let mut playbook = repo
+        .get(id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Playbook {} not found", id)))?;
+
+    if stage_index >= playbook.stages.len() {
+        return Err(ApiError::NotFound(format!(
+            "Stage {} not found",
+            stage_index
+        )));
+    }
+
+    // Parse optional JSON fields
+    let parameters = form
+        .parameters
+        .filter(|s| !s.is_empty())
+        .map(|s| serde_json::from_str(&s))
+        .transpose()
+        .map_err(|e| ApiError::BadRequest(format!("Invalid parameters JSON: {}", e)))?;
+
+    let input = form
+        .input
+        .filter(|s| !s.is_empty())
+        .map(|s| serde_json::from_str(&s))
+        .transpose()
+        .map_err(|e| ApiError::BadRequest(format!("Invalid input JSON: {}", e)))?;
+
+    let output = form
+        .output
+        .filter(|s| !s.is_empty())
+        .map(|s| s.split(',').map(|v| v.trim().to_string()).collect());
+
+    let conditions = form
+        .conditions
+        .filter(|s| !s.is_empty())
+        .map(|s| serde_json::from_str(&s))
+        .transpose()
+        .map_err(|e| ApiError::BadRequest(format!("Invalid conditions JSON: {}", e)))?;
+
+    let step = PlaybookStep {
+        action: form.action.clone(),
+        parameters,
+        input,
+        output,
+        requires_approval: form.requires_approval.unwrap_or(false),
+        conditions,
+    };
+
+    playbook.stages[stage_index].steps.push(step);
+
+    let update = PlaybookUpdate {
+        stages: Some(playbook.stages),
+        ..Default::default()
+    };
+    repo.update(id, &update).await?;
+
+    let trigger = serde_json::json!({
+        "showToast": {
+            "type": "success",
+            "title": "Step Added",
+            "message": format!("Step '{}' has been added.", form.action)
+        }
+    });
+
+    Ok((
+        [(
+            header::HeaderName::from_static("hx-trigger"),
+            trigger.to_string(),
+        )],
+        "",
+    ))
+}
+
+/// Update an existing step.
+async fn update_step(
+    State(state): State<AppState>,
+    Path((id, stage_index, step_index)): Path<(Uuid, usize, usize)>,
+    axum::Form(form): axum::Form<StepForm>,
+) -> Result<impl IntoResponse, ApiError> {
+    let repo = create_playbook_repository(&state.db);
+
+    let mut playbook = repo
+        .get(id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Playbook {} not found", id)))?;
+
+    if stage_index >= playbook.stages.len() {
+        return Err(ApiError::NotFound(format!(
+            "Stage {} not found",
+            stage_index
+        )));
+    }
+
+    if step_index >= playbook.stages[stage_index].steps.len() {
+        return Err(ApiError::NotFound(format!("Step {} not found", step_index)));
+    }
+
+    // Parse optional JSON fields
+    let parameters = form
+        .parameters
+        .filter(|s| !s.is_empty())
+        .map(|s| serde_json::from_str(&s))
+        .transpose()
+        .map_err(|e| ApiError::BadRequest(format!("Invalid parameters JSON: {}", e)))?;
+
+    let input = form
+        .input
+        .filter(|s| !s.is_empty())
+        .map(|s| serde_json::from_str(&s))
+        .transpose()
+        .map_err(|e| ApiError::BadRequest(format!("Invalid input JSON: {}", e)))?;
+
+    let output = form
+        .output
+        .filter(|s| !s.is_empty())
+        .map(|s| s.split(',').map(|v| v.trim().to_string()).collect());
+
+    let conditions = form
+        .conditions
+        .filter(|s| !s.is_empty())
+        .map(|s| serde_json::from_str(&s))
+        .transpose()
+        .map_err(|e| ApiError::BadRequest(format!("Invalid conditions JSON: {}", e)))?;
+
+    playbook.stages[stage_index].steps[step_index] = PlaybookStep {
+        action: form.action.clone(),
+        parameters,
+        input,
+        output,
+        requires_approval: form.requires_approval.unwrap_or(false),
+        conditions,
+    };
+
+    let update = PlaybookUpdate {
+        stages: Some(playbook.stages),
+        ..Default::default()
+    };
+    repo.update(id, &update).await?;
+
+    let trigger = serde_json::json!({
+        "showToast": {
+            "type": "success",
+            "title": "Step Updated",
+            "message": format!("Step '{}' has been updated.", form.action)
+        }
+    });
+
+    Ok((
+        [(
+            header::HeaderName::from_static("hx-trigger"),
+            trigger.to_string(),
+        )],
+        "",
+    ))
+}
+
+/// Delete a step from a stage.
+async fn delete_step(
+    State(state): State<AppState>,
+    Path((id, stage_index, step_index)): Path<(Uuid, usize, usize)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let repo = create_playbook_repository(&state.db);
+
+    let mut playbook = repo
+        .get(id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Playbook {} not found", id)))?;
+
+    if stage_index >= playbook.stages.len() {
+        return Err(ApiError::NotFound(format!(
+            "Stage {} not found",
+            stage_index
+        )));
+    }
+
+    if step_index >= playbook.stages[stage_index].steps.len() {
+        return Err(ApiError::NotFound(format!("Step {} not found", step_index)));
+    }
+
+    let step_action = playbook.stages[stage_index].steps[step_index]
+        .action
+        .clone();
+    playbook.stages[stage_index].steps.remove(step_index);
+
+    let update = PlaybookUpdate {
+        stages: Some(playbook.stages),
+        ..Default::default()
+    };
+    repo.update(id, &update).await?;
+
+    let trigger = serde_json::json!({
+        "showToast": {
+            "type": "success",
+            "title": "Step Deleted",
+            "message": format!("Step '{}' has been deleted.", step_action)
         }
     });
 

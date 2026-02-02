@@ -258,6 +258,49 @@ pub struct PlaybookStepData {
     pub requires_approval: bool,
 }
 
+// Playbook Editor Modals
+
+#[derive(Template)]
+#[template(path = "partials/modal_add_stage.html")]
+pub struct AddStageModalTemplate {
+    pub playbook_id: Uuid,
+}
+
+#[derive(Template)]
+#[template(path = "partials/modal_edit_stage.html")]
+pub struct EditStageModalTemplate {
+    pub playbook_id: Uuid,
+    pub stage_index: usize,
+    pub stage: PlaybookStageData,
+}
+
+#[derive(Template)]
+#[template(path = "partials/modal_add_step.html")]
+pub struct AddStepModalTemplate {
+    pub playbook_id: Uuid,
+    pub stage_index: usize,
+    pub stage_name: String,
+}
+
+#[derive(Template)]
+#[template(path = "partials/modal_edit_step.html")]
+pub struct EditStepModalTemplate {
+    pub playbook_id: Uuid,
+    pub stage_index: usize,
+    pub step_index: usize,
+    pub step: EditStepData,
+}
+
+/// Step data for editing with additional formatted fields.
+pub struct EditStepData {
+    pub action: String,
+    pub parameters: Option<String>,
+    pub input_str: String,
+    pub output_str: String,
+    pub conditions: Option<String>,
+    pub requires_approval: bool,
+}
+
 // ============================================
 // Settings
 // ============================================
