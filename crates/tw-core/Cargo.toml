@@ -37,6 +37,10 @@ sha2 = "0.10"
 hex = "0.4"
 subtle = "2.5"
 
+# Credential encryption
+aes-gcm = "0.10"
+base64 = "0.22"
+
 [dev-dependencies]
 mockall.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
