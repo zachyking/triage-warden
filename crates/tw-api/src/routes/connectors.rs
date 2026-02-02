@@ -167,10 +167,14 @@ async fn create_connector(
     request.validate()?;
 
     let connector_type = parse_connector_type(&request.connector_type).ok_or_else(|| {
-        ApiError::BadRequest(format!(
-            "Unknown connector type: {}",
-            request.connector_type
-        ))
+        ApiError::validation_field(
+            "connector_type",
+            "invalid_type",
+            &format!(
+                "Unknown connector type: '{}'. Valid types are: splunk, crowdstrike, jira, virustotal, m365, defender, elastic, sentinel, sentinelone, servicenow, alienvault, google",
+                request.connector_type
+            ),
+        )
     })?;
 
     let connector = ConnectorConfig::new(request.name, connector_type, request.config);
@@ -1123,7 +1127,8 @@ mod api_tests {
 
         let response = app.oneshot(request).await.unwrap();
 
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        // Validation errors return 422 Unprocessable Entity with field-level details
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[tokio::test]

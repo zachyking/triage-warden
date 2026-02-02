@@ -6,6 +6,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use thiserror::Error;
 use utoipa::ToSchema;
 
@@ -35,6 +36,10 @@ pub enum ApiError {
     /// Unprocessable entity (semantic errors).
     #[error("Unprocessable entity: {0}")]
     UnprocessableEntity(String),
+
+    /// Validation error with field-level details.
+    #[error("Validation failed")]
+    ValidationError(ValidationErrorDetails),
 
     /// Rate limit exceeded.
     #[error("Rate limit exceeded")]
@@ -73,6 +78,73 @@ pub enum ApiError {
     AccountDisabled,
 }
 
+/// Details for field-level validation errors.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidationErrorDetails {
+    /// Overall validation error message.
+    pub message: String,
+    /// Field-specific errors.
+    pub fields: HashMap<String, Vec<FieldError>>,
+}
+
+/// A single field validation error.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FieldError {
+    /// Error code (e.g., "required", "min_length", "invalid_format").
+    pub code: String,
+    /// Human-readable error message.
+    pub message: String,
+    /// Additional error parameters (e.g., min_length value).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<serde_json::Value>,
+}
+
+impl ValidationErrorDetails {
+    /// Creates a new validation error with a single field error.
+    pub fn field(field: &str, code: &str, message: &str) -> Self {
+        let mut fields = HashMap::new();
+        fields.insert(
+            field.to_string(),
+            vec![FieldError {
+                code: code.to_string(),
+                message: message.to_string(),
+                params: None,
+            }],
+        );
+        Self {
+            message: format!("Validation failed for field '{}'", field),
+            fields,
+        }
+    }
+
+    /// Creates a validation error from multiple field errors.
+    pub fn from_fields(errors: HashMap<String, Vec<FieldError>>) -> Self {
+        let field_count = errors.len();
+        let message = if field_count == 1 {
+            let field = errors.keys().next().unwrap();
+            format!("Validation failed for field '{}'", field)
+        } else {
+            format!("Validation failed for {} fields", field_count)
+        };
+        Self {
+            message,
+            fields: errors,
+        }
+    }
+
+    /// Adds a field error.
+    pub fn add_error(&mut self, field: &str, code: &str, message: &str) {
+        self.fields
+            .entry(field.to_string())
+            .or_default()
+            .push(FieldError {
+                code: code.to_string(),
+                message: message.to_string(),
+                params: None,
+            });
+    }
+}
+
 /// JSON error response body.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct ErrorResponse {
@@ -98,6 +170,7 @@ impl ApiError {
             ApiError::Forbidden(_) => StatusCode::FORBIDDEN,
             ApiError::Conflict(_) => StatusCode::CONFLICT,
             ApiError::UnprocessableEntity(_) => StatusCode::UNPROCESSABLE_ENTITY,
+            ApiError::ValidationError(_) => StatusCode::UNPROCESSABLE_ENTITY,
             ApiError::RateLimitExceeded => StatusCode::TOO_MANY_REQUESTS,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -119,6 +192,7 @@ impl ApiError {
             ApiError::Forbidden(_) => "FORBIDDEN",
             ApiError::Conflict(_) => "CONFLICT",
             ApiError::UnprocessableEntity(_) => "UNPROCESSABLE_ENTITY",
+            ApiError::ValidationError(_) => "VALIDATION_ERROR",
             ApiError::RateLimitExceeded => "RATE_LIMIT_EXCEEDED",
             ApiError::Internal(_) => "INTERNAL_ERROR",
             ApiError::Database(_) => "DATABASE_ERROR",
@@ -130,15 +204,28 @@ impl ApiError {
             ApiError::AccountDisabled => "ACCOUNT_DISABLED",
         }
     }
+
+    /// Creates a validation error for a single field.
+    pub fn validation_field(field: &str, code: &str, message: &str) -> Self {
+        ApiError::ValidationError(ValidationErrorDetails::field(field, code, message))
+    }
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = self.status_code();
+        let (message, details) = match &self {
+            ApiError::ValidationError(details) => (
+                details.message.clone(),
+                Some(serde_json::to_value(&details.fields).unwrap_or_default()),
+            ),
+            _ => (self.to_string(), None),
+        };
+
         let body = ErrorResponse {
             code: self.error_code().to_string(),
-            message: self.to_string(),
-            details: None,
+            message,
+            details,
             request_id: None,
         };
 
@@ -167,6 +254,31 @@ impl From<serde_json::Error> for ApiError {
 
 impl From<validator::ValidationErrors> for ApiError {
     fn from(err: validator::ValidationErrors) -> Self {
-        ApiError::UnprocessableEntity(format!("Validation failed: {}", err))
+        let mut fields: HashMap<String, Vec<FieldError>> = HashMap::new();
+
+        for (field_name, field_errors) in err.field_errors() {
+            let errors: Vec<FieldError> = field_errors
+                .iter()
+                .map(|e| {
+                    let code = e.code.to_string();
+                    let message = e.message.clone().map(|m| m.to_string()).unwrap_or_else(|| {
+                        format!("Field '{}' failed validation: {}", field_name, code)
+                    });
+                    let params = if e.params.is_empty() {
+                        None
+                    } else {
+                        Some(serde_json::to_value(&e.params).unwrap_or_default())
+                    };
+                    FieldError {
+                        code,
+                        message,
+                        params,
+                    }
+                })
+                .collect();
+            fields.insert(field_name.to_string(), errors);
+        }
+
+        ApiError::ValidationError(ValidationErrorDetails::from_fields(fields))
     }
 }

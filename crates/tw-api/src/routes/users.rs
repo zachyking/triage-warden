@@ -133,14 +133,24 @@ async fn create_user(
     // Validate password strength
     let password_errors = validate_password_strength(&request.password);
     if !password_errors.is_empty() {
-        return Err(ApiError::BadRequest(password_errors.join(", ")));
+        return Err(ApiError::validation_field(
+            "password",
+            "weak_password",
+            &password_errors.join("; "),
+        ));
     }
 
     // Parse role
-    let role = request
-        .role
-        .parse::<Role>()
-        .map_err(|_| ApiError::BadRequest(format!("Invalid role: {}", request.role)))?;
+    let role = request.role.parse::<Role>().map_err(|_| {
+        ApiError::validation_field(
+            "role",
+            "invalid_role",
+            &format!(
+                "Invalid role: '{}'. Valid roles are: admin, analyst, viewer",
+                request.role
+            ),
+        )
+    })?;
 
     // Hash password
     let password_hash = hash_password(&request.password)
@@ -154,14 +164,22 @@ async fn create_user(
 
     // Check for existing email/username
     if user_repo.get_by_email(&request.email).await?.is_some() {
-        return Err(ApiError::Conflict("Email already in use".to_string()));
+        return Err(ApiError::validation_field(
+            "email",
+            "already_exists",
+            "This email address is already in use by another account",
+        ));
     }
     if user_repo
         .get_by_username(&request.username)
         .await?
         .is_some()
     {
-        return Err(ApiError::Conflict("Username already in use".to_string()));
+        return Err(ApiError::validation_field(
+            "username",
+            "already_exists",
+            "This username is already taken by another account",
+        ));
     }
 
     let created_user = user_repo.create(&user).await?;
