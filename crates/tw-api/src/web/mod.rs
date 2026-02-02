@@ -69,6 +69,20 @@ pub fn create_web_router(state: AppState) -> Router {
         .route("/web/partials/policies", get(partials_policies))
         // Notification partials for HTMX refresh
         .route("/web/partials/notifications", get(partials_notifications))
+        // Playbook editor modals
+        .route("/web/modals/playbook/:id/add-stage", get(modal_add_stage))
+        .route(
+            "/web/modals/playbook/:id/stage/:stage_index/edit",
+            get(modal_edit_stage),
+        )
+        .route(
+            "/web/modals/playbook/:id/stage/:stage_index/add-step",
+            get(modal_add_step),
+        )
+        .route(
+            "/web/modals/playbook/:id/stage/:stage_index/step/:step_index/edit",
+            get(modal_edit_step),
+        )
         .with_state(state)
 }
 
@@ -848,6 +862,117 @@ async fn partials_connectors(
 
     let template = ConnectorsPartialTemplate { connectors };
     Ok(HtmlTemplate(template))
+}
+
+// ============================================
+// Playbook Editor Modal Handlers
+// ============================================
+
+/// Modal for adding a stage to a playbook.
+async fn modal_add_stage(
+    AuthenticatedUser(_user): AuthenticatedUser,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    let template = AddStageModalTemplate { playbook_id: id };
+    Ok(HtmlTemplate(template))
+}
+
+/// Modal for editing a stage.
+async fn modal_edit_stage(
+    State(state): State<AppState>,
+    AuthenticatedUser(_user): AuthenticatedUser,
+    Path((id, stage_index)): Path<(Uuid, usize)>,
+) -> Result<Response, ApiError> {
+    let playbook_repo = create_playbook_repository(&state.db);
+
+    match playbook_repo.get(id).await {
+        Ok(Some(playbook)) if stage_index < playbook.stages.len() => {
+            let stage = &playbook.stages[stage_index];
+            let template = EditStageModalTemplate {
+                playbook_id: id,
+                stage_index,
+                stage: PlaybookStageData {
+                    name: stage.name.clone(),
+                    description: stage.description.clone(),
+                    parallel: stage.parallel,
+                    steps: stage
+                        .steps
+                        .iter()
+                        .map(|s| PlaybookStepData {
+                            action: s.action.clone(),
+                            parameters: s.parameters.as_ref().map(|p| p.to_string()),
+                            requires_approval: s.requires_approval,
+                        })
+                        .collect(),
+                },
+            };
+            Ok(HtmlTemplate(template).into_response())
+        }
+        _ => Ok("".into_response()),
+    }
+}
+
+/// Modal for adding a step to a stage.
+async fn modal_add_step(
+    State(state): State<AppState>,
+    AuthenticatedUser(_user): AuthenticatedUser,
+    Path((id, stage_index)): Path<(Uuid, usize)>,
+) -> Result<Response, ApiError> {
+    let playbook_repo = create_playbook_repository(&state.db);
+
+    match playbook_repo.get(id).await {
+        Ok(Some(playbook)) if stage_index < playbook.stages.len() => {
+            let stage_name = playbook.stages[stage_index].name.clone();
+            let template = AddStepModalTemplate {
+                playbook_id: id,
+                stage_index,
+                stage_name,
+            };
+            Ok(HtmlTemplate(template).into_response())
+        }
+        _ => Ok("".into_response()),
+    }
+}
+
+/// Modal for editing a step.
+async fn modal_edit_step(
+    State(state): State<AppState>,
+    AuthenticatedUser(_user): AuthenticatedUser,
+    Path((id, stage_index, step_index)): Path<(Uuid, usize, usize)>,
+) -> Result<Response, ApiError> {
+    let playbook_repo = create_playbook_repository(&state.db);
+
+    match playbook_repo.get(id).await {
+        Ok(Some(playbook))
+            if stage_index < playbook.stages.len()
+                && step_index < playbook.stages[stage_index].steps.len() =>
+        {
+            let step = &playbook.stages[stage_index].steps[step_index];
+            let template = EditStepModalTemplate {
+                playbook_id: id,
+                stage_index,
+                step_index,
+                step: EditStepData {
+                    action: step.action.clone(),
+                    parameters: step.parameters.as_ref().map(|p| p.to_string()),
+                    input_str: step
+                        .input
+                        .as_ref()
+                        .map(|v| v.to_string())
+                        .unwrap_or_default(),
+                    output_str: step
+                        .output
+                        .as_ref()
+                        .map(|v| v.join(", "))
+                        .unwrap_or_default(),
+                    conditions: step.conditions.as_ref().map(|c| c.to_string()),
+                    requires_approval: step.requires_approval,
+                },
+            };
+            Ok(HtmlTemplate(template).into_response())
+        }
+        _ => Ok("".into_response()),
+    }
 }
 
 // ============================================

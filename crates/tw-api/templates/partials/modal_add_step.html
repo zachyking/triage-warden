@@ -1,0 +1,103 @@
+<div class="modal-backdrop" id="add-step-modal">
+  <div class="modal modal-lg">
+    <div class="modal-header">
+      <h2 class="modal-title">Add Step to "{{ stage_name }}"</h2>
+      <button class="modal-close" aria-label="Close" onclick="this.closest('.modal-backdrop').remove()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <form id="add-step-form" hx-post="/api/playbooks/{{ playbook_id }}/stages/{{ stage_index }}/steps" hx-swap="none"
+          hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); location.reload(); } else { showToast('error', 'Failed to Add Step', 'Please check your input and try again.'); }">
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Action <span class="text-critical">*</span></label>
+          <select name="action" class="form-input form-select" required>
+            <optgroup label="Enrichment">
+              <option value="lookup_ip">Lookup IP Reputation</option>
+              <option value="lookup_domain">Lookup Domain Reputation</option>
+              <option value="lookup_hash">Lookup File Hash</option>
+              <option value="lookup_url">Lookup URL Reputation</option>
+              <option value="geolocate_ip">Geolocate IP Address</option>
+              <option value="whois_lookup">WHOIS Lookup</option>
+            </optgroup>
+            <optgroup label="Containment">
+              <option value="isolate_host">Isolate Host</option>
+              <option value="disable_user">Disable User Account</option>
+              <option value="block_ip">Block IP Address</option>
+              <option value="block_domain">Block Domain</option>
+              <option value="quarantine_file">Quarantine File</option>
+              <option value="kill_process">Kill Process</option>
+            </optgroup>
+            <optgroup label="Notification">
+              <option value="send_email">Send Email</option>
+              <option value="send_slack">Send Slack Message</option>
+              <option value="send_webhook">Send Webhook</option>
+              <option value="create_ticket">Create Ticket</option>
+              <option value="page_oncall">Page On-Call</option>
+            </optgroup>
+            <optgroup label="Analysis">
+              <option value="run_yara">Run YARA Rules</option>
+              <option value="run_sigma">Run Sigma Rules</option>
+              <option value="extract_iocs">Extract IoCs</option>
+              <option value="analyze_email">Analyze Email</option>
+              <option value="sandbox_file">Sandbox File</option>
+            </optgroup>
+            <optgroup label="Utility">
+              <option value="wait">Wait / Delay</option>
+              <option value="set_variable">Set Variable</option>
+              <option value="run_script">Run Custom Script</option>
+              <option value="http_request">HTTP Request</option>
+            </optgroup>
+          </select>
+          <p class="text-xs text-muted mt-1">Select the action this step should perform</p>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Parameters (JSON)</label>
+          <textarea name="parameters" class="form-input form-textarea font-mono text-sm" rows="4" placeholder='{"key": "value"}'></textarea>
+          <p class="text-xs text-muted mt-1">Optional JSON configuration for this action</p>
+        </div>
+
+        <div class="grid grid-2 gap-4">
+          <div class="form-group">
+            <label class="form-label">Input Variables</label>
+            <input type="text" name="input" class="form-input" placeholder="var1, var2">
+            <p class="text-xs text-muted mt-1">Comma-separated list of input variable names</p>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Output Variables</label>
+            <input type="text" name="output" class="form-input" placeholder="result, status">
+            <p class="text-xs text-muted mt-1">Comma-separated list of output variable names</p>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Conditions (JSON)</label>
+          <textarea name="conditions" class="form-input form-textarea font-mono text-sm" rows="2" placeholder='{"if": "severity == \"critical\""}'></textarea>
+          <p class="text-xs text-muted mt-1">Optional conditions that must be met for this step to execute</p>
+        </div>
+
+        <div class="form-group">
+          <div class="flex items-center gap-3">
+            <label class="switch">
+              <input type="checkbox" name="requires_approval" value="true">
+              <span class="switch-track"></span>
+              <span class="switch-thumb"></span>
+            </label>
+            <div>
+              <span class="text-sm font-medium">Requires human approval</span>
+              <p class="text-xs text-muted">Pause playbook execution until an analyst approves this action</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-ghost" onclick="this.closest('.modal-backdrop').remove()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Add Step</button>
+      </div>
+    </form>
+  </div>
+</div>

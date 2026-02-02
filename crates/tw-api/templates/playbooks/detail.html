@@ -116,47 +116,117 @@
   <div>
     <div class="card">
       <div class="card-header">
-        <h3 class="card-title">Workflow Stages</h3>
-        <span class="badge badge-info">{{ playbook.stages.len() }} stages</span>
+        <div class="flex items-center gap-2">
+          <h3 class="card-title">Workflow Stages</h3>
+          <span class="badge badge-info">{{ playbook.stages.len() }} stages</span>
+        </div>
+        <button class="btn btn-primary btn-sm"
+                hx-get="/web/modals/playbook/{{ playbook.id }}/add-stage"
+                hx-target="#modal-container"
+                hx-swap="innerHTML">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M12 5v14m-7-7h14"/>
+          </svg>
+          Add Stage
+        </button>
       </div>
       <div class="card-body">
         {% if !playbook.stages.is_empty() %}
         {% for stage in playbook.stages %}
-        <div class="mb-4 p-3 bg-tertiary rounded-md">
+        <div class="mb-4 p-3 bg-tertiary rounded-md stage-card" data-stage-index="{{ loop.index0 }}">
           <div class="flex justify-between items-center mb-2">
-            <div class="font-semibold text-sm">{{ stage.name }}</div>
-            <div class="flex gap-2">
+            <div class="flex items-center gap-2">
+              <span class="text-muted text-xs">{{ loop.index }}.</span>
+              <div class="font-semibold text-sm">{{ stage.name }}</div>
               {% if stage.parallel %}
-              <span class="badge badge-info">Parallel</span>
+              <span class="badge badge-info text-xs">Parallel</span>
               {% endif %}
-              <span class="badge badge-secondary">{{ stage.steps.len() }} steps</span>
+            </div>
+            <div class="flex items-center gap-1">
+              <span class="badge badge-secondary text-xs">{{ stage.steps.len() }} steps</span>
+              <button class="btn btn-ghost btn-xs"
+                      hx-get="/web/modals/playbook/{{ playbook.id }}/stage/{{ loop.index0 }}/edit"
+                      hx-target="#modal-container"
+                      hx-swap="innerHTML"
+                      title="Edit stage">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+                  <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                </svg>
+              </button>
+              <button class="btn btn-ghost btn-xs text-critical"
+                      hx-delete="/api/playbooks/{{ playbook.id }}/stages/{{ loop.index0 }}"
+                      hx-confirm="Delete this stage and all its steps?"
+                      hx-swap="none"
+                      hx-on::after-request="if(event.detail.successful) { location.reload(); }"
+                      title="Delete stage">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
+                </svg>
+              </button>
             </div>
           </div>
           {% if let Some(desc) = stage.description %}
-          <p class="text-xs text-muted mb-2">{{ desc }}</p>
+          <p class="text-xs text-muted mb-3">{{ desc }}</p>
           {% endif %}
 
           {% if !stage.steps.is_empty() %}
-          <div class="pl-4 border-l-2 border-accent">
+          <div class="pl-4 border-l-2 border-accent space-y-2">
             {% for step in stage.steps %}
-            <div class="mb-2 last:mb-0">
-              <div class="flex items-center gap-2">
-                <code class="text-xs bg-secondary px-2 py-1 rounded">{{ step.action }}</code>
-                {% if step.requires_approval %}
-                <span class="badge badge-high text-xs">Requires Approval</span>
+            <div class="flex items-start justify-between gap-2 group">
+              <div class="flex-1">
+                <div class="flex items-center gap-2">
+                  <span class="text-muted text-xs">{{ loop.index }}.</span>
+                  <code class="text-xs bg-secondary px-2 py-1 rounded">{{ step.action }}</code>
+                  {% if step.requires_approval %}
+                  <span class="badge badge-high text-xs">Approval</span>
+                  {% endif %}
+                </div>
+                {% if let Some(params) = step.parameters %}
+                <div class="text-xs text-muted mt-1 pl-5">
+                  <code class="break-all">{{ params }}</code>
+                </div>
                 {% endif %}
               </div>
-              {% if let Some(params) = step.parameters %}
-              <div class="text-xs text-muted mt-1">
-                <code>{{ params }}</code>
+              <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button class="btn btn-ghost btn-xs"
+                        hx-get="/web/modals/playbook/{{ playbook.id }}/stage/{{ loop.index0 }}/step/{{ loop.index0 }}/edit"
+                        hx-target="#modal-container"
+                        hx-swap="innerHTML"
+                        title="Edit step">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+                    <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                  </svg>
+                </button>
+                <button class="btn btn-ghost btn-xs text-critical"
+                        hx-delete="/api/playbooks/{{ playbook.id }}/stages/{{ loop.index0 }}/steps/{{ loop.index0 }}"
+                        hx-confirm="Delete this step?"
+                        hx-swap="none"
+                        hx-on::after-request="if(event.detail.successful) { location.reload(); }"
+                        title="Delete step">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M6 18L18 6M6 6l12 12"/>
+                  </svg>
+                </button>
               </div>
-              {% endif %}
             </div>
             {% endfor %}
           </div>
-          {% else %}
-          <div class="text-xs text-muted">No steps configured.</div>
           {% endif %}
+
+          <!-- Add Step Button -->
+          <div class="mt-3 pt-2 border-t border-surface">
+            <button class="btn btn-ghost btn-xs w-full"
+                    hx-get="/web/modals/playbook/{{ playbook.id }}/stage/{{ loop.index0 }}/add-step"
+                    hx-target="#modal-container"
+                    hx-swap="innerHTML">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 5v14m-7-7h14"/>
+              </svg>
+              Add Step
+            </button>
+          </div>
         </div>
         {% endfor %}
         {% else %}
@@ -167,6 +237,15 @@
           </svg>
           <div class="empty-state-title">No stages configured</div>
           <div class="empty-state-text">Add stages and steps to define the workflow.</div>
+          <button class="btn btn-primary mt-4"
+                  hx-get="/web/modals/playbook/{{ playbook.id }}/add-stage"
+                  hx-target="#modal-container"
+                  hx-swap="innerHTML">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 5v14m-7-7h14"/>
+            </svg>
+            Add First Stage
+          </button>
         </div>
         {% endif %}
       </div>
