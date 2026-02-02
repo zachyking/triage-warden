@@ -826,13 +826,13 @@ async fn modal_edit_connector(
     match connector_repo.get(id).await {
         Ok(Some(connector)) => {
             let template = EditConnectorModalTemplate {
-                connector: EditConnectorData {
-                    id: connector.id,
-                    name: connector.name,
-                    connector_type: connector.connector_type.to_string(),
-                    config: connector.config,
-                    enabled: connector.enabled,
-                },
+                connector: EditConnectorData::from_connector(
+                    connector.id,
+                    connector.name,
+                    connector.connector_type.to_string(),
+                    connector.config,
+                    connector.enabled,
+                ),
             };
             Ok(HtmlTemplate(template).into_response())
         }
