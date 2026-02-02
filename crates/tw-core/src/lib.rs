@@ -41,6 +41,7 @@ pub use auth::{ApiKey, Role, SessionData, User, UserFilter, UserUpdate};
 
 // Crypto exports
 pub use crypto::{
-    create_encryptor, generate_encryption_key, Aes256GcmEncryptor, CredentialEncryptor,
-    CryptoError, PlaintextEncryptor,
+    create_encryptor, create_encryptor_or_panic, generate_encryption_key,
+    is_production_environment, Aes256GcmEncryptor, CredentialEncryptor, CryptoError,
+    PlaintextEncryptor,
 };

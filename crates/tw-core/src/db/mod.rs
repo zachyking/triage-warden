@@ -4,7 +4,9 @@
 //! using SQLx with support for both SQLite (development) and PostgreSQL (production).
 
 mod error;
+pub mod mocks;
 mod pool;
+pub mod retry;
 mod schema;
 
 pub mod api_key_repo;
@@ -19,7 +21,11 @@ pub mod settings_repo;
 pub mod user_repo;
 
 pub use error::DbError;
-pub use pool::{create_pool, create_pool_with_options, DbPool, PoolOptions};
+pub use pool::{
+    create_pool, create_pool_with_options, escape_like_pattern, make_like_pattern, DbPool,
+    PoolOptions,
+};
+pub use retry::{is_transient_error, with_retry, RetryConfig};
 pub use schema::run_migrations;
 
 // Re-export repository traits and types

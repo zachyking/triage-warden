@@ -93,8 +93,9 @@ pub async fn run_server(config: ServeConfig, _app_config: AppConfig) -> Result<(
         enable_swagger: config.enable_swagger,
         shutdown_timeout: Duration::from_secs(30),
         session_cookie_name: "tw_session".to_string(),
-        session_expiry_seconds: 86400, // 24 hours
-        session_secure: false,         // Allow HTTP for development
+        session_expiry_seconds: 86400,    // 24 hours
+        session_secure: false,            // Allow HTTP for development
+        cors_allowed_origins: Vec::new(), // Use default CORS behavior
     };
 
     // Print startup info

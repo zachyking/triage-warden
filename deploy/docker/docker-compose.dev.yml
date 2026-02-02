@@ -1,0 +1,67 @@
+# Triage Warden - Development Docker Compose
+#
+# This configuration uses insecure default secrets for local development only.
+# DO NOT use this in production!
+#
+# Usage: docker-compose -f docker-compose.dev.yml up -d
+
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_URL=postgres://triage:triage_dev@postgres:5432/triage_warden
+      # Development-only secrets - DO NOT USE IN PRODUCTION
+      - TW_ENCRYPTION_KEY=${TW_ENCRYPTION_KEY:-}
+      - TW_JWT_SECRET=${TW_JWT_SECRET:-dev-jwt-secret-for-local-development-only}
+      - TW_SESSION_SECRET=${TW_SESSION_SECRET:-dev-session-secret-for-local-development-only}
+      - TW_ENV=development
+      - TW_SESSION_SECURE=false
+      - TW_BASE_URL=http://localhost:8080
+      - RUST_LOG=info,triage_warden=debug,tw_api=debug,tw_core=debug
+      - TW_LOG_FORMAT=pretty
+      - TW_DEV_MODE=true
+      # Enable Swagger UI for development
+      - TW_ENABLE_SWAGGER=true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    volumes:
+      # Mount source for hot-reloading during development (optional)
+      - ../../:/app:ro
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=triage
+      - POSTGRES_PASSWORD=triage_dev
+      - POSTGRES_DB=triage_warden
+    ports:
+      # Expose PostgreSQL for local development tools
+      - "5432:5432"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U triage -d triage_warden"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_dev_data:
+
+networks:
+  default:
+    name: triage-warden-dev

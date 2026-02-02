@@ -235,13 +235,46 @@ impl IntoResponse for ApiError {
 
 impl From<tw_core::db::DbError> for ApiError {
     fn from(err: tw_core::db::DbError) -> Self {
+        use tw_core::is_production_environment;
+
         match err {
             tw_core::db::DbError::NotFound { entity, id } => {
                 ApiError::NotFound(format!("{} with id {} not found", entity, id))
             }
-            tw_core::db::DbError::Constraint(msg) => ApiError::Conflict(msg),
-            tw_core::db::DbError::Serialization(msg) => ApiError::BadRequest(msg),
-            err => ApiError::Database(err.to_string()),
+            tw_core::db::DbError::Constraint(msg) => {
+                // Constraint errors are usually safe to expose (e.g., "email already exists")
+                // but sanitize potential internal details
+                if is_production_environment() {
+                    // In production, use generic message if the constraint name looks internal
+                    if msg.contains("sqlite") || msg.contains("pg_") || msg.contains("idx_") {
+                        tracing::error!(error = %msg, "Database constraint violation");
+                        ApiError::Conflict("A conflicting resource already exists".to_string())
+                    } else {
+                        ApiError::Conflict(msg)
+                    }
+                } else {
+                    ApiError::Conflict(msg)
+                }
+            }
+            tw_core::db::DbError::Serialization(msg) => {
+                // Serialization errors indicate malformed data - safe to return
+                ApiError::BadRequest(msg)
+            }
+            err => {
+                // For all other database errors, log the full error server-side
+                // but return a sanitized message to the client
+                tracing::error!(error = %err, "Database error occurred");
+
+                if is_production_environment() {
+                    // In production, never expose internal database details
+                    ApiError::Database(
+                        "A database error occurred. Please try again later.".to_string(),
+                    )
+                } else {
+                    // In development, include the error for debugging
+                    ApiError::Database(err.to_string())
+                }
+            }
         }
     }
 }

@@ -7,7 +7,10 @@ use axum::{
     response::Response,
 };
 use std::time::Instant;
+use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::limit::RequestBodyLimitLayer;
 use tracing::{info, warn, Span};
+use tw_core::is_production_environment;
 use uuid::Uuid;
 
 /// Request ID header name.
@@ -92,12 +95,105 @@ pub async fn request_logging(request: Request, next: Next) -> Response {
     response
 }
 
-/// Middleware to add CORS headers.
-pub fn cors_layer() -> tower_http::cors::CorsLayer {
+/// Default request body size limit (10 MB).
+pub const DEFAULT_REQUEST_BODY_LIMIT: usize = 10 * 1024 * 1024;
+
+/// Creates a request body size limit layer.
+///
+/// The limit can be configured via the `TW_REQUEST_BODY_LIMIT` environment variable
+/// (in bytes). Defaults to 10 MB.
+pub fn request_body_limit_layer() -> RequestBodyLimitLayer {
+    let limit = std::env::var("TW_REQUEST_BODY_LIMIT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_REQUEST_BODY_LIMIT);
+
+    RequestBodyLimitLayer::new(limit)
+}
+
+/// Creates the CORS middleware layer.
+///
+/// Behavior varies based on environment:
+///
+/// # Production Mode
+/// - If `TW_CORS_ALLOWED_ORIGINS` is set, only those origins are allowed
+/// - If not set, restricts to same-origin (no CORS headers)
+///
+/// # Development Mode
+/// - If `TW_CORS_ALLOWED_ORIGINS` is set, only those origins are allowed
+/// - If not set, allows any origin (permissive for development)
+///
+/// # Environment Variables
+/// - `TW_CORS_ALLOWED_ORIGINS`: Comma-separated list of allowed origins
+///   Example: `https://app.example.com,https://admin.example.com`
+pub fn cors_layer() -> CorsLayer {
+    cors_layer_with_origins(None)
+}
+
+/// Creates the CORS middleware layer with explicit origins.
+///
+/// If `allowed_origins` is provided and non-empty, uses those origins.
+/// Otherwise, falls back to environment variable / default behavior.
+pub fn cors_layer_with_origins(allowed_origins: Option<&[String]>) -> CorsLayer {
     use axum::http::HeaderName;
 
-    tower_http::cors::CorsLayer::new()
-        .allow_origin(tower_http::cors::Any)
+    let is_production = is_production_environment();
+
+    // Determine origins from parameter, env var, or defaults
+    let origins: Vec<String> = match allowed_origins {
+        Some(origins) if !origins.is_empty() => origins.to_vec(),
+        _ => std::env::var("TW_CORS_ALLOWED_ORIGINS")
+            .map(|v| {
+                v.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default(),
+    };
+
+    let allow_origin = if !origins.is_empty() {
+        // Use configured origins
+        let header_values: Vec<HeaderValue> = origins
+            .iter()
+            .filter_map(|origin| {
+                HeaderValue::from_str(origin)
+                    .map_err(|e| {
+                        warn!(
+                            origin = %origin,
+                            error = %e,
+                            "Invalid CORS origin, skipping"
+                        );
+                        e
+                    })
+                    .ok()
+            })
+            .collect();
+
+        if header_values.is_empty() {
+            warn!("No valid CORS origins configured, falling back to restrictive mode");
+            AllowOrigin::predicate(|_, _| false)
+        } else {
+            info!(
+                origins = ?origins,
+                "CORS configured with allowed origins"
+            );
+            AllowOrigin::list(header_values)
+        }
+    } else if is_production {
+        // Production: no CORS (same-origin only)
+        info!("Production mode: CORS disabled (same-origin only). Set TW_CORS_ALLOWED_ORIGINS to enable cross-origin requests.");
+        AllowOrigin::predicate(|_, _| false)
+    } else {
+        // Development: allow any origin
+        info!(
+            "Development mode: CORS allowing any origin. Set TW_CORS_ALLOWED_ORIGINS to restrict."
+        );
+        AllowOrigin::any()
+    };
+
+    CorsLayer::new()
+        .allow_origin(allow_origin)
         .allow_methods([
             axum::http::Method::GET,
             axum::http::Method::POST,
@@ -111,6 +207,7 @@ pub fn cors_layer() -> tower_http::cors::CorsLayer {
             header::AUTHORIZATION,
             header::ACCEPT,
             HeaderName::from_static("x-request-id"),
+            HeaderName::from_static("x-api-key"),
         ])
         .expose_headers([HeaderName::from_static("x-request-id")])
         .max_age(std::time::Duration::from_secs(3600))

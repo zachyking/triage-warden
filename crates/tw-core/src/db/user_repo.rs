@@ -1,6 +1,6 @@
 //! User repository for database operations.
 
-use super::{DbError, DbPool};
+use super::{escape_like_pattern, DbError, DbPool};
 use crate::auth::{Role, User, UserFilter, UserUpdate};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -143,8 +143,9 @@ impl UserRepository for SqliteUserRepository {
         }
 
         if let Some(search) = &filter.search {
-            query.push_str(" AND (username LIKE ? OR email LIKE ? OR display_name LIKE ?)");
-            let pattern = format!("%{}%", search);
+            query.push_str(" AND (username LIKE ? ESCAPE '\\' OR email LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\')");
+            // Escape special LIKE characters to prevent pattern injection
+            let pattern = format!("%{}%", escape_like_pattern(search));
             params.push(pattern.clone());
             params.push(pattern.clone());
             params.push(pattern);
@@ -261,8 +262,9 @@ impl UserRepository for SqliteUserRepository {
         }
 
         if let Some(search) = &filter.search {
-            query.push_str(" AND (username LIKE ? OR email LIKE ? OR display_name LIKE ?)");
-            let pattern = format!("%{}%", search);
+            query.push_str(" AND (username LIKE ? ESCAPE '\\' OR email LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\')");
+            // Escape special LIKE characters to prevent pattern injection
+            let pattern = format!("%{}%", escape_like_pattern(search));
             params.push(pattern.clone());
             params.push(pattern.clone());
             params.push(pattern);
@@ -404,7 +406,8 @@ impl UserRepository for PgUserRepository {
             }
 
             if let Some(search) = &filter.search {
-                let pattern = format!("%{}%", search);
+                // Escape special LIKE characters to prevent pattern injection
+                let pattern = format!("%{}%", escape_like_pattern(search));
                 sqlx_query = sqlx_query.bind(pattern.clone());
                 sqlx_query = sqlx_query.bind(pattern.clone());
                 sqlx_query = sqlx_query.bind(pattern);

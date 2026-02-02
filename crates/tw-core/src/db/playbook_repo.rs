@@ -1,6 +1,6 @@
 //! Playbook repository for database operations.
 
-use super::{DbError, DbPool};
+use super::{escape_like_pattern, DbError, DbPool};
 use crate::playbook::{Playbook, PlaybookStage};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -145,7 +145,7 @@ impl PlaybookRepository for SqlitePlaybookRepository {
         }
 
         if filter.name_contains.is_some() {
-            query.push_str(" AND name LIKE ?");
+            query.push_str(" AND name LIKE ? ESCAPE '\\'");
         }
 
         query.push_str(" ORDER BY created_at DESC");
@@ -161,7 +161,8 @@ impl PlaybookRepository for SqlitePlaybookRepository {
         }
 
         if let Some(name_contains) = &filter.name_contains {
-            query_builder = query_builder.bind(format!("%{}%", name_contains));
+            // Escape special LIKE characters to prevent pattern injection
+            query_builder = query_builder.bind(format!("%{}%", escape_like_pattern(name_contains)));
         }
 
         let rows: Vec<PlaybookRow> = query_builder.fetch_all(&self.pool).await?;

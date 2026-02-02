@@ -7,6 +7,8 @@ use axum::{
     routing::post,
     Json, Router,
 };
+use tracing::warn;
+use tw_core::is_production_environment;
 use validator::Validate;
 
 use crate::dto::{WebhookAcceptedResponse, WebhookAlertPayload};
@@ -40,10 +42,8 @@ async fn receive_alert(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<(StatusCode, Json<WebhookAcceptedResponse>), ApiError> {
-    // Validate signature if configured
-    if let Some(secret) = state.webhook_secrets.get("default") {
-        validate_webhook_signature(&headers, &body, secret)?;
-    }
+    // Validate webhook signature
+    validate_webhook_with_config(&state, "default", &headers, &body)?;
 
     // Parse payload
     let payload: WebhookAlertPayload = serde_json::from_slice(&body)?;
@@ -108,10 +108,8 @@ async fn receive_alert_from_source(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<(StatusCode, Json<WebhookAcceptedResponse>), ApiError> {
-    // Validate source-specific signature
-    if let Some(secret) = state.webhook_secrets.get(&source) {
-        validate_webhook_signature(&headers, &body, secret)?;
-    }
+    // Validate source-specific webhook signature
+    validate_webhook_with_config(&state, &source, &headers, &body)?;
 
     // Parse payload
     let mut payload: WebhookAlertPayload = serde_json::from_slice(&body)?;
@@ -157,6 +155,62 @@ async fn receive_alert_from_source(
     ))
 }
 
+/// Validates webhook signature based on environment and configuration.
+///
+/// # Behavior
+///
+/// - **Production**: Signatures are REQUIRED. If no webhook secret is configured,
+///   the request is rejected with a 403 Forbidden error.
+/// - **Development**: Signatures are optional. If no secret is configured,
+///   a warning is logged but the request is allowed to proceed.
+///
+/// This can be overridden with the `TW_WEBHOOK_REQUIRE_SIGNATURE` env var:
+/// - `true` or `1`: Always require signatures
+/// - `false` or `0`: Never require signatures (NOT RECOMMENDED)
+fn validate_webhook_with_config(
+    state: &AppState,
+    source: &str,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<(), ApiError> {
+    let secret = state.webhook_secrets.get(source);
+    let is_production = is_production_environment();
+
+    // Check for explicit override
+    let require_signature = std::env::var("TW_WEBHOOK_REQUIRE_SIGNATURE")
+        .map(|v| v.to_lowercase() == "true" || v == "1")
+        .unwrap_or(is_production);
+
+    match secret {
+        Some(secret) => {
+            // Secret is configured - validate signature
+            validate_webhook_signature(headers, body, secret)
+        }
+        None => {
+            if require_signature {
+                // Production (or explicit requirement): reject unsigned webhooks
+                warn!(
+                    source = %source,
+                    "Webhook rejected: no secret configured for source in production"
+                );
+                Err(ApiError::Forbidden(
+                    "Webhook signature validation is required but no secret is configured. \
+                     Configure a webhook secret for this source."
+                        .to_string(),
+                ))
+            } else {
+                // Development: allow but warn
+                warn!(
+                    source = %source,
+                    "Accepting webhook without signature validation (development mode). \
+                     Configure a webhook secret for production use."
+                );
+                Ok(())
+            }
+        }
+    }
+}
+
 /// Validates the webhook signature from headers.
 fn validate_webhook_signature(
     headers: &HeaderMap,
@@ -175,11 +229,13 @@ fn validate_webhook_signature(
             if validate_signature(body, sig, secret) {
                 Ok(())
             } else {
+                warn!("Webhook signature verification failed");
                 Err(ApiError::InvalidSignature)
             }
         }
         None => {
             // If no signature header but secret is configured, that's an error
+            warn!("Webhook missing signature header");
             Err(ApiError::InvalidSignature)
         }
     }

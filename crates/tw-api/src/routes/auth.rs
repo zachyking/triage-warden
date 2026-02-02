@@ -1,17 +1,20 @@
 //! Authentication routes for login and logout.
 
 use axum::{
-    extract::State,
+    extract::{ConnectInfo, State},
+    http::StatusCode,
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
     Form, Router,
 };
 use serde::Deserialize;
+use std::net::SocketAddr;
 use tower_sessions::Session;
 use tracing::{info, warn};
 use tw_core::{auth::SessionData, db::create_user_repository, verify_password};
 
 use crate::auth::{clear_session, set_session_data, validate_csrf_token};
+use crate::rate_limit::RateLimitError;
 use crate::state::AppState;
 use crate::web::HtmlTemplate;
 
@@ -58,9 +61,37 @@ async fn login_page(session: Session) -> impl IntoResponse {
 /// Handles login form submission.
 async fn login_submit(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     session: Session,
     Form(form): Form<LoginForm>,
 ) -> Response {
+    let client_ip = addr.ip();
+
+    // Check rate limits first (before any other validation)
+    if let Err(e) = state.login_rate_limiter.check(client_ip) {
+        warn!(
+            ip = %client_ip,
+            username = %form.username,
+            "Login rate limited"
+        );
+        return match e {
+            RateLimitError::PerIpLimitExceeded => {
+                render_rate_limit_error(
+                    "Too many login attempts. Please wait a minute and try again.".to_string(),
+                    &session,
+                )
+                .await
+            }
+            RateLimitError::GlobalLimitExceeded => {
+                render_rate_limit_error(
+                    "Server is experiencing high traffic. Please try again later.".to_string(),
+                    &session,
+                )
+                .await
+            }
+        };
+    }
+
     // Validate CSRF token
     let stored_csrf: Option<String> = session.get("login_csrf").await.ok().flatten();
     if let Some(stored) = &stored_csrf {
@@ -89,7 +120,11 @@ async fn login_submit(
             match user_repo.get_by_email(&form.username).await {
                 Ok(Some(user)) => user,
                 Ok(None) => {
-                    warn!("Login attempt for unknown user: {}", form.username);
+                    warn!(
+                        ip = %client_ip,
+                        username = %form.username,
+                        "Login attempt for unknown user"
+                    );
                     return render_login_error(
                         "Invalid username or password.".to_string(),
                         &session,
@@ -118,7 +153,11 @@ async fn login_submit(
 
     // Check if account is enabled
     if !user.enabled {
-        warn!("Login attempt for disabled account: {}", user.username);
+        warn!(
+            ip = %client_ip,
+            username = %user.username,
+            "Login attempt for disabled account"
+        );
         return render_login_error("This account has been disabled.".to_string(), &session).await;
     }
 
@@ -128,7 +167,11 @@ async fn login_submit(
             // Password is correct
         }
         Ok(false) => {
-            warn!("Invalid password for user: {}", user.username);
+            warn!(
+                ip = %client_ip,
+                username = %user.username,
+                "Invalid password"
+            );
             return render_login_error("Invalid username or password.".to_string(), &session).await;
         }
         Err(e) => {
@@ -139,6 +182,17 @@ async fn login_submit(
             )
             .await;
         }
+    }
+
+    // ============================================
+    // SESSION FIXATION PREVENTION
+    // ============================================
+    // Regenerate session ID after successful authentication to prevent
+    // session fixation attacks. This ensures any pre-authentication
+    // session ID is invalidated.
+    if let Err(e) = session.cycle_id().await {
+        warn!("Failed to regenerate session ID: {}", e);
+        // Continue anyway - this is a defense-in-depth measure
     }
 
     // Create session data
@@ -154,7 +208,12 @@ async fn login_submit(
     // Update last login timestamp
     let _ = user_repo.update_last_login(user.id).await;
 
-    info!("User logged in: {} (role: {})", user.username, user.role);
+    info!(
+        ip = %client_ip,
+        username = %user.username,
+        role = %user.role,
+        "User logged in successfully"
+    );
 
     // Redirect to dashboard
     Redirect::to("/").into_response()
@@ -181,4 +240,19 @@ async fn render_login_error(error: String, session: &Session) -> Response {
         csrf_token,
     })
     .into_response()
+}
+
+/// Helper to render login page with rate limit error (returns 429 status).
+async fn render_rate_limit_error(error: String, session: &Session) -> Response {
+    let csrf_token = crate::auth::generate_csrf_token();
+    let _ = session.insert("login_csrf", &csrf_token).await;
+
+    let body = HtmlTemplate(LoginTemplate {
+        error: Some(error),
+        csrf_token,
+    })
+    .into_response();
+
+    // Return 429 Too Many Requests status
+    (StatusCode::TOO_MANY_REQUESTS, body).into_response()
 }

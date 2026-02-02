@@ -3,6 +3,62 @@
 use super::DbError;
 use std::time::Duration;
 
+/// Escapes special characters in a search pattern for use in SQL LIKE clauses.
+///
+/// SQL LIKE patterns use `%` for any sequence of characters and `_` for any
+/// single character. If user input contains these characters, they should be
+/// escaped to match literally.
+///
+/// # Characters escaped
+///
+/// - `%` -> `\%`
+/// - `_` -> `\_`
+/// - `[` -> `\[` (for databases that support bracket expressions)
+/// - `]` -> `\]`
+/// - `\` -> `\\`
+///
+/// # Example
+///
+/// ```
+/// use tw_core::db::escape_like_pattern;
+///
+/// let user_input = "user_test%";
+/// let escaped = escape_like_pattern(user_input);
+/// assert_eq!(escaped, r"user\_test\%");
+///
+/// // Use in a LIKE query:
+/// // WHERE username LIKE '%' || $1 || '%' ESCAPE '\'
+/// ```
+pub fn escape_like_pattern(pattern: &str) -> String {
+    let mut escaped = String::with_capacity(pattern.len() * 2);
+    for c in pattern.chars() {
+        match c {
+            '%' | '_' | '[' | ']' | '\\' => {
+                escaped.push('\\');
+                escaped.push(c);
+            }
+            _ => escaped.push(c),
+        }
+    }
+    escaped
+}
+
+/// Creates a LIKE pattern that matches anywhere in the string.
+///
+/// Escapes the search term and wraps it with `%` wildcards.
+///
+/// # Example
+///
+/// ```
+/// use tw_core::db::make_like_pattern;
+///
+/// let pattern = make_like_pattern("test_user");
+/// assert_eq!(pattern, r"%test\_user%");
+/// ```
+pub fn make_like_pattern(search: &str) -> String {
+    format!("%{}%", escape_like_pattern(search))
+}
+
 #[cfg(feature = "database")]
 use sqlx::{Pool, Postgres, Sqlite};
 
@@ -35,10 +91,26 @@ pub struct PoolOptions {
 
 impl Default for PoolOptions {
     fn default() -> Self {
+        // Parse from environment variables with production-ready defaults
+        let max_connections = std::env::var("DATABASE_MAX_CONNECTIONS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(50); // Increased from 10 for production workloads
+
+        let min_connections = std::env::var("DATABASE_MIN_CONNECTIONS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(5); // Increased from 1 to maintain warm connections
+
+        let acquire_timeout_secs = std::env::var("DATABASE_ACQUIRE_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30);
+
         Self {
-            max_connections: 10,
-            min_connections: 1,
-            acquire_timeout: Duration::from_secs(30),
+            max_connections,
+            min_connections,
+            acquire_timeout: Duration::from_secs(acquire_timeout_secs),
             max_lifetime: Some(Duration::from_secs(1800)), // 30 minutes
             idle_timeout: Some(Duration::from_secs(600)),  // 10 minutes
         }
@@ -117,6 +189,16 @@ pub async fn create_pool_with_options(
 }
 
 #[cfg(feature = "database")]
+impl Clone for DbPool {
+    fn clone(&self) -> Self {
+        match self {
+            DbPool::Sqlite(pool) => DbPool::Sqlite(pool.clone()),
+            DbPool::Postgres(pool) => DbPool::Postgres(pool.clone()),
+        }
+    }
+}
+
+#[cfg(feature = "database")]
 impl DbPool {
     /// Returns the database type as a string.
     pub fn db_type(&self) -> &'static str {
@@ -156,5 +238,66 @@ impl DbPool {
             DbPool::Sqlite(pool) => pool.num_idle(),
             DbPool::Postgres(pool) => pool.num_idle(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_escape_like_pattern_no_special() {
+        assert_eq!(escape_like_pattern("hello"), "hello");
+        assert_eq!(escape_like_pattern("test123"), "test123");
+        assert_eq!(escape_like_pattern(""), "");
+    }
+
+    #[test]
+    fn test_escape_like_pattern_percent() {
+        assert_eq!(escape_like_pattern("100%"), r"100\%");
+        assert_eq!(escape_like_pattern("%test%"), r"\%test\%");
+    }
+
+    #[test]
+    fn test_escape_like_pattern_underscore() {
+        assert_eq!(escape_like_pattern("user_name"), r"user\_name");
+        assert_eq!(escape_like_pattern("_private"), r"\_private");
+    }
+
+    #[test]
+    fn test_escape_like_pattern_brackets() {
+        assert_eq!(escape_like_pattern("[a-z]"), r"\[a-z\]");
+    }
+
+    #[test]
+    fn test_escape_like_pattern_backslash() {
+        assert_eq!(escape_like_pattern(r"c:\path"), r"c:\\path");
+    }
+
+    #[test]
+    fn test_escape_like_pattern_mixed() {
+        assert_eq!(
+            escape_like_pattern("test_user%[admin]"),
+            r"test\_user\%\[admin\]"
+        );
+    }
+
+    #[test]
+    fn test_make_like_pattern() {
+        assert_eq!(make_like_pattern("test"), "%test%");
+        assert_eq!(make_like_pattern("user_"), r"%user\_%");
+        assert_eq!(make_like_pattern("100%"), r"%100\%%");
+    }
+
+    #[test]
+    fn test_pool_options_default() {
+        // Clear env vars to test defaults
+        std::env::remove_var("DATABASE_MAX_CONNECTIONS");
+        std::env::remove_var("DATABASE_MIN_CONNECTIONS");
+        std::env::remove_var("DATABASE_ACQUIRE_TIMEOUT_SECS");
+
+        let opts = PoolOptions::default();
+        assert_eq!(opts.max_connections, 50);
+        assert_eq!(opts.min_connections, 5);
     }
 }

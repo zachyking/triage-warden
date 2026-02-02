@@ -115,6 +115,44 @@ impl MetricsCollector {
         );
         describe_histogram!("tw_llm_latency_seconds", "LLM API call latency");
         describe_histogram!("tw_action_duration_seconds", "Action execution duration");
+
+        // Database metrics
+        describe_gauge!(
+            "tw_db_pool_size",
+            "Current number of connections in the database pool"
+        );
+        describe_gauge!(
+            "tw_db_pool_idle",
+            "Number of idle connections in the database pool"
+        );
+        describe_counter!(
+            "tw_db_pool_exhausted_total",
+            "Number of times the connection pool was exhausted"
+        );
+        describe_histogram!(
+            "tw_db_query_duration_seconds",
+            "Duration of database queries"
+        );
+        describe_counter!(
+            "tw_db_queries_total",
+            "Total number of database queries executed"
+        );
+        describe_counter!("tw_db_errors_total", "Total number of database errors");
+        describe_counter!(
+            "tw_db_retries_total",
+            "Total number of database query retries"
+        );
+
+        // Security metrics
+        describe_counter!("tw_login_attempts_total", "Total number of login attempts");
+        describe_counter!(
+            "tw_rate_limit_exceeded_total",
+            "Total number of rate limit exceeded events"
+        );
+        describe_counter!(
+            "tw_api_key_auth_total",
+            "Total number of API key authentications"
+        );
     }
 
     /// Records an alert received.
@@ -228,6 +266,59 @@ impl MetricsCollector {
     /// Records pending approvals count.
     pub fn record_pending_approvals(&self, count: usize) {
         gauge!("tw_pending_approvals").set(count as f64);
+    }
+
+    // Database metrics
+
+    /// Records database pool size.
+    pub fn record_db_pool_size(&self, size: u32) {
+        gauge!("tw_db_pool_size").set(size as f64);
+    }
+
+    /// Records database pool idle connections.
+    pub fn record_db_pool_idle(&self, idle: u32) {
+        gauge!("tw_db_pool_idle").set(idle as f64);
+    }
+
+    /// Records a database pool exhausted event.
+    pub fn record_db_pool_exhausted(&self) {
+        counter!("tw_db_pool_exhausted_total").increment(1);
+    }
+
+    /// Records database query duration.
+    pub fn record_db_query_duration(&self, operation: &str, duration_secs: f64) {
+        histogram!("tw_db_query_duration_seconds", "operation" => operation.to_string())
+            .record(duration_secs);
+        counter!("tw_db_queries_total", "operation" => operation.to_string()).increment(1);
+    }
+
+    /// Records a database error.
+    pub fn record_db_error(&self, error_type: &str) {
+        counter!("tw_db_errors_total", "type" => error_type.to_string()).increment(1);
+    }
+
+    /// Records a database retry.
+    pub fn record_db_retry(&self, operation: &str, attempt: u32) {
+        counter!("tw_db_retries_total", "operation" => operation.to_string(), "attempt" => attempt.to_string()).increment(1);
+    }
+
+    // Security metrics
+
+    /// Records a login attempt.
+    pub fn record_login_attempt(&self, success: bool) {
+        let status = if success { "success" } else { "failure" };
+        counter!("tw_login_attempts_total", "status" => status).increment(1);
+    }
+
+    /// Records a rate limit exceeded event.
+    pub fn record_rate_limit_exceeded(&self, endpoint: &str) {
+        counter!("tw_rate_limit_exceeded_total", "endpoint" => endpoint.to_string()).increment(1);
+    }
+
+    /// Records an API key authentication.
+    pub fn record_api_key_auth(&self, success: bool) {
+        let status = if success { "success" } else { "failure" };
+        counter!("tw_api_key_auth_total", "status" => status).increment(1);
     }
 
     /// Calculates current KPIs.

@@ -14,13 +14,17 @@ use tower_http::trace::TraceLayer;
 use tower_sessions::{cookie::SameSite, Expiry, SessionManagerLayer};
 use tower_sessions_sqlx_store::SqliteStore;
 use tracing::{info, warn};
+use tw_core::is_production_environment;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 #[allow(unused_imports)]
 use crate::dto::*;
 use crate::error::ErrorResponse;
-use crate::middleware::{cors_layer, request_id, request_logging, security_headers};
+use crate::middleware::{
+    cors_layer_with_origins, request_body_limit_layer, request_id, request_logging,
+    security_headers,
+};
 use crate::routes;
 use crate::state::AppState;
 use crate::web;
@@ -41,19 +45,50 @@ pub struct ApiServerConfig {
     /// Session expiry in seconds.
     pub session_expiry_seconds: i64,
     /// Whether to require secure cookies (HTTPS only).
+    /// Defaults to true in production environments.
     pub session_secure: bool,
+    /// CORS allowed origins.
+    /// If empty, defaults to same-origin in production.
+    pub cors_allowed_origins: Vec<String>,
 }
 
 impl Default for ApiServerConfig {
     fn default() -> Self {
+        let is_production = is_production_environment();
+
+        // In production, default to secure settings
+        let session_secure = std::env::var("TW_SESSION_SECURE")
+            .map(|v| v.to_lowercase() == "true" || v == "1")
+            .unwrap_or(is_production);
+
+        // In production, disable Swagger by default
+        let enable_swagger = std::env::var("TW_ENABLE_SWAGGER")
+            .map(|v| v.to_lowercase() == "true" || v == "1")
+            .unwrap_or(!is_production);
+
+        // Parse CORS allowed origins from environment
+        let cors_allowed_origins = std::env::var("TW_CORS_ALLOWED_ORIGINS")
+            .map(|v| v.split(',').map(|s| s.trim().to_string()).collect())
+            .unwrap_or_default();
+
+        // Warn about insecure session cookies in production
+        if is_production && !session_secure {
+            warn!(
+                "TW_SESSION_SECURE is explicitly set to false in production. \
+                 This is insecure and not recommended. Session cookies will be \
+                 transmitted over unencrypted connections."
+            );
+        }
+
         Self {
             bind_address: SocketAddr::from(([0, 0, 0, 0], 8080)),
             request_timeout: Duration::from_secs(30),
-            enable_swagger: true,
+            enable_swagger,
             shutdown_timeout: Duration::from_secs(30),
             session_cookie_name: "tw_session".to_string(),
             session_expiry_seconds: 24 * 60 * 60, // 24 hours
-            session_secure: false,                // Set to true in production with HTTPS
+            session_secure,
+            cors_allowed_origins,
         }
     }
 }
@@ -214,8 +249,12 @@ impl ApiServer {
             .layer(middleware::from_fn(request_id))
             // Tracing
             .layer(TraceLayer::new_for_http())
-            // CORS
-            .layer(cors_layer())
+            // Request body size limit
+            .layer(request_body_limit_layer())
+            // CORS (with configured origins)
+            .layer(cors_layer_with_origins(Some(
+                &self.config.cors_allowed_origins,
+            )))
             // Catch panics and return 500
             .layer(CatchPanicLayer::new());
 
@@ -246,9 +285,14 @@ impl ApiServer {
 
         let listener = TcpListener::bind(addr).await?;
 
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal())
-            .await?;
+        // Use into_make_service_with_connect_info to provide client IP addresses
+        // to handlers via the ConnectInfo extractor
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
         info!("API server shut down gracefully");
         Ok(())
@@ -266,9 +310,14 @@ impl ApiServer {
 
         let listener = TcpListener::bind(addr).await?;
 
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown)
-            .await?;
+        // Use into_make_service_with_connect_info to provide client IP addresses
+        // to handlers via the ConnectInfo extractor
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown)
+        .await?;
 
         info!("API server shut down gracefully");
         Ok(())

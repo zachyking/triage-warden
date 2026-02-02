@@ -6,6 +6,7 @@
 use crate::config::AppConfig;
 use colored::Colorize;
 use std::path::Path;
+use tw_core::is_production_environment;
 
 /// Result of configuration validation.
 #[derive(Debug, Default)]
@@ -336,19 +337,7 @@ impl ConfigValidator {
     }
 }
 
-/// Determines if we're running in a production environment.
-fn is_production_environment() -> bool {
-    // Check common production indicators
-    std::env::var("TW_ENV")
-        .map(|v| v.to_lowercase() == "production" || v.to_lowercase() == "prod")
-        .unwrap_or(false)
-        || std::env::var("NODE_ENV")
-            .map(|v| v.to_lowercase() == "production")
-            .unwrap_or(false)
-        || std::env::var("RUST_ENV")
-            .map(|v| v.to_lowercase() == "production")
-            .unwrap_or(false)
-}
+// Note: is_production_environment() is imported from tw_core
 
 #[cfg(test)]
 mod tests {

@@ -4,8 +4,10 @@ use metrics_exporter_prometheus::PrometheusHandle;
 use std::sync::Arc;
 use tracing::info;
 use tw_core::db::DbPool;
-use tw_core::{create_encryptor, CredentialEncryptor, EventBus};
+use tw_core::{create_encryptor_or_panic, CredentialEncryptor, EventBus};
 use tw_policy::{KillSwitch, PolicyEngine};
+
+use crate::rate_limit::LoginRateLimiter;
 
 /// Shared application state.
 #[derive(Clone)]
@@ -24,6 +26,8 @@ pub struct AppState {
     pub kill_switch: Arc<KillSwitch>,
     /// Credential encryptor for securing sensitive data at rest.
     pub encryptor: Arc<dyn CredentialEncryptor>,
+    /// Login rate limiter for protecting against brute force attacks.
+    pub login_rate_limiter: LoginRateLimiter,
 }
 
 impl AppState {
@@ -42,7 +46,8 @@ impl AppState {
             policy_engine: Arc::new(policy_engine),
             prometheus_handle: None,
             kill_switch: Arc::new(KillSwitch::new()),
-            encryptor: create_encryptor(),
+            encryptor: create_encryptor_or_panic(),
+            login_rate_limiter: LoginRateLimiter::default(),
         }
     }
 

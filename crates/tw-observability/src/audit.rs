@@ -77,6 +77,45 @@ pub enum AuditEventType {
     ApiAccess,
     /// Data export.
     DataExport,
+
+    // Security events
+    /// Successful login attempt.
+    LoginSuccess,
+    /// Failed login attempt.
+    LoginFailure,
+    /// API key created.
+    ApiKeyCreated,
+    /// API key revoked.
+    ApiKeyRevoked,
+    /// API key used for authentication.
+    ApiKeyUsed,
+    /// Permission denied (403).
+    PermissionDenied,
+    /// Rate limit exceeded (429).
+    RateLimitExceeded,
+    /// Session created.
+    SessionCreated,
+    /// Session expired.
+    SessionExpired,
+    /// Session invalidated.
+    SessionInvalidated,
+    /// User account disabled.
+    AccountDisabled,
+    /// User account enabled.
+    AccountEnabled,
+    /// Password changed.
+    PasswordChanged,
+    /// User created.
+    UserCreated,
+    /// User deleted.
+    UserDeleted,
+    /// User role changed.
+    UserRoleChanged,
+    /// Webhook signature validation failed.
+    WebhookSignatureInvalid,
+    /// Suspicious activity detected.
+    SuspiciousActivity,
+
     /// Custom event.
     Custom(String),
 }
@@ -258,6 +297,160 @@ impl AuditLog {
         entries
             .iter()
             .filter(|e| e.actor == actor)
+            .cloned()
+            .collect()
+    }
+
+    /// Logs a security event (convenience method for security-related events).
+    pub async fn log_security_event(
+        &self,
+        event_type: AuditEventType,
+        actor: &str,
+        description: &str,
+        details: serde_json::Value,
+        result: AuditResult,
+    ) {
+        let entry = AuditLogEntry {
+            id: Uuid::new_v4(),
+            timestamp: Utc::now(),
+            event_type,
+            actor: actor.to_string(),
+            incident_id: None,
+            action_id: None,
+            description: description.to_string(),
+            details,
+            result,
+        };
+        self.log(entry).await;
+    }
+
+    /// Logs a login attempt.
+    pub async fn log_login_attempt(&self, username: &str, ip_address: &str, success: bool) {
+        let event_type = if success {
+            AuditEventType::LoginSuccess
+        } else {
+            AuditEventType::LoginFailure
+        };
+        let result = if success {
+            AuditResult::Success
+        } else {
+            AuditResult::Failure("Invalid credentials".to_string())
+        };
+        let description = if success {
+            format!("User '{}' logged in successfully", username)
+        } else {
+            format!("Failed login attempt for user '{}'", username)
+        };
+
+        self.log_security_event(
+            event_type,
+            username,
+            &description,
+            serde_json::json!({
+                "ip_address": ip_address,
+                "username": username,
+            }),
+            result,
+        )
+        .await;
+    }
+
+    /// Logs an API key event.
+    pub async fn log_api_key_event(
+        &self,
+        event_type: AuditEventType,
+        actor: &str,
+        key_prefix: &str,
+        user_id: Option<Uuid>,
+    ) {
+        let description = match &event_type {
+            AuditEventType::ApiKeyCreated => format!("API key '{}' created", key_prefix),
+            AuditEventType::ApiKeyRevoked => format!("API key '{}' revoked", key_prefix),
+            AuditEventType::ApiKeyUsed => {
+                format!("API key '{}' used for authentication", key_prefix)
+            }
+            _ => format!("API key event for '{}'", key_prefix),
+        };
+
+        self.log_security_event(
+            event_type,
+            actor,
+            &description,
+            serde_json::json!({
+                "key_prefix": key_prefix,
+                "user_id": user_id,
+            }),
+            AuditResult::Success,
+        )
+        .await;
+    }
+
+    /// Logs a rate limit exceeded event.
+    pub async fn log_rate_limit_exceeded(&self, ip_address: &str, endpoint: &str) {
+        self.log_security_event(
+            AuditEventType::RateLimitExceeded,
+            ip_address,
+            &format!("Rate limit exceeded for endpoint '{}'", endpoint),
+            serde_json::json!({
+                "ip_address": ip_address,
+                "endpoint": endpoint,
+            }),
+            AuditResult::Denied("Rate limit exceeded".to_string()),
+        )
+        .await;
+    }
+
+    /// Logs a permission denied event.
+    pub async fn log_permission_denied(
+        &self,
+        actor: &str,
+        resource: &str,
+        required_permission: &str,
+    ) {
+        self.log_security_event(
+            AuditEventType::PermissionDenied,
+            actor,
+            &format!(
+                "Permission denied for resource '{}', required: {}",
+                resource, required_permission
+            ),
+            serde_json::json!({
+                "resource": resource,
+                "required_permission": required_permission,
+            }),
+            AuditResult::Denied(format!("Missing permission: {}", required_permission)),
+        )
+        .await;
+    }
+
+    /// Gets security-related entries (login, API key, permission events).
+    pub async fn get_security_entries(&self) -> Vec<AuditLogEntry> {
+        let entries = self.entries.read().await;
+        entries
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.event_type,
+                    AuditEventType::LoginSuccess
+                        | AuditEventType::LoginFailure
+                        | AuditEventType::ApiKeyCreated
+                        | AuditEventType::ApiKeyRevoked
+                        | AuditEventType::ApiKeyUsed
+                        | AuditEventType::PermissionDenied
+                        | AuditEventType::RateLimitExceeded
+                        | AuditEventType::SessionCreated
+                        | AuditEventType::SessionExpired
+                        | AuditEventType::SessionInvalidated
+                        | AuditEventType::AccountDisabled
+                        | AuditEventType::AccountEnabled
+                        | AuditEventType::PasswordChanged
+                        | AuditEventType::UserCreated
+                        | AuditEventType::UserDeleted
+                        | AuditEventType::UserRoleChanged
+                        | AuditEventType::WebhookSignatureInvalid
+                        | AuditEventType::SuspiciousActivity
+                )
+            })
             .cloned()
             .collect()
     }

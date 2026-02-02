@@ -135,38 +135,116 @@ impl CredentialEncryptor for PlaintextEncryptor {
     }
 }
 
+/// Determines if we're running in a production environment.
+///
+/// Checks `TW_ENV`, `NODE_ENV`, and `ENVIRONMENT` environment variables
+/// for production/prod values.
+pub fn is_production_environment() -> bool {
+    std::env::var("TW_ENV")
+        .map(|v| v.to_lowercase() == "production" || v.to_lowercase() == "prod")
+        .unwrap_or(false)
+        || std::env::var("NODE_ENV")
+            .map(|v| v.to_lowercase() == "production" || v.to_lowercase() == "prod")
+            .unwrap_or(false)
+        || std::env::var("ENVIRONMENT")
+            .map(|v| v.to_lowercase() == "production" || v.to_lowercase() == "prod")
+            .unwrap_or(false)
+}
+
 /// Creates the appropriate encryptor based on environment configuration.
 ///
 /// Reads the encryption key from the `TW_ENCRYPTION_KEY` environment variable.
 /// The key should be 32 bytes encoded as base64.
 ///
-/// If the environment variable is not set:
-/// - Returns a PlaintextEncryptor and logs a warning (suitable for development)
+/// # Production Mode
+///
+/// In production environments (`TW_ENV=production`), this function will:
+/// - **Fail** if `TW_ENCRYPTION_KEY` is not set
+/// - **Fail** if `TW_ENCRYPTION_KEY` is invalid
+///
+/// This ensures credentials are never stored in plaintext in production.
+///
+/// # Development Mode
+///
+/// In non-production environments, if `TW_ENCRYPTION_KEY` is not set:
+/// - Returns a PlaintextEncryptor and logs a warning
 ///
 /// # Example
 ///
 /// Generate a key with: `openssl rand -base64 32`
-pub fn create_encryptor() -> Arc<dyn CredentialEncryptor> {
+///
+/// # Errors
+///
+/// Returns `Err(CryptoError::InvalidKey)` in production when:
+/// - `TW_ENCRYPTION_KEY` is not set
+/// - `TW_ENCRYPTION_KEY` contains invalid base64
+/// - `TW_ENCRYPTION_KEY` is not exactly 32 bytes when decoded
+pub fn create_encryptor() -> Result<Arc<dyn CredentialEncryptor>, CryptoError> {
+    let is_production = is_production_environment();
+
     match std::env::var("TW_ENCRYPTION_KEY") {
         Ok(key_base64) => match Aes256GcmEncryptor::from_base64_key(&key_base64) {
             Ok(encryptor) => {
                 tracing::info!("Credential encryption enabled with AES-256-GCM");
-                Arc::new(encryptor)
+                Ok(Arc::new(encryptor))
             }
             Err(e) => {
-                tracing::error!("Invalid TW_ENCRYPTION_KEY: {}. Using plaintext storage!", e);
-                Arc::new(PlaintextEncryptor)
+                if is_production {
+                    tracing::error!(
+                        "Invalid TW_ENCRYPTION_KEY in production: {}. \
+                         Refusing to start without valid encryption.",
+                        e
+                    );
+                    Err(CryptoError::InvalidKey(format!(
+                        "Production requires a valid encryption key: {}",
+                        e
+                    )))
+                } else {
+                    tracing::error!(
+                        "Invalid TW_ENCRYPTION_KEY: {}. Using plaintext storage in development!",
+                        e
+                    );
+                    Ok(Arc::new(PlaintextEncryptor))
+                }
             }
         },
         Err(_) => {
-            tracing::warn!(
-                "TW_ENCRYPTION_KEY not set. Credentials will be stored in PLAINTEXT. \
-                 Set this environment variable with a 32-byte base64-encoded key for production. \
-                 Generate a key with: openssl rand -base64 32"
-            );
-            Arc::new(PlaintextEncryptor)
+            if is_production {
+                tracing::error!(
+                    "TW_ENCRYPTION_KEY not set in production environment. \
+                     Refusing to start without encryption key. \
+                     Generate a key with: openssl rand -base64 32"
+                );
+                Err(CryptoError::InvalidKey(
+                    "TW_ENCRYPTION_KEY is required in production. \
+                     Set this environment variable with a 32-byte base64-encoded key. \
+                     Generate with: openssl rand -base64 32"
+                        .to_string(),
+                ))
+            } else {
+                tracing::warn!(
+                    "TW_ENCRYPTION_KEY not set. Credentials will be stored in PLAINTEXT. \
+                     This is acceptable for development but NOT for production. \
+                     Set this environment variable with a 32-byte base64-encoded key for production. \
+                     Generate a key with: openssl rand -base64 32"
+                );
+                Ok(Arc::new(PlaintextEncryptor))
+            }
         }
     }
+}
+
+/// Creates the encryptor, panicking on failure in production.
+///
+/// This is a convenience wrapper around `create_encryptor()` that panics
+/// if encryption cannot be initialized in production. Use this in application
+/// startup code where a failed initialization should abort the process.
+///
+/// # Panics
+///
+/// Panics if `create_encryptor()` returns an error (production without valid key).
+pub fn create_encryptor_or_panic() -> Arc<dyn CredentialEncryptor> {
+    create_encryptor().expect("Failed to initialize encryption - check TW_ENCRYPTION_KEY")
 }
 
 /// Generates a random 32-byte encryption key, base64 encoded.
@@ -332,5 +410,95 @@ mod tests {
         // Decrypting with different key should fail
         let result = encryptor2.decrypt(&ciphertext);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_is_production_environment_default() {
+        // Clear all production env vars for this test
+        std::env::remove_var("TW_ENV");
+        std::env::remove_var("NODE_ENV");
+        std::env::remove_var("ENVIRONMENT");
+
+        assert!(!is_production_environment());
+    }
+
+    #[test]
+    fn test_create_encryptor_with_valid_key() {
+        // Set a valid key
+        let key = generate_encryption_key();
+        std::env::set_var("TW_ENCRYPTION_KEY", &key);
+        std::env::remove_var("TW_ENV");
+
+        let result = create_encryptor();
+        assert!(result.is_ok());
+
+        // Clean up
+        std::env::remove_var("TW_ENCRYPTION_KEY");
+    }
+
+    #[test]
+    fn test_create_encryptor_dev_mode_no_key() {
+        // Ensure we're not in production
+        std::env::remove_var("TW_ENV");
+        std::env::remove_var("NODE_ENV");
+        std::env::remove_var("ENVIRONMENT");
+        std::env::remove_var("TW_ENCRYPTION_KEY");
+
+        // In dev mode, should return PlaintextEncryptor (Ok)
+        let result = create_encryptor();
+        assert!(result.is_ok());
+
+        // Verify it's the plaintext encryptor by checking encryption = identity
+        let encryptor = result.unwrap();
+        let plaintext = "test";
+        let encrypted = encryptor.encrypt(plaintext).unwrap();
+        assert_eq!(encrypted, plaintext);
+    }
+
+    #[test]
+    fn test_create_encryptor_production_no_key_fails() {
+        // Set production mode
+        std::env::set_var("TW_ENV", "production");
+        std::env::remove_var("TW_ENCRYPTION_KEY");
+
+        let result = create_encryptor();
+        assert!(result.is_err());
+
+        if let Err(CryptoError::InvalidKey(msg)) = result {
+            assert!(msg.contains("required in production"));
+        } else {
+            panic!("Expected InvalidKey error");
+        }
+
+        // Clean up
+        std::env::remove_var("TW_ENV");
+    }
+
+    #[test]
+    fn test_create_encryptor_production_invalid_key_fails() {
+        // Set production mode with invalid key
+        std::env::set_var("TW_ENV", "production");
+        std::env::set_var("TW_ENCRYPTION_KEY", "not-valid-base64!!!");
+
+        let result = create_encryptor();
+        assert!(result.is_err());
+
+        // Clean up
+        std::env::remove_var("TW_ENV");
+        std::env::remove_var("TW_ENCRYPTION_KEY");
+    }
+
+    #[test]
+    fn test_create_encryptor_production_short_key_fails() {
+        // Set production mode with key that's too short
+        std::env::set_var("TW_ENV", "production");
+        std::env::set_var("TW_ENCRYPTION_KEY", BASE64.encode([0u8; 16])); // Only 16 bytes
+
+        let result = create_encryptor();
+        assert!(result.is_err());
+
+        // Clean up
+        std::env::remove_var("TW_ENV");
+        std::env::remove_var("TW_ENCRYPTION_KEY");
     }
 }
