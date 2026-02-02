@@ -277,6 +277,7 @@ pub struct SettingsTemplate {
     pub policies: Vec<PolicyData>,
     pub rate_limits: RateLimitsData,
     pub notification_channels: Vec<NotificationChannel>,
+    pub llm_settings: LlmSettingsData,
 }
 
 pub struct SettingsData {
@@ -306,6 +307,17 @@ pub struct RateLimitsData {
     pub isolate_host_hour: u32,
     pub disable_user_hour: u32,
     pub block_ip_hour: u32,
+}
+
+/// LLM/AI configuration data for settings template.
+pub struct LlmSettingsData {
+    pub provider: String,
+    pub model: String,
+    pub api_key_set: bool,
+    pub base_url: String,
+    pub max_tokens: u32,
+    pub temperature: f32,
+    pub enabled: bool,
 }
 
 pub struct NotificationChannel {

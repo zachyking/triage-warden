@@ -27,6 +27,46 @@ pub struct RateLimits {
     pub block_ip_hour: u32,
 }
 
+/// LLM (AI) configuration settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmSettings {
+    /// LLM provider (openai, anthropic, local).
+    pub provider: String,
+    /// Model name (e.g., gpt-4-turbo, claude-3-sonnet).
+    pub model: String,
+    /// API key (stored encrypted at rest).
+    #[serde(default)]
+    pub api_key: String,
+    /// API base URL (for local/custom providers).
+    #[serde(default)]
+    pub base_url: String,
+    /// Maximum tokens for responses.
+    pub max_tokens: u32,
+    /// Temperature for generation (0.0-2.0).
+    pub temperature: f32,
+    /// Whether LLM features are enabled.
+    #[serde(default = "default_llm_enabled")]
+    pub enabled: bool,
+}
+
+fn default_llm_enabled() -> bool {
+    true
+}
+
+impl Default for LlmSettings {
+    fn default() -> Self {
+        Self {
+            provider: "openai".to_string(),
+            model: "gpt-4-turbo".to_string(),
+            api_key: String::new(),
+            base_url: String::new(),
+            max_tokens: 4096,
+            temperature: 0.1,
+            enabled: true,
+        }
+    }
+}
+
 /// Repository trait for settings persistence.
 #[async_trait]
 pub trait SettingsRepository: Send + Sync {
@@ -41,6 +81,12 @@ pub trait SettingsRepository: Send + Sync {
 
     /// Saves rate limit settings.
     async fn save_rate_limits(&self, limits: &RateLimits) -> Result<(), DbError>;
+
+    /// Gets LLM settings.
+    async fn get_llm(&self) -> Result<LlmSettings, DbError>;
+
+    /// Saves LLM settings.
+    async fn save_llm(&self, settings: &LlmSettings) -> Result<(), DbError>;
 
     /// Gets a raw setting value by key.
     async fn get_raw(&self, key: &str) -> Result<Option<String>, DbError>;
@@ -121,6 +167,38 @@ impl SettingsRepository for SqliteSettingsRepository {
             "#,
         )
         .bind("rate_limits")
+        .bind(&value)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn get_llm(&self) -> Result<LlmSettings, DbError> {
+        let row: Option<SettingsRow> =
+            sqlx::query_as("SELECT key, value, updated_at FROM settings WHERE key = ?")
+                .bind("llm")
+                .fetch_optional(&self.pool)
+                .await?;
+
+        match row {
+            Some(row) => Ok(serde_json::from_str(&row.value)?),
+            None => Ok(LlmSettings::default()),
+        }
+    }
+
+    async fn save_llm(&self, settings: &LlmSettings) -> Result<(), DbError> {
+        let value = serde_json::to_string(settings)?;
+        let now = Utc::now().to_rfc3339();
+
+        sqlx::query(
+            r#"
+            INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            "#,
+        )
+        .bind("llm")
         .bind(&value)
         .bind(&now)
         .execute(&self.pool)
@@ -227,6 +305,36 @@ impl SettingsRepository for PgSettingsRepository {
             "#,
         )
         .bind("rate_limits")
+        .bind(&value)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn get_llm(&self) -> Result<LlmSettings, DbError> {
+        let row: Option<PgSettingsRow> =
+            sqlx::query_as("SELECT key, value, updated_at FROM settings WHERE key = $1")
+                .bind("llm")
+                .fetch_optional(&self.pool)
+                .await?;
+
+        match row {
+            Some(row) => Ok(serde_json::from_value(row.value)?),
+            None => Ok(LlmSettings::default()),
+        }
+    }
+
+    async fn save_llm(&self, settings: &LlmSettings) -> Result<(), DbError> {
+        let value = serde_json::to_value(settings)?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, NOW())
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = NOW()
+            "#,
+        )
+        .bind("llm")
         .bind(&value)
         .execute(&self.pool)
         .await?;

@@ -28,7 +28,7 @@ pub use incident_repo::{IncidentFilter, IncidentRepository, IncidentUpdate, Pagi
 pub use notification_repo::NotificationChannelRepository;
 pub use playbook_repo::{PlaybookFilter, PlaybookRepository, PlaybookUpdate};
 pub use policy_repo::{PolicyRepository, PolicyUpdate};
-pub use settings_repo::{GeneralSettings, RateLimits, SettingsRepository};
+pub use settings_repo::{GeneralSettings, LlmSettings, RateLimits, SettingsRepository};
 pub use user_repo::UserRepository;
 
 // Re-export factory functions
