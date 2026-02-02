@@ -288,10 +288,17 @@ pub struct WebhookAcceptedResponse {
 /// Health check response.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct HealthResponse {
+    /// Overall system status: "healthy", "degraded", or "unhealthy"
     pub status: String,
+    /// Application version
     pub version: String,
+    /// Database health status
     pub database: DatabaseHealth,
+    /// Application uptime in seconds
     pub uptime_seconds: u64,
+    /// Component health statuses
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub components: Option<ComponentsHealth>,
 }
 
 /// Database health status.
@@ -300,6 +307,69 @@ pub struct DatabaseHealth {
     pub connected: bool,
     pub pool_size: u32,
     pub idle_connections: usize,
+}
+
+/// Component-level health statuses.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ComponentsHealth {
+    /// Kill switch status
+    pub kill_switch: KillSwitchHealth,
+    /// Connectors health summary
+    pub connectors: ConnectorsHealth,
+    /// LLM configuration status
+    pub llm: LlmHealth,
+    /// Event bus status
+    pub event_bus: EventBusHealth,
+}
+
+/// Kill switch health status.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct KillSwitchHealth {
+    /// Whether the kill switch is active (automation halted)
+    pub active: bool,
+    /// Who activated the kill switch (if active)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activated_by: Option<String>,
+    /// When the kill switch was activated (if active)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activated_at: Option<String>,
+}
+
+/// Connectors health summary.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ConnectorsHealth {
+    /// Total number of configured connectors
+    pub total: u32,
+    /// Number of healthy/connected connectors
+    pub healthy: u32,
+    /// Number of unhealthy/errored connectors
+    pub unhealthy: u32,
+    /// Number of disabled connectors
+    pub disabled: u32,
+    /// List of unhealthy connector names
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unhealthy_connectors: Vec<String>,
+}
+
+/// LLM configuration health status.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct LlmHealth {
+    /// Whether LLM features are enabled
+    pub enabled: bool,
+    /// Whether an API key is configured
+    pub configured: bool,
+    /// The configured provider name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+}
+
+/// Event bus health status.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct EventBusHealth {
+    /// Number of active subscribers
+    pub subscriber_count: usize,
+    /// Whether the event bus is operational
+    pub operational: bool,
 }
 
 // ============================================================================
