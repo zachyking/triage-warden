@@ -342,3 +342,183 @@ async fn reset_password(
 
     Ok(StatusCode::NO_CONTENT)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_user_response_from_user() {
+        use chrono::Utc;
+
+        let user = User {
+            id: Uuid::new_v4(),
+            email: "test@example.com".to_string(),
+            username: "testuser".to_string(),
+            password_hash: "hashed".to_string(),
+            role: Role::Analyst,
+            display_name: Some("Test User".to_string()),
+            enabled: true,
+            last_login_at: Some(Utc::now()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        let response: UserResponse = user.clone().into();
+
+        assert_eq!(response.id, user.id);
+        assert_eq!(response.email, "test@example.com");
+        assert_eq!(response.username, "testuser");
+        assert_eq!(response.role, "analyst");
+        assert_eq!(response.display_name, Some("Test User".to_string()));
+        assert!(response.enabled);
+        assert!(response.last_login_at.is_some());
+    }
+
+    #[test]
+    fn test_user_response_without_optional_fields() {
+        use chrono::Utc;
+
+        let user = User {
+            id: Uuid::new_v4(),
+            email: "minimal@example.com".to_string(),
+            username: "minimal".to_string(),
+            password_hash: "hashed".to_string(),
+            role: Role::Viewer,
+            display_name: None,
+            enabled: true,
+            last_login_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        let response: UserResponse = user.into();
+
+        assert_eq!(response.role, "viewer");
+        assert!(response.display_name.is_none());
+        assert!(response.last_login_at.is_none());
+    }
+
+    #[test]
+    fn test_create_user_request_validation() {
+        // Valid request
+        let valid = CreateUserRequest {
+            email: "valid@example.com".to_string(),
+            username: "validuser".to_string(),
+            password: "StrongP@ss123".to_string(),
+            role: "analyst".to_string(),
+            display_name: None,
+        };
+        assert!(valid.validate().is_ok());
+
+        // Invalid email
+        let invalid_email = CreateUserRequest {
+            email: "not-an-email".to_string(),
+            username: "user".to_string(),
+            password: "StrongP@ss123".to_string(),
+            role: "analyst".to_string(),
+            display_name: None,
+        };
+        assert!(invalid_email.validate().is_err());
+
+        // Username too short
+        let short_username = CreateUserRequest {
+            email: "test@example.com".to_string(),
+            username: "ab".to_string(),
+            password: "StrongP@ss123".to_string(),
+            role: "analyst".to_string(),
+            display_name: None,
+        };
+        assert!(short_username.validate().is_err());
+
+        // Password too short
+        let short_password = CreateUserRequest {
+            email: "test@example.com".to_string(),
+            username: "validuser".to_string(),
+            password: "short".to_string(),
+            role: "analyst".to_string(),
+            display_name: None,
+        };
+        assert!(short_password.validate().is_err());
+    }
+
+    #[test]
+    fn test_update_user_request_validation() {
+        // Valid update
+        let valid = UpdateUserRequest {
+            email: Some("new@example.com".to_string()),
+            username: Some("newuser".to_string()),
+            role: Some("admin".to_string()),
+            display_name: Some("New Name".to_string()),
+            enabled: Some(true),
+        };
+        assert!(valid.validate().is_ok());
+
+        // Empty update is valid
+        let empty = UpdateUserRequest {
+            email: None,
+            username: None,
+            role: None,
+            display_name: None,
+            enabled: None,
+        };
+        assert!(empty.validate().is_ok());
+
+        // Invalid email in update
+        let invalid_email = UpdateUserRequest {
+            email: Some("not-an-email".to_string()),
+            username: None,
+            role: None,
+            display_name: None,
+            enabled: None,
+        };
+        assert!(invalid_email.validate().is_err());
+
+        // Username too short in update
+        let short_username = UpdateUserRequest {
+            email: None,
+            username: Some("ab".to_string()),
+            role: None,
+            display_name: None,
+            enabled: None,
+        };
+        assert!(short_username.validate().is_err());
+    }
+
+    #[test]
+    fn test_reset_password_request_validation() {
+        // Valid password
+        let valid = ResetPasswordRequest {
+            password: "NewStrongP@ss123".to_string(),
+        };
+        assert!(valid.validate().is_ok());
+
+        // Password too short
+        let short = ResetPasswordRequest {
+            password: "short".to_string(),
+        };
+        assert!(short.validate().is_err());
+    }
+
+    #[test]
+    fn test_list_users_query_parsing() {
+        // Test that query parameters can be deserialized
+        let query_str = "role=admin&enabled=true&search=john";
+        let query: ListUsersQuery = serde_urlencoded::from_str(query_str).unwrap();
+
+        assert_eq!(query.role, Some("admin".to_string()));
+        assert_eq!(query.enabled, Some(true));
+        assert_eq!(query.search, Some("john".to_string()));
+    }
+
+    #[test]
+    fn test_role_parsing() {
+        // Valid roles
+        assert!("admin".parse::<Role>().is_ok());
+        assert!("analyst".parse::<Role>().is_ok());
+        assert!("viewer".parse::<Role>().is_ok());
+
+        // Invalid role
+        assert!("invalid_role".parse::<Role>().is_err());
+    }
+}

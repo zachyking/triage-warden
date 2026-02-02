@@ -242,3 +242,196 @@ async fn readiness_check(State(state): State<AppState>) -> axum::http::StatusCod
 async fn liveness_check() -> axum::http::StatusCode {
     axum::http::StatusCode::OK
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+        Router,
+    };
+    use tower::ServiceExt;
+    use tw_core::db::DbPool;
+    use tw_core::EventBus;
+    use uuid::Uuid;
+
+    use crate::state::AppState;
+
+    /// Creates an in-memory SQLite pool for testing.
+    async fn create_test_pool() -> sqlx::SqlitePool {
+        let db_url = format!(
+            "sqlite:file:test_health_{}?mode=memory&cache=shared",
+            Uuid::new_v4()
+        );
+
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(&db_url)
+            .await
+            .expect("Failed to create pool");
+
+        pool
+    }
+
+    /// Creates an AppState with the test pool.
+    async fn create_test_state() -> AppState {
+        let pool = create_test_pool().await;
+        let db = DbPool::Sqlite(pool);
+        let event_bus = EventBus::new(100);
+        AppState::new(db, event_bus)
+    }
+
+    /// Creates a test router with the health routes.
+    async fn create_test_router() -> (Router, AppState) {
+        let state = create_test_state().await;
+        let router = Router::new().merge(routes()).with_state(state.clone());
+        (router, state)
+    }
+
+    #[tokio::test]
+    async fn test_health_check_basic() {
+        let (app, _state) = create_test_router().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: HealthResponse =
+            serde_json::from_slice(&body).expect("Failed to parse response");
+
+        assert!(result.status == "healthy" || result.status == "degraded");
+        assert!(!result.version.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_health_check_detailed() {
+        let (app, _state) = create_test_router().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health/detailed")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        // Parse as generic JSON to check structure without strict typing
+        let result: serde_json::Value =
+            serde_json::from_slice(&body).expect("Failed to parse response");
+
+        // Verify key fields exist
+        assert!(result.get("version").is_some());
+        assert!(result.get("status").is_some());
+        assert!(result.get("database").is_some());
+        assert!(result.get("components").is_some());
+
+        // Check kill switch is not active
+        let components = result.get("components").unwrap();
+        let kill_switch = components.get("kill_switch").unwrap();
+        assert_eq!(kill_switch.get("active").unwrap(), false);
+    }
+
+    #[tokio::test]
+    async fn test_liveness_check() {
+        let (app, _state) = create_test_router().await;
+
+        let response = app
+            .oneshot(Request::builder().uri("/live").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_readiness_check_healthy() {
+        let (app, _state) = create_test_router().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/ready")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_determine_overall_status() {
+        // All healthy
+        assert_eq!(determine_overall_status(true, false, 0, false), "healthy");
+
+        // Database unhealthy
+        assert_eq!(
+            determine_overall_status(false, false, 0, false),
+            "unhealthy"
+        );
+
+        // Kill switch active
+        assert_eq!(determine_overall_status(true, true, 0, false), "halted");
+
+        // Unhealthy connectors
+        assert_eq!(determine_overall_status(true, false, 1, false), "degraded");
+
+        // LLM misconfigured
+        assert_eq!(determine_overall_status(true, false, 0, true), "degraded");
+
+        // Multiple issues - db takes priority
+        assert_eq!(determine_overall_status(false, true, 1, true), "unhealthy");
+
+        // Kill switch takes priority over connectors
+        assert_eq!(determine_overall_status(true, true, 1, false), "halted");
+    }
+
+    #[tokio::test]
+    async fn test_health_response_includes_uptime() {
+        init_start_time();
+        let (app, _state) = create_test_router().await;
+
+        // Small delay to ensure uptime > 0
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: HealthResponse =
+            serde_json::from_slice(&body).expect("Failed to parse response");
+
+        // Just verify uptime is present (u64 is always >= 0)
+        let _ = result.uptime_seconds;
+    }
+}

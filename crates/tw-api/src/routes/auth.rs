@@ -256,3 +256,94 @@ async fn render_rate_limit_error(error: String, session: &Session) -> Response {
     // Return 429 Too Many Requests status
     (StatusCode::TOO_MANY_REQUESTS, body).into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_login_form_parsing() {
+        // Test that login form can be deserialized
+        let form_data = "username=testuser&password=testpass123&csrf_token=abc123";
+        let form: LoginForm = serde_urlencoded::from_str(form_data).unwrap();
+
+        assert_eq!(form.username, "testuser");
+        assert_eq!(form.password, "testpass123");
+        assert_eq!(form.csrf_token, "abc123");
+    }
+
+    #[test]
+    fn test_login_form_with_special_characters() {
+        // Test URL encoded special characters
+        let form_data = "username=test%40example.com&password=p%40ss%21word&csrf_token=xyz";
+        let form: LoginForm = serde_urlencoded::from_str(form_data).unwrap();
+
+        assert_eq!(form.username, "test@example.com");
+        assert_eq!(form.password, "p@ss!word");
+    }
+
+    #[test]
+    fn test_login_template_without_error() {
+        let template = LoginTemplate {
+            error: None,
+            csrf_token: "test-csrf-token".to_string(),
+        };
+
+        // Template should render without panic
+        let rendered = template.render().expect("Template should render");
+
+        // Should contain CSRF token
+        assert!(rendered.contains("test-csrf-token"));
+        // Should not contain error message container with content
+        assert!(!rendered.contains("Invalid"));
+    }
+
+    #[test]
+    fn test_login_template_with_error() {
+        let template = LoginTemplate {
+            error: Some("Invalid username or password.".to_string()),
+            csrf_token: "test-csrf-token".to_string(),
+        };
+
+        let rendered = template.render().expect("Template should render");
+
+        // Should contain the error message
+        assert!(rendered.contains("Invalid username or password."));
+        // Should contain CSRF token
+        assert!(rendered.contains("test-csrf-token"));
+    }
+
+    #[test]
+    fn test_login_template_escapes_html() {
+        let template = LoginTemplate {
+            error: Some("<script>alert('xss')</script>".to_string()),
+            csrf_token: "token".to_string(),
+        };
+
+        let rendered = template.render().expect("Template should render");
+
+        // Should escape HTML - the raw script tag should not appear
+        assert!(!rendered.contains("<script>alert('xss')</script>"));
+        // The escaped version should appear
+        assert!(rendered.contains("&lt;script&gt;") || rendered.contains("&#x3C;script"));
+    }
+
+    #[test]
+    fn test_csrf_token_validation() {
+        use crate::auth::{generate_csrf_token, validate_csrf_token};
+
+        // Generate a token
+        let token = generate_csrf_token();
+
+        // Token should validate against itself
+        assert!(validate_csrf_token(&token, &token));
+
+        // Different tokens should not match
+        let other_token = generate_csrf_token();
+        assert!(!validate_csrf_token(&token, &other_token));
+
+        // Empty tokens should not validate
+        assert!(!validate_csrf_token("", &token));
+        assert!(!validate_csrf_token(&token, ""));
+    }
+}

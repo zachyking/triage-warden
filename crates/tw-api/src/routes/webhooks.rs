@@ -240,3 +240,192 @@ fn validate_webhook_signature(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    type HmacSha256 = Hmac<Sha256>;
+
+    /// Compute HMAC-SHA256 signature for testing.
+    fn compute_test_signature(body: &[u8], secret: &str) -> String {
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(body);
+        hex::encode(mac.finalize().into_bytes())
+    }
+
+    #[test]
+    fn test_validate_signature_x_signature_256() {
+        let body = b"test payload";
+        let secret = "test-secret";
+        let signature = compute_test_signature(body, secret);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Signature-256",
+            format!("sha256={}", signature).parse().unwrap(),
+        );
+
+        let result = validate_webhook_signature(&headers, body, secret);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_signature_x_hub_signature_256() {
+        let body = b"test payload";
+        let secret = "test-secret";
+        let signature = compute_test_signature(body, secret);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Hub-Signature-256",
+            format!("sha256={}", signature).parse().unwrap(),
+        );
+
+        let result = validate_webhook_signature(&headers, body, secret);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_signature_x_webhook_signature() {
+        let body = b"test payload";
+        let secret = "test-secret";
+        let signature = compute_test_signature(body, secret);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Webhook-Signature",
+            format!("sha256={}", signature).parse().unwrap(),
+        );
+
+        let result = validate_webhook_signature(&headers, body, secret);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_signature_invalid() {
+        let body = b"test payload";
+        let secret = "test-secret";
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Signature-256",
+            "sha256=invalid_signature".parse().unwrap(),
+        );
+
+        let result = validate_webhook_signature(&headers, body, secret);
+        assert!(result.is_err());
+        match result {
+            Err(ApiError::InvalidSignature) => {}
+            _ => panic!("Expected InvalidSignature error"),
+        }
+    }
+
+    #[test]
+    fn test_validate_signature_missing_header() {
+        let body = b"test payload";
+        let secret = "test-secret";
+        let headers = HeaderMap::new();
+
+        let result = validate_webhook_signature(&headers, body, secret);
+        assert!(result.is_err());
+        match result {
+            Err(ApiError::InvalidSignature) => {}
+            _ => panic!("Expected InvalidSignature error"),
+        }
+    }
+
+    #[test]
+    fn test_validate_signature_wrong_secret() {
+        let body = b"test payload";
+        let secret = "test-secret";
+        let wrong_secret = "wrong-secret";
+        let signature = compute_test_signature(body, wrong_secret);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Signature-256",
+            format!("sha256={}", signature).parse().unwrap(),
+        );
+
+        let result = validate_webhook_signature(&headers, body, secret);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_webhook_alert_payload_validation() {
+        use crate::dto::WebhookAlertPayload;
+        use chrono::Utc;
+
+        // Valid payload
+        let valid = WebhookAlertPayload {
+            source: "splunk".to_string(),
+            alert_type: "malware".to_string(),
+            severity: Some("high".to_string()),
+            title: "Malware Detected".to_string(),
+            description: Some("Suspicious file detected".to_string()),
+            data: serde_json::json!({"file": "malware.exe"}),
+            timestamp: Some(Utc::now()),
+            tags: vec!["malware".to_string()],
+        };
+        assert!(valid.validate().is_ok());
+
+        // Missing required field: source
+        let missing_source = WebhookAlertPayload {
+            source: "".to_string(),
+            alert_type: "malware".to_string(),
+            severity: Some("high".to_string()),
+            title: "Malware Detected".to_string(),
+            description: None,
+            data: serde_json::json!({}),
+            timestamp: None,
+            tags: vec![],
+        };
+        assert!(missing_source.validate().is_err());
+
+        // Missing required field: alert_type
+        let missing_type = WebhookAlertPayload {
+            source: "splunk".to_string(),
+            alert_type: "".to_string(),
+            severity: Some("high".to_string()),
+            title: "Malware Detected".to_string(),
+            description: None,
+            data: serde_json::json!({}),
+            timestamp: None,
+            tags: vec![],
+        };
+        assert!(missing_type.validate().is_err());
+
+        // Missing required field: title
+        let missing_title = WebhookAlertPayload {
+            source: "splunk".to_string(),
+            alert_type: "malware".to_string(),
+            severity: Some("high".to_string()),
+            title: "".to_string(),
+            description: None,
+            data: serde_json::json!({}),
+            timestamp: None,
+            tags: vec![],
+        };
+        assert!(missing_title.validate().is_err());
+    }
+
+    #[test]
+    fn test_webhook_accepted_response_serialization() {
+        use uuid::Uuid;
+
+        let response = WebhookAcceptedResponse {
+            accepted: true,
+            message: "Alert received".to_string(),
+            alert_id: Some("alert-123".to_string()),
+            incident_id: Some(Uuid::new_v4()),
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"accepted\":true"));
+        assert!(json.contains("\"message\":\"Alert received\""));
+        assert!(json.contains("alert-123"));
+    }
+}
