@@ -391,13 +391,77 @@ pub struct EditConnectorModalTemplate {
     pub connector: EditConnectorData,
 }
 
-#[allow(dead_code)]
+/// Connector data for editing with pre-computed config fields.
 pub struct EditConnectorData {
     pub id: Uuid,
     pub name: String,
     pub connector_type: String,
-    pub config: serde_json::Value,
     pub enabled: bool,
+    // Pre-computed config fields for template use
+    pub api_url: String,
+    pub username: String,
+    pub app: String,
+    pub region: String,
+    pub client_id: String,
+    pub project: String,
+    pub rate_limit: i64,
+    pub tenant_id: String,
+    pub workspace_id: String,
+    pub index_pattern: String,
+    pub domain: String,
+}
+
+impl EditConnectorData {
+    /// Creates EditConnectorData from a connector, pre-computing config values.
+    pub fn from_connector(
+        id: Uuid,
+        name: String,
+        connector_type: String,
+        config: serde_json::Value,
+        enabled: bool,
+    ) -> Self {
+        let get_str = |key: &str| -> String {
+            config
+                .get(key)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
+
+        let get_i64 = |key: &str, default: i64| -> i64 {
+            config.get(key).and_then(|v| v.as_i64()).unwrap_or(default)
+        };
+
+        Self {
+            id,
+            name,
+            connector_type,
+            enabled,
+            api_url: get_str("api_url"),
+            username: get_str("username"),
+            app: config
+                .get("app")
+                .and_then(|v| v.as_str())
+                .unwrap_or("search")
+                .to_string(),
+            region: config
+                .get("region")
+                .and_then(|v| v.as_str())
+                .unwrap_or("us-1")
+                .to_string(),
+            client_id: get_str("client_id"),
+            project: get_str("project"),
+            rate_limit: get_i64("rate_limit", 4),
+            tenant_id: get_str("tenant_id"),
+            workspace_id: get_str("workspace_id"),
+            index_pattern: config
+                .get("index_pattern")
+                .and_then(|v| v.as_str())
+                .unwrap_or("*")
+                .to_string(),
+            domain: get_str("domain"),
+        }
+    }
 }
 
 /// Partial template for connectors grid.

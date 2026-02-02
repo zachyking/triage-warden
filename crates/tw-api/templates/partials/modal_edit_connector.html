@@ -1,7 +1,7 @@
 <div class="modal-backdrop" id="edit-connector-modal">
-  <div class="modal">
+  <div class="modal modal-lg">
     <div class="modal-header">
-      <h2 class="modal-title">Edit Connector</h2>
+      <h2 class="modal-title">Edit Connector: {{ connector.name }}</h2>
       <button class="modal-close" aria-label="Close" onclick="this.closest('.modal-backdrop').remove()">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <path d="M6 18L18 6M6 6l12 12"/>
@@ -9,30 +9,265 @@
       </button>
     </div>
     <form hx-put="/api/connectors/{{ connector.id }}" hx-swap="none"
-          hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); htmx.ajax('GET', '/web/partials/connectors', {target: '#connectors-grid', swap: 'innerHTML'}); }">
+          hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); showToast('success', 'Connector Updated', 'Connector configuration has been saved.'); htmx.ajax('GET', '/web/partials/connectors', {target: '#connectors-grid', swap: 'innerHTML'}); } else { showToast('error', 'Failed to Update', 'Please check your configuration and try again.'); }">
       <div class="modal-body">
-        <div class="form-group">
-          <label class="form-label">Connector Name</label>
-          <input type="text" name="name" class="form-input" value="{{ connector.name }}" required>
+        <div class="grid grid-2 gap-4 mb-4">
+          <div class="form-group">
+            <label class="form-label">Connector Name</label>
+            <input type="text" name="name" class="form-input" value="{{ connector.name }}" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Type</label>
+            <div class="form-input bg-tertiary text-muted">{{ connector.connector_type }}</div>
+          </div>
         </div>
 
-        <div class="form-group">
-          <label class="form-label">Type</label>
-          <input type="text" name="connector_type" class="form-input" value="{{ connector.connector_type }}" readonly>
+        <div class="border-t border-surface pt-4 mb-4">
+          <h3 class="font-semibold mb-3">Connection Settings</h3>
+
+          <div id="edit-connector-fields">
+            {% if connector.connector_type == "splunk" %}
+            <div class="form-group">
+              <label class="form-label">Splunk Host</label>
+              <input type="url" name="api_url" class="form-input" value="{{ connector.api_url }}"
+                     placeholder="https://splunk.company.com:8089">
+            </div>
+            <div class="grid grid-2 gap-4">
+              <div class="form-group">
+                <label class="form-label">Username</label>
+                <input type="text" name="username" class="form-input" value="{{ connector.username }}" placeholder="admin">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Password</label>
+                <input type="password" name="password" class="form-input" placeholder="Leave blank to keep current">
+                <p class="text-xs text-muted mt-1">Leave empty to keep the current password</p>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">App Context</label>
+              <input type="text" name="app" class="form-input" value="{{ connector.app }}" placeholder="search">
+            </div>
+
+            {% else if connector.connector_type == "crowdstrike" %}
+            <div class="form-group">
+              <label class="form-label">API Region</label>
+              <select name="region" class="form-input form-select">
+                <option value="us-1" {% if connector.region == "us-1" %}selected{% endif %}>US-1 (api.crowdstrike.com)</option>
+                <option value="us-2" {% if connector.region == "us-2" %}selected{% endif %}>US-2 (api.us-2.crowdstrike.com)</option>
+                <option value="eu-1" {% if connector.region == "eu-1" %}selected{% endif %}>EU-1 (api.eu-1.crowdstrike.com)</option>
+                <option value="us-gov-1" {% if connector.region == "us-gov-1" %}selected{% endif %}>US-GOV-1 (api.laggar.gcw.crowdstrike.com)</option>
+              </select>
+            </div>
+            <div class="grid grid-2 gap-4">
+              <div class="form-group">
+                <label class="form-label">Client ID</label>
+                <input type="text" name="client_id" class="form-input" value="{{ connector.client_id }}" placeholder="OAuth Client ID">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Client Secret</label>
+                <input type="password" name="client_secret" class="form-input" placeholder="Leave blank to keep current">
+                <p class="text-xs text-muted mt-1">Leave empty to keep the current secret</p>
+              </div>
+            </div>
+
+            {% else if connector.connector_type == "jira" %}
+            <div class="form-group">
+              <label class="form-label">Jira URL</label>
+              <input type="url" name="api_url" class="form-input" value="{{ connector.api_url }}"
+                     placeholder="https://yourcompany.atlassian.net">
+            </div>
+            <div class="grid grid-2 gap-4">
+              <div class="form-group">
+                <label class="form-label">Email</label>
+                <input type="email" name="username" class="form-input" value="{{ connector.username }}" placeholder="user@company.com">
+              </div>
+              <div class="form-group">
+                <label class="form-label">API Token</label>
+                <input type="password" name="api_key" class="form-input" placeholder="Leave blank to keep current">
+                <p class="text-xs text-muted mt-1">Leave empty to keep the current token</p>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Default Project Key</label>
+              <input type="text" name="project" class="form-input" value="{{ connector.project }}" placeholder="SEC">
+            </div>
+
+            {% else if connector.connector_type == "virustotal" %}
+            <div class="form-group">
+              <label class="form-label">API Key</label>
+              <input type="password" name="api_key" class="form-input" placeholder="Leave blank to keep current">
+              <p class="text-xs text-muted mt-1">Leave empty to keep the current API key</p>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Rate Limit (requests/min)</label>
+              <input type="number" name="rate_limit" class="form-input" value="{{ connector.rate_limit }}" min="1" max="500">
+              <p class="text-xs text-muted mt-1">Free tier: 4/min, Premium: 500/min</p>
+            </div>
+
+            {% else if connector.connector_type == "m365" %}
+            <div class="form-group">
+              <label class="form-label">Tenant ID</label>
+              <input type="text" name="tenant_id" class="form-input" value="{{ connector.tenant_id }}" placeholder="Azure AD Tenant ID">
+            </div>
+            <div class="grid grid-2 gap-4">
+              <div class="form-group">
+                <label class="form-label">Client ID</label>
+                <input type="text" name="client_id" class="form-input" value="{{ connector.client_id }}" placeholder="App Registration Client ID">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Client Secret</label>
+                <input type="password" name="client_secret" class="form-input" placeholder="Leave blank to keep current">
+                <p class="text-xs text-muted mt-1">Leave empty to keep the current secret</p>
+              </div>
+            </div>
+
+            {% else if connector.connector_type == "defender" %}
+            <div class="form-group">
+              <label class="form-label">Tenant ID</label>
+              <input type="text" name="tenant_id" class="form-input" value="{{ connector.tenant_id }}" placeholder="Azure AD Tenant ID">
+            </div>
+            <div class="grid grid-2 gap-4">
+              <div class="form-group">
+                <label class="form-label">Client ID</label>
+                <input type="text" name="client_id" class="form-input" value="{{ connector.client_id }}" placeholder="App Registration Client ID">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Client Secret</label>
+                <input type="password" name="client_secret" class="form-input" placeholder="Leave blank to keep current">
+                <p class="text-xs text-muted mt-1">Leave empty to keep the current secret</p>
+              </div>
+            </div>
+
+            {% else if connector.connector_type == "elastic" %}
+            <div class="form-group">
+              <label class="form-label">Elasticsearch URL</label>
+              <input type="url" name="api_url" class="form-input" value="{{ connector.api_url }}"
+                     placeholder="https://elasticsearch.company.com:9200">
+            </div>
+            <div class="grid grid-2 gap-4">
+              <div class="form-group">
+                <label class="form-label">Username</label>
+                <input type="text" name="username" class="form-input" value="{{ connector.username }}" placeholder="elastic">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Password</label>
+                <input type="password" name="password" class="form-input" placeholder="Leave blank to keep current">
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Index Pattern</label>
+              <input type="text" name="index_pattern" class="form-input" value="{{ connector.index_pattern }}" placeholder="security-*">
+            </div>
+
+            {% else if connector.connector_type == "sentinel" %}
+            <div class="form-group">
+              <label class="form-label">Workspace ID</label>
+              <input type="text" name="workspace_id" class="form-input" value="{{ connector.workspace_id }}" placeholder="Log Analytics Workspace ID">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Tenant ID</label>
+              <input type="text" name="tenant_id" class="form-input" value="{{ connector.tenant_id }}" placeholder="Azure AD Tenant ID">
+            </div>
+            <div class="grid grid-2 gap-4">
+              <div class="form-group">
+                <label class="form-label">Client ID</label>
+                <input type="text" name="client_id" class="form-input" value="{{ connector.client_id }}" placeholder="Azure AD App Client ID">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Client Secret</label>
+                <input type="password" name="client_secret" class="form-input" placeholder="Leave blank to keep current">
+              </div>
+            </div>
+
+            {% else if connector.connector_type == "sentinelone" %}
+            <div class="form-group">
+              <label class="form-label">Console URL</label>
+              <input type="url" name="api_url" class="form-input" value="{{ connector.api_url }}"
+                     placeholder="https://usea1-pax8.sentinelone.net">
+            </div>
+            <div class="form-group">
+              <label class="form-label">API Token</label>
+              <input type="password" name="api_key" class="form-input" placeholder="Leave blank to keep current">
+              <p class="text-xs text-muted mt-1">Leave empty to keep the current token</p>
+            </div>
+
+            {% else if connector.connector_type == "servicenow" %}
+            <div class="form-group">
+              <label class="form-label">Instance URL</label>
+              <input type="url" name="api_url" class="form-input" value="{{ connector.api_url }}"
+                     placeholder="https://yourcompany.service-now.com">
+            </div>
+            <div class="grid grid-2 gap-4">
+              <div class="form-group">
+                <label class="form-label">Username</label>
+                <input type="text" name="username" class="form-input" value="{{ connector.username }}">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Password</label>
+                <input type="password" name="password" class="form-input" placeholder="Leave blank to keep current">
+              </div>
+            </div>
+
+            {% else if connector.connector_type == "alienvault" %}
+            <div class="form-group">
+              <label class="form-label">API Key</label>
+              <input type="password" name="api_key" class="form-input" placeholder="Leave blank to keep current">
+              <p class="text-xs text-muted mt-1">AlienVault OTX API Key</p>
+            </div>
+
+            {% else if connector.connector_type == "google" %}
+            <div class="form-group">
+              <label class="form-label">Service Account JSON</label>
+              <textarea name="service_account_json" class="form-input form-textarea font-mono text-sm" rows="4"
+                        placeholder="Paste service account JSON (leave blank to keep current)"></textarea>
+              <p class="text-xs text-muted mt-1">Leave empty to keep the current credentials</p>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Domain</label>
+              <input type="text" name="domain" class="form-input" value="{{ connector.domain }}" placeholder="company.com">
+            </div>
+
+            {% else %}
+            <!-- Default fields for unknown connector types -->
+            <div class="form-group">
+              <label class="form-label">API URL / Host</label>
+              <input type="url" name="api_url" class="form-input" value="{{ connector.api_url }}" placeholder="https://api.example.com">
+            </div>
+            <div class="form-group">
+              <label class="form-label">API Key / Token</label>
+              <input type="password" name="api_key" class="form-input" placeholder="Leave blank to keep current">
+            </div>
+            {% endif %}
+          </div>
         </div>
 
-        <div class="form-group">
-          <div class="flex items-center gap-3">
-            <label class="switch">
-              <input type="checkbox" name="enabled" {% if connector.enabled %}checked{% endif %}>
-              <span class="switch-track"></span>
-              <span class="switch-thumb"></span>
-            </label>
-            <span class="text-sm">Enable connector</span>
+        <div class="border-t border-surface pt-4">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <label class="switch">
+                <input type="checkbox" name="enabled" {% if connector.enabled %}checked{% endif %}>
+                <span class="switch-track"></span>
+                <span class="switch-thumb"></span>
+              </label>
+              <span class="text-sm">Enable connector</span>
+            </div>
+            <button type="button" class="btn btn-secondary btn-sm"
+                    hx-post="/api/connectors/{{ connector.id }}/test"
+                    hx-swap="none"
+                    hx-on::after-request="if(event.detail.successful) { showToast('success', 'Connection Successful', 'Connector is working properly.'); } else { showToast('error', 'Connection Failed', 'Check your credentials and try again.'); }">
+              Test Connection
+            </button>
           </div>
         </div>
       </div>
       <div class="modal-footer">
+        <button type="button" class="btn btn-danger btn-sm mr-auto"
+                hx-delete="/api/connectors/{{ connector.id }}"
+                hx-confirm="Are you sure you want to delete this connector?"
+                hx-swap="none"
+                hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); showToast('success', 'Connector Deleted', 'The connector has been removed.'); htmx.ajax('GET', '/web/partials/connectors', {target: '#connectors-grid', swap: 'innerHTML'}); }">
+          Delete Connector
+        </button>
         <button type="button" class="btn btn-ghost" onclick="this.closest('.modal-backdrop').remove()">Cancel</button>
         <button type="submit" class="btn btn-primary">Save Changes</button>
       </div>
