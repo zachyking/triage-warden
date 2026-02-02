@@ -4,7 +4,7 @@ use metrics_exporter_prometheus::PrometheusHandle;
 use std::sync::Arc;
 use tracing::info;
 use tw_core::db::DbPool;
-use tw_core::EventBus;
+use tw_core::{create_encryptor, CredentialEncryptor, EventBus};
 use tw_policy::{KillSwitch, PolicyEngine};
 
 /// Shared application state.
@@ -22,6 +22,8 @@ pub struct AppState {
     pub prometheus_handle: Option<Arc<PrometheusHandle>>,
     /// Emergency kill switch for halting all automation.
     pub kill_switch: Arc<KillSwitch>,
+    /// Credential encryptor for securing sensitive data at rest.
+    pub encryptor: Arc<dyn CredentialEncryptor>,
 }
 
 impl AppState {
@@ -40,6 +42,7 @@ impl AppState {
             policy_engine: Arc::new(policy_engine),
             prometheus_handle: None,
             kill_switch: Arc::new(KillSwitch::new()),
+            encryptor: create_encryptor(),
         }
     }
 

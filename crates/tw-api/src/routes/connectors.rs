@@ -9,6 +9,7 @@ use axum::{
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use utoipa::ToSchema;
 use uuid::Uuid;
 use validator::Validate;
@@ -17,6 +18,7 @@ use crate::error::ApiError;
 use crate::state::AppState;
 use tw_core::connector::{ConnectorConfig, ConnectorStatus, ConnectorType};
 use tw_core::db::{create_connector_repository, ConnectorRepository, ConnectorUpdate};
+use tw_core::CredentialEncryptor;
 
 /// Creates connector routes.
 pub fn routes() -> Router<AppState> {
@@ -177,7 +179,10 @@ async fn create_connector(
         )
     })?;
 
-    let connector = ConnectorConfig::new(request.name, connector_type, request.config);
+    // Encrypt sensitive fields in the config before storage
+    let encrypted_config = encrypt_sensitive_config(&request.config, &state.encryptor);
+
+    let connector = ConnectorConfig::new(request.name, connector_type, encrypted_config);
     let mut connector = connector;
     if !request.enabled {
         connector.set_enabled(false);
@@ -238,9 +243,14 @@ async fn update_connector(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Connector {} not found", id)))?;
 
+    // Encrypt sensitive fields in the config before storage
+    let encrypted_config = request
+        .config
+        .map(|c| encrypt_sensitive_config(&c, &state.encryptor));
+
     let update = ConnectorUpdate {
         name: request.name,
-        config: request.config,
+        config: encrypted_config,
         enabled: request.enabled,
     };
 
@@ -583,30 +593,21 @@ fn connector_to_response(connector: ConnectorConfig, mask_sensitive: bool) -> Co
 
 /// Masks sensitive fields in configuration JSON.
 fn mask_sensitive_config(config: &serde_json::Value) -> serde_json::Value {
-    let sensitive_fields = [
-        "api_key",
-        "api_token",
-        "token",
-        "secret",
-        "password",
-        "client_secret",
-        "private_key",
-        "service_account_json",
-        "credentials",
-    ];
-
     match config {
         serde_json::Value::Object(map) => {
             let mut masked_map = serde_json::Map::new();
             for (key, value) in map {
                 let lower_key = key.to_lowercase();
-                let is_sensitive = sensitive_fields
+                let is_sensitive = SENSITIVE_FIELDS
                     .iter()
                     .any(|&field| lower_key.contains(field));
 
                 if is_sensitive {
                     if let serde_json::Value::String(s) = value {
-                        masked_map.insert(key.clone(), serde_json::Value::String(mask_api_key(s)));
+                        // Handle encrypted values (strip enc: prefix for masking)
+                        let plain = s.strip_prefix("enc:").unwrap_or(s);
+                        masked_map
+                            .insert(key.clone(), serde_json::Value::String(mask_api_key(plain)));
                     } else {
                         masked_map
                             .insert(key.clone(), serde_json::Value::String("***".to_string()));
@@ -631,6 +632,126 @@ fn mask_api_key(key: &str) -> String {
         format!("{}***{}", &key[..3], &key[key.len() - 3..])
     } else {
         "***".to_string()
+    }
+}
+
+/// Sensitive field names that should be encrypted.
+const SENSITIVE_FIELDS: &[&str] = &[
+    "api_key",
+    "api_token",
+    "token",
+    "secret",
+    "password",
+    "client_secret",
+    "private_key",
+    "service_account_json",
+    "credentials",
+];
+
+/// Encrypts sensitive fields in configuration JSON before storage.
+fn encrypt_sensitive_config(
+    config: &serde_json::Value,
+    encryptor: &Arc<dyn CredentialEncryptor>,
+) -> serde_json::Value {
+    match config {
+        serde_json::Value::Object(map) => {
+            let mut encrypted_map = serde_json::Map::new();
+            for (key, value) in map {
+                let lower_key = key.to_lowercase();
+                let is_sensitive = SENSITIVE_FIELDS
+                    .iter()
+                    .any(|&field| lower_key.contains(field));
+
+                if is_sensitive {
+                    if let serde_json::Value::String(s) = value {
+                        // Only encrypt non-empty strings that aren't already encrypted
+                        if !s.is_empty() && !s.starts_with("enc:") {
+                            match encryptor.encrypt(s) {
+                                Ok(encrypted) => {
+                                    // Prefix with "enc:" to identify encrypted values
+                                    encrypted_map.insert(
+                                        key.clone(),
+                                        serde_json::Value::String(format!("enc:{}", encrypted)),
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        field = key,
+                                        error = %e,
+                                        "Failed to encrypt sensitive field"
+                                    );
+                                    // Keep original value on encryption failure
+                                    encrypted_map.insert(key.clone(), value.clone());
+                                }
+                            }
+                        } else {
+                            // Empty or already encrypted
+                            encrypted_map.insert(key.clone(), value.clone());
+                        }
+                    } else {
+                        encrypted_map.insert(key.clone(), value.clone());
+                    }
+                } else {
+                    // Recursively encrypt nested objects
+                    encrypted_map.insert(key.clone(), encrypt_sensitive_config(value, encryptor));
+                }
+            }
+            serde_json::Value::Object(encrypted_map)
+        }
+        serde_json::Value::Array(arr) => serde_json::Value::Array(
+            arr.iter()
+                .map(|v| encrypt_sensitive_config(v, encryptor))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// Decrypts sensitive fields in configuration JSON after retrieval.
+/// Used when testing connections or when credentials need to be read.
+#[allow(dead_code)] // Will be used when real connector testing is implemented
+fn decrypt_sensitive_config(
+    config: &serde_json::Value,
+    encryptor: &Arc<dyn CredentialEncryptor>,
+) -> serde_json::Value {
+    match config {
+        serde_json::Value::Object(map) => {
+            let mut decrypted_map = serde_json::Map::new();
+            for (key, value) in map {
+                if let serde_json::Value::String(s) = value {
+                    // Check if this is an encrypted value
+                    if let Some(encrypted) = s.strip_prefix("enc:") {
+                        match encryptor.decrypt(encrypted) {
+                            Ok(decrypted) => {
+                                decrypted_map
+                                    .insert(key.clone(), serde_json::Value::String(decrypted));
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    field = key,
+                                    error = %e,
+                                    "Failed to decrypt sensitive field"
+                                );
+                                // Keep encrypted value on decryption failure
+                                decrypted_map.insert(key.clone(), value.clone());
+                            }
+                        }
+                    } else {
+                        decrypted_map.insert(key.clone(), value.clone());
+                    }
+                } else {
+                    // Recursively decrypt nested objects
+                    decrypted_map.insert(key.clone(), decrypt_sensitive_config(value, encryptor));
+                }
+            }
+            serde_json::Value::Object(decrypted_map)
+        }
+        serde_json::Value::Array(arr) => serde_json::Value::Array(
+            arr.iter()
+                .map(|v| decrypt_sensitive_config(v, encryptor))
+                .collect(),
+        ),
+        other => other.clone(),
     }
 }
 
@@ -719,6 +840,95 @@ mod tests {
             Some(ConnectorType::CrowdStrike)
         );
         assert_eq!(parse_connector_type("unknown"), None);
+    }
+
+    #[test]
+    fn test_encrypt_sensitive_config() {
+        use tw_core::Aes256GcmEncryptor;
+
+        let key = [0u8; 32];
+        let encryptor: Arc<dyn CredentialEncryptor> = Arc::new(Aes256GcmEncryptor::new(key));
+
+        let config = serde_json::json!({
+            "api_key": "sk-verysecretkey123",
+            "base_url": "https://api.example.com",
+            "client_secret": "supersecret",
+            "timeout": 30
+        });
+
+        let encrypted = encrypt_sensitive_config(&config, &encryptor);
+
+        // Non-sensitive fields unchanged
+        assert_eq!(encrypted["base_url"], "https://api.example.com");
+        assert_eq!(encrypted["timeout"], 30);
+
+        // Sensitive fields should be encrypted (prefixed with enc:)
+        let api_key = encrypted["api_key"].as_str().unwrap();
+        assert!(api_key.starts_with("enc:"), "api_key should be encrypted");
+
+        let client_secret = encrypted["client_secret"].as_str().unwrap();
+        assert!(
+            client_secret.starts_with("enc:"),
+            "client_secret should be encrypted"
+        );
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_roundtrip() {
+        use tw_core::Aes256GcmEncryptor;
+
+        let key = [42u8; 32];
+        let encryptor: Arc<dyn CredentialEncryptor> = Arc::new(Aes256GcmEncryptor::new(key));
+
+        let config = serde_json::json!({
+            "api_key": "sk-verysecretkey123",
+            "base_url": "https://api.example.com",
+            "nested": {
+                "token": "nested-secret-token"
+            }
+        });
+
+        let encrypted = encrypt_sensitive_config(&config, &encryptor);
+        let decrypted = decrypt_sensitive_config(&encrypted, &encryptor);
+
+        // Verify roundtrip preserves original values
+        assert_eq!(decrypted["api_key"], "sk-verysecretkey123");
+        assert_eq!(decrypted["base_url"], "https://api.example.com");
+        assert_eq!(decrypted["nested"]["token"], "nested-secret-token");
+    }
+
+    #[test]
+    fn test_encrypt_empty_and_already_encrypted() {
+        use tw_core::Aes256GcmEncryptor;
+
+        let key = [0u8; 32];
+        let encryptor: Arc<dyn CredentialEncryptor> = Arc::new(Aes256GcmEncryptor::new(key));
+
+        let config = serde_json::json!({
+            "api_key": "",  // Empty should not be encrypted
+            "token": "enc:already-encrypted-value"  // Already encrypted should be kept as-is
+        });
+
+        let encrypted = encrypt_sensitive_config(&config, &encryptor);
+
+        assert_eq!(encrypted["api_key"], "");
+        assert_eq!(encrypted["token"], "enc:already-encrypted-value");
+    }
+
+    #[test]
+    fn test_mask_encrypted_values() {
+        // Masking should work correctly with encrypted values
+        let config = serde_json::json!({
+            "api_key": "enc:somebase64encryptedvalue==",
+            "base_url": "https://api.example.com"
+        });
+
+        let masked = mask_sensitive_config(&config);
+
+        // Should strip enc: prefix and mask the remaining value
+        assert_eq!(masked["base_url"], "https://api.example.com");
+        // "somebase64encryptedvalue==" has 26 chars, so mask should show first 3 and last 3
+        assert!(masked["api_key"].as_str().unwrap().contains("***"));
     }
 }
 
