@@ -109,14 +109,27 @@ fn map_approval_to_action(approval: &str) -> (PolicyAction, Option<ApprovalLevel
     }
 }
 
+/// Escapes special characters in condition values to prevent policy logic injection.
+fn escape_condition_value(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\'', "\\'")
+        .replace('"', "\\\"")
+}
+
 /// Builds a condition string from type and value.
 fn build_condition(condition_type: &str, condition_value: &str) -> String {
+    let escaped = escape_condition_value(condition_value);
     match condition_type {
-        "severity" => format!("severity == '{}'", condition_value),
-        "action_type" => format!("action_type == '{}'", condition_value),
-        "target_pattern" => format!("target MATCHES '{}'", condition_value),
-        "asset_criticality" => format!("asset_criticality IN ({})", condition_value),
-        _ => format!("{} == '{}'", condition_type, condition_value),
+        "severity" => format!("severity == '{}'", escaped),
+        "action_type" => format!("action_type == '{}'", escaped),
+        "target_pattern" => format!("target MATCHES '{}'", escaped),
+        "asset_criticality" => format!("asset_criticality IN ({})", escaped),
+        _ => format!(
+            "{} == '{}'",
+            escape_condition_value(condition_type),
+            escaped
+        ),
     }
 }
 
@@ -353,6 +366,44 @@ mod tests {
             build_condition("asset_criticality", "critical, high"),
             "asset_criticality IN (critical, high)"
         );
+    }
+
+    #[test]
+    fn test_escape_condition_value() {
+        // Normal values should pass through unchanged
+        assert_eq!(escape_condition_value("critical"), "critical");
+        assert_eq!(escape_condition_value("high"), "high");
+
+        // Single quotes should be escaped
+        assert_eq!(
+            escape_condition_value("high' OR severity == 'low"),
+            "high\\' OR severity == \\'low"
+        );
+
+        // Double quotes should be escaped
+        assert_eq!(escape_condition_value("test\"value"), "test\\\"value");
+
+        // Backslashes should be escaped
+        assert_eq!(escape_condition_value("test\\value"), "test\\\\value");
+
+        // Combined injection attempt
+        assert_eq!(
+            escape_condition_value("high' OR '1'='1"),
+            "high\\' OR \\'1\\'=\\'1"
+        );
+    }
+
+    #[test]
+    fn test_build_condition_escapes_injection() {
+        // Verify that injection attempts are properly escaped
+        let result = build_condition("severity", "high' OR severity == 'low");
+        assert_eq!(result, "severity == 'high\\' OR severity == \\'low'");
+        // The escaped value should have backslash-escaped quotes preventing injection
+        assert!(result.contains("\\'"));
+        // Ensure the injected quotes are escaped (not raw single quotes that would break out)
+        // Raw injection would create: severity == 'high' OR severity == 'low'
+        // Escaped version keeps it as a literal string value
+        assert!(!result.contains("'high' OR"));
     }
 }
 

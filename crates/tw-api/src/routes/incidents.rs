@@ -191,10 +191,17 @@ async fn execute_action(
 
     // Evaluate policy engine for action approval
     let approval_status = if request.skip_policy_check {
+        // Only administrators can skip policy checks
+        if _user.role != tw_core::auth::Role::Admin {
+            return Err(ApiError::Forbidden(
+                "Only administrators can skip policy checks".to_string(),
+            ));
+        }
         tracing::info!(
             incident_id = %id,
             action_type = %request.action_type,
-            "Policy check skipped by request"
+            user = %_user.username,
+            "Policy check skipped by admin request"
         );
         ApprovalStatus::AutoApproved
     } else {
@@ -1435,9 +1442,53 @@ mod tests {
         assert_eq!(result.status, "pending");
     }
 
+    /// Creates a test router with admin authentication for privileged operations.
+    async fn create_admin_test_router() -> (Router, AppState) {
+        let state = create_test_state().await;
+        let router = Router::new()
+            .nest("/api/incidents", routes())
+            .layer(Extension(TestUser::admin()))
+            .with_state(state.clone());
+        (router, state)
+    }
+
     #[tokio::test]
-    async fn test_execute_action_skip_policy_check() {
+    async fn test_execute_action_skip_policy_check_requires_admin() {
+        // Test that analyst cannot use skip_policy_check
         let (app, state) = create_test_router().await;
+
+        let incident = create_test_incident(&state).await;
+
+        let request_body = serde_json::json!({
+            "action_type": "block_ip",
+            "target": {
+                "type": "ip_address",
+                "ip": "10.0.0.1"
+            },
+            "reason": "Block malicious IP",
+            "skip_policy_check": true
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&format!("/api/incidents/{}/actions", incident.id))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(serde_json::to_string(&request_body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Analyst should be forbidden from skipping policy check
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_execute_action_skip_policy_check_admin_allowed() {
+        // Test that admin can use skip_policy_check
+        let (app, state) = create_admin_test_router().await;
 
         let incident = create_test_incident(&state).await;
 

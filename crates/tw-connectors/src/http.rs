@@ -71,6 +71,28 @@ impl HttpClient {
         config: ConnectorConfig,
         rate_limit: Option<RateLimitConfig>,
     ) -> ConnectorResult<Self> {
+        // Warn and enforce restrictions when TLS verification is disabled
+        if !config.verify_tls {
+            warn!(
+                base_url = %config.base_url,
+                connector_name = %config.name,
+                "TLS certificate verification DISABLED - connection is vulnerable to MITM attacks"
+            );
+
+            // In production mode, require explicit override
+            if is_production_environment() {
+                if std::env::var("ALLOW_INSECURE_TLS").as_deref() != Ok("true") {
+                    return Err(ConnectorError::ConfigError(
+                        "TLS verification cannot be disabled in production without setting ALLOW_INSECURE_TLS=true environment variable".into()
+                    ));
+                }
+                warn!(
+                    base_url = %config.base_url,
+                    "ALLOW_INSECURE_TLS override in production - this is a security risk"
+                );
+            }
+        }
+
         let mut builder = Client::builder()
             .timeout(Duration::from_secs(config.timeout_secs))
             .danger_accept_invalid_certs(!config.verify_tls)
@@ -422,6 +444,21 @@ fn rand_jitter() -> Duration {
     std::time::Instant::now().hash(&mut hasher);
     let jitter_ms = hasher.finish() % 100;
     Duration::from_millis(jitter_ms)
+}
+
+/// Checks if the application is running in production mode.
+fn is_production_environment() -> bool {
+    // Check common environment variable patterns for production detection
+    matches!(
+        std::env::var("ENVIRONMENT").as_deref(),
+        Ok("production") | Ok("prod")
+    ) || matches!(
+        std::env::var("RUST_ENV").as_deref(),
+        Ok("production") | Ok("prod")
+    ) || matches!(
+        std::env::var("APP_ENV").as_deref(),
+        Ok("production") | Ok("prod")
+    )
 }
 
 /// Response cache using moka for high-performance async caching.

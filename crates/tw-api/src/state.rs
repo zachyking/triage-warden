@@ -7,7 +7,7 @@ use tw_core::db::DbPool;
 use tw_core::{create_encryptor_or_panic, CredentialEncryptor, EventBus};
 use tw_policy::{KillSwitch, PolicyEngine};
 
-use crate::rate_limit::LoginRateLimiter;
+use crate::rate_limit::{ApiRateLimiter, LoginRateLimiter};
 
 /// Shared application state.
 #[derive(Clone)]
@@ -28,6 +28,8 @@ pub struct AppState {
     pub encryptor: Arc<dyn CredentialEncryptor>,
     /// Login rate limiter for protecting against brute force attacks.
     pub login_rate_limiter: LoginRateLimiter,
+    /// API rate limiter for protecting against excessive API usage.
+    pub api_rate_limiter: ApiRateLimiter,
 }
 
 impl AppState {
@@ -48,6 +50,7 @@ impl AppState {
             kill_switch: Arc::new(KillSwitch::new()),
             encryptor: create_encryptor_or_panic(),
             login_rate_limiter: LoginRateLimiter::default(),
+            api_rate_limiter: ApiRateLimiter::default(),
         }
     }
 

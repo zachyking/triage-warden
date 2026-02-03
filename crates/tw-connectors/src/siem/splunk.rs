@@ -310,6 +310,46 @@ impl SplunkConnector {
             .replace('"', "\\\"")
             .replace('\'', "\\'")
     }
+
+    /// Allowed field names for get_field_values to prevent SPL injection.
+    /// Only these fields can be queried directly - prevents arbitrary SPL command injection.
+    const ALLOWED_FIELD_NAMES: &'static [&'static str] = &[
+        "src_ip",
+        "dest_ip",
+        "src",
+        "dest",
+        "user",
+        "hostname",
+        "host",
+        "action",
+        "status",
+        "severity",
+        "source",
+        "sourcetype",
+        "index",
+        "src_port",
+        "dest_port",
+        "protocol",
+        "signature",
+        "category",
+        "vendor_product",
+        "app",
+        "dvc",
+        "dvc_ip",
+        "user_agent",
+    ];
+
+    /// Validates that a field name is in the allowed list.
+    pub fn validate_field_name(field: &str) -> ConnectorResult<()> {
+        if !Self::ALLOWED_FIELD_NAMES.contains(&field) {
+            return Err(ConnectorError::RequestFailed(format!(
+                "Field '{}' is not in the allowed list. Allowed fields: {:?}",
+                field,
+                Self::ALLOWED_FIELD_NAMES
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -504,6 +544,9 @@ impl SIEMConnector for SplunkConnector {
         timerange: TimeRange,
         limit: usize,
     ) -> ConnectorResult<Vec<String>> {
+        // Validate field name against allowlist to prevent SPL injection
+        Self::validate_field_name(field)?;
+
         // Use stats to get top values for the field
         let query = format!(
             "* | stats count by {} | head {}",

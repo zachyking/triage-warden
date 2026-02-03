@@ -178,32 +178,23 @@ pub struct ApiKey {
 }
 
 impl ApiKey {
+    /// Character set for API key generation (alphanumeric, 62 chars for more entropy).
+    const CHARSET: &'static [u8] =
+        b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
     /// Creates a new API key. Returns the key struct and the raw key value.
     pub fn new(user_id: Uuid, name: impl Into<String>, scopes: Vec<String>) -> (Self, String) {
+        use rand::rngs::OsRng;
         use rand::Rng;
         use sha2::{Digest, Sha256};
 
         // Generate a random key: tw_<prefix>_<secret>
-        let mut rng = rand::thread_rng();
+        // Uses OsRng for cryptographically secure random number generation
         let prefix: String = (0..6)
-            .map(|_| {
-                let idx = rng.gen_range(0..36);
-                if idx < 10 {
-                    (b'0' + idx) as char
-                } else {
-                    (b'a' + idx - 10) as char
-                }
-            })
+            .map(|_| Self::CHARSET[OsRng.gen_range(0..Self::CHARSET.len())] as char)
             .collect();
         let secret: String = (0..32)
-            .map(|_| {
-                let idx = rng.gen_range(0..36);
-                if idx < 10 {
-                    (b'0' + idx) as char
-                } else {
-                    (b'a' + idx - 10) as char
-                }
-            })
+            .map(|_| Self::CHARSET[OsRng.gen_range(0..Self::CHARSET.len())] as char)
             .collect();
 
         let raw_key = format!("tw_{}_{}", prefix, secret);
@@ -268,12 +259,16 @@ pub struct SessionData {
 impl SessionData {
     /// Creates new session data with a fresh CSRF token.
     pub fn new(user: &User) -> Self {
+        use rand::rngs::OsRng;
         use rand::Rng;
 
-        let csrf_token: String = rand::thread_rng()
-            .sample_iter(&rand::distributions::Alphanumeric)
-            .take(32)
-            .map(char::from)
+        // Use OsRng for cryptographically secure CSRF token generation
+        let csrf_token: String = (0..32)
+            .map(|_| {
+                const CHARSET: &[u8] =
+                    b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+                CHARSET[OsRng.gen_range(0..CHARSET.len())] as char
+            })
             .collect();
 
         Self {
