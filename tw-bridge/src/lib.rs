@@ -327,7 +327,7 @@ impl ThreatIntelBridge {
                         name: "virustotal".to_string(),
                         base_url: "https://www.virustotal.com".to_string(),
                         auth: AuthConfig::ApiKey {
-                            key: api_key,
+                            key: api_key.into(),
                             header_name: "x-apikey".to_string(),
                         },
                         timeout_secs: 30,
@@ -576,7 +576,9 @@ impl SIEMBridge {
                     connector: ConnectorConfig {
                         name: "splunk".to_string(),
                         base_url: url,
-                        auth: AuthConfig::BearerToken { token },
+                        auth: AuthConfig::BearerToken {
+                            token: token.into(),
+                        },
                         timeout_secs: 30,
                         max_retries: 3,
                         verify_tls: true,
@@ -725,10 +727,7 @@ impl SIEMBridge {
         let connector = Arc::clone(&self.connector);
 
         let result = get_runtime()
-            .block_on(async move {
-                use tw_connectors::traits::Connector;
-                connector.health_check().await
-            })
+            .block_on(async move { connector.health_check().await })
             .map_err(connector_error_to_py)?;
 
         pythonize::pythonize(py, &result)
@@ -807,7 +806,7 @@ fn create_crowdstrike_connector() -> PyResult<CrowdStrikeConnector> {
             base_url: base_url.to_string(),
             auth: AuthConfig::OAuth2 {
                 client_id,
-                client_secret,
+                client_secret: client_secret.into(),
                 token_url,
                 scopes: vec![
                     "hosts:read".to_string(),
@@ -1094,10 +1093,7 @@ impl EDRBridge {
         let connector = Arc::clone(&self.connector);
 
         let result = get_runtime()
-            .block_on(async move {
-                use tw_connectors::traits::Connector;
-                connector.health_check().await
-            })
+            .block_on(async move { connector.health_check().await })
             .map_err(connector_error_to_py)?;
 
         pythonize::pythonize(py, &result)
@@ -1191,7 +1187,7 @@ impl EmailGatewayBridge {
                         base_url: "https://graph.microsoft.com/v1.0".to_string(),
                         auth: AuthConfig::OAuth2 {
                             client_id,
-                            client_secret,
+                            client_secret: client_secret.into(),
                             token_url,
                             scopes: vec!["https://graph.microsoft.com/.default".to_string()],
                         },
@@ -1395,10 +1391,7 @@ impl EmailGatewayBridge {
         let connector_type = self.connector_type.clone();
 
         let health = get_runtime()
-            .block_on(async move {
-                use tw_connectors::traits::Connector;
-                connector.health_check().await
-            })
+            .block_on(async move { connector.health_check().await })
             .map_err(connector_error_to_py)?;
 
         let result = match health {
@@ -1785,7 +1778,7 @@ impl TicketingBridge {
                         base_url,
                         auth: AuthConfig::Basic {
                             username: email,
-                            password: api_token,
+                            password: api_token.into(),
                         },
                         timeout_secs: 30,
                         max_retries: 3,
