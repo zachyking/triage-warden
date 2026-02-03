@@ -8,6 +8,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::auth::RequireAdmin;
 use crate::error::ApiError;
 use crate::state::AppState;
 use tw_core::db::{
@@ -88,6 +89,7 @@ pub struct LlmSettingsResponse {
 /// Get general settings.
 async fn get_general_settings(
     State(state): State<AppState>,
+    RequireAdmin(_user): RequireAdmin,
 ) -> Result<Json<GeneralSettingsResponse>, ApiError> {
     let repo: Box<dyn SettingsRepository> = create_settings_repository(&state.db);
 
@@ -103,6 +105,7 @@ async fn get_general_settings(
 /// Save general settings.
 async fn save_general_settings(
     State(state): State<AppState>,
+    RequireAdmin(_user): RequireAdmin,
     Form(form): Form<GeneralSettingsForm>,
 ) -> Result<Response, ApiError> {
     let repo: Box<dyn SettingsRepository> = create_settings_repository(&state.db);
@@ -137,6 +140,7 @@ async fn save_general_settings(
 /// Get rate limit settings.
 async fn get_rate_limits(
     State(state): State<AppState>,
+    RequireAdmin(_user): RequireAdmin,
 ) -> Result<Json<RateLimitsResponse>, ApiError> {
     let repo: Box<dyn SettingsRepository> = create_settings_repository(&state.db);
 
@@ -152,6 +156,7 @@ async fn get_rate_limits(
 /// Save rate limit settings.
 async fn save_rate_limits(
     State(state): State<AppState>,
+    RequireAdmin(_user): RequireAdmin,
     Form(form): Form<RateLimitsForm>,
 ) -> Result<Response, ApiError> {
     let repo: Box<dyn SettingsRepository> = create_settings_repository(&state.db);
@@ -186,6 +191,7 @@ async fn save_rate_limits(
 /// Get LLM settings.
 async fn get_llm_settings(
     State(state): State<AppState>,
+    RequireAdmin(_user): RequireAdmin,
 ) -> Result<Json<LlmSettingsResponse>, ApiError> {
     let repo: Box<dyn SettingsRepository> = create_settings_repository(&state.db);
 
@@ -205,6 +211,7 @@ async fn get_llm_settings(
 /// Save LLM settings.
 async fn save_llm_settings(
     State(state): State<AppState>,
+    RequireAdmin(_user): RequireAdmin,
     Form(form): Form<LlmSettingsForm>,
 ) -> Result<Response, ApiError> {
     let repo: Box<dyn SettingsRepository> = create_settings_repository(&state.db);
@@ -256,10 +263,13 @@ mod tests {
     use axum::{
         body::Body,
         http::{Request, StatusCode},
+        Extension,
     };
     use tower::ServiceExt;
     use tw_core::db::DbPool;
     use tw_core::EventBus;
+
+    use crate::auth::test_helpers::TestUser;
 
     // ==================================================
     // Form Deserialization Tests
@@ -390,9 +400,12 @@ mod tests {
         AppState::new(db, event_bus)
     }
 
-    /// Creates a test router with the settings routes.
+    /// Creates a test router with the settings routes and admin authentication.
     fn create_test_router(state: AppState) -> Router<()> {
-        Router::new().nest("/settings", routes()).with_state(state)
+        Router::new()
+            .nest("/settings", routes())
+            .layer(Extension(TestUser::admin()))
+            .with_state(state)
     }
 
     // ==================================================

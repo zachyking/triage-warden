@@ -10,6 +10,7 @@ use chrono::Utc;
 use uuid::Uuid;
 use validator::Validate;
 
+use crate::auth::RequireAnalyst;
 use crate::dto::{
     ActionExecutionResponse, ActionResponse, AnalysisResponse, ApproveActionRequest,
     AuditEntryResponse, DismissRequest, EnrichmentResponse, ExecuteActionRequest,
@@ -60,6 +61,7 @@ pub fn routes() -> Router<AppState> {
 )]
 async fn list_incidents(
     State(state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
     Query(query): Query<ListIncidentsQuery>,
 ) -> Result<Json<PaginatedResponse<IncidentResponse>>, ApiError> {
     // Validate query parameters
@@ -117,6 +119,7 @@ async fn list_incidents(
 )]
 async fn get_incident(
     State(state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
     Path(id): Path<Uuid>,
 ) -> Result<Json<IncidentDetailResponse>, ApiError> {
     let incident_repo: Box<dyn IncidentRepository> = create_incident_repository(&state.db);
@@ -154,6 +157,7 @@ async fn get_incident(
 )]
 async fn execute_action(
     State(state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
     Path(id): Path<Uuid>,
     Json(request): Json<ExecuteActionRequest>,
 ) -> Result<(StatusCode, Json<ActionExecutionResponse>), ApiError> {
@@ -304,6 +308,7 @@ async fn execute_action(
 )]
 async fn approve_action(
     State(state): State<AppState>,
+    RequireAnalyst(user): RequireAnalyst,
     Path(incident_id): Path<Uuid>,
     axum::Form(request): axum::Form<ApproveActionRequest>,
 ) -> Result<axum::response::Response, ApiError> {
@@ -341,7 +346,7 @@ async fn approve_action(
     };
 
     incident.proposed_actions[action_idx].approval_status = new_status;
-    incident.proposed_actions[action_idx].approved_by = Some("api_user".to_string());
+    incident.proposed_actions[action_idx].approved_by = Some(user.username.clone());
     incident.proposed_actions[action_idx].approval_timestamp = Some(Utc::now());
 
     // If no more pending actions, update incident status
@@ -368,7 +373,7 @@ async fn approve_action(
             .publish(tw_core::TriageEvent::ActionApproved {
                 incident_id,
                 action_id: request.action_id,
-                approved_by: "api_user".to_string(),
+                approved_by: user.username.clone(),
             })
             .await;
     } else {
@@ -377,7 +382,7 @@ async fn approve_action(
             .publish(tw_core::TriageEvent::ActionDenied {
                 incident_id,
                 action_id: request.action_id,
-                denied_by: "api_user".to_string(),
+                denied_by: user.username.clone(),
                 reason: request
                     .reason
                     .unwrap_or_else(|| "No reason provided".to_string()),
@@ -433,6 +438,7 @@ async fn approve_action(
 )]
 async fn dismiss_incident(
     State(state): State<AppState>,
+    RequireAnalyst(user): RequireAnalyst,
     Path(incident_id): Path<Uuid>,
     axum::Form(request): axum::Form<DismissRequest>,
 ) -> Result<axum::response::Response, ApiError> {
@@ -461,7 +467,7 @@ async fn dismiss_incident(
         .map(|r| serde_json::json!({ "reason": r }));
     let audit_entry = AuditEntry::new(
         AuditAction::StatusChanged(IncidentStatus::Dismissed),
-        "api_user".to_string(),
+        user.username.clone(),
         details,
     );
     audit_repo.log(incident_id, &audit_entry).await?;
@@ -512,6 +518,7 @@ async fn dismiss_incident(
 )]
 async fn resolve_incident(
     State(state): State<AppState>,
+    RequireAnalyst(user): RequireAnalyst,
     Path(incident_id): Path<Uuid>,
     axum::Form(request): axum::Form<ResolveRequest>,
 ) -> Result<axum::response::Response, ApiError> {
@@ -542,7 +549,7 @@ async fn resolve_incident(
         .map(|r| serde_json::json!({ "reason": r }));
     let audit_entry = AuditEntry::new(
         AuditAction::StatusChanged(IncidentStatus::Resolved),
-        "api_user".to_string(),
+        user.username.clone(),
         details,
     );
     audit_repo.log(incident_id, &audit_entry).await?;
@@ -592,6 +599,7 @@ async fn resolve_incident(
 )]
 async fn enrich_incident(
     State(state): State<AppState>,
+    RequireAnalyst(user): RequireAnalyst,
     Path(incident_id): Path<Uuid>,
 ) -> Result<axum::response::Response, ApiError> {
     use axum::response::IntoResponse;
@@ -616,7 +624,7 @@ async fn enrich_incident(
     // Create audit log entry
     let audit_entry = AuditEntry::new(
         AuditAction::EnrichmentAdded,
-        "api_user".to_string(),
+        user.username.clone(),
         Some(serde_json::json!({ "action": "re-enrichment requested" })),
     );
     audit_repo.log(incident_id, &audit_entry).await?;
@@ -898,7 +906,7 @@ mod tests {
     use axum::{
         body::Body,
         http::{Request, StatusCode},
-        Router,
+        Extension, Router,
     };
     use tower::ServiceExt;
     use tw_core::db::DbPool;
@@ -906,6 +914,8 @@ mod tests {
         Alert, AlertSource, ApprovalStatus, Incident, IncidentStatus, Severity,
     };
     use tw_core::EventBus;
+
+    use crate::auth::test_helpers::TestUser;
 
     /// Creates an in-memory SQLite pool for testing.
     async fn create_test_pool() -> sqlx::SqlitePool {
@@ -1008,11 +1018,12 @@ mod tests {
         AppState::new(db, event_bus)
     }
 
-    /// Creates a test router with the incidents routes.
+    /// Creates a test router with the incidents routes and analyst authentication.
     async fn create_test_router() -> (Router, AppState) {
         let state = create_test_state().await;
         let router = Router::new()
             .nest("/api/incidents", routes())
+            .layer(Extension(TestUser::analyst()))
             .with_state(state.clone());
         (router, state)
     }

@@ -14,6 +14,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 use validator::Validate;
 
+use crate::auth::{RequireAdmin, RequireAnalyst};
 use crate::error::ApiError;
 use crate::state::AppState;
 use tw_connectors::threat_intel::virustotal::{VirusTotalConfig, VirusTotalConnector};
@@ -111,6 +112,7 @@ pub struct TestConnectionResponse {
 )]
 async fn list_connectors(
     State(state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
 ) -> Result<Json<Vec<ConnectorResponse>>, ApiError> {
     let repo: Box<dyn ConnectorRepository> = create_connector_repository(&state.db);
 
@@ -139,6 +141,7 @@ async fn list_connectors(
 )]
 async fn get_connector(
     State(state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ConnectorResponse>, ApiError> {
     let repo: Box<dyn ConnectorRepository> = create_connector_repository(&state.db);
@@ -166,6 +169,7 @@ async fn get_connector(
 )]
 async fn create_connector(
     State(state): State<AppState>,
+    RequireAdmin(_user): RequireAdmin,
     Json(request): Json<CreateConnectorRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     request.validate()?;
@@ -232,6 +236,7 @@ async fn create_connector(
 )]
 async fn update_connector(
     State(state): State<AppState>,
+    RequireAdmin(_user): RequireAdmin,
     Path(id): Path<Uuid>,
     Json(request): Json<UpdateConnectorRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -293,6 +298,7 @@ async fn update_connector(
 )]
 async fn delete_connector(
     State(state): State<AppState>,
+    RequireAdmin(_user): RequireAdmin,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
     let repo: Box<dyn ConnectorRepository> = create_connector_repository(&state.db);
@@ -342,6 +348,7 @@ async fn delete_connector(
 )]
 async fn test_connector(
     State(state): State<AppState>,
+    RequireAdmin(_user): RequireAdmin,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
     let repo: Box<dyn ConnectorRepository> = create_connector_repository(&state.db);
@@ -1001,10 +1008,12 @@ mod tests {
 #[cfg(test)]
 mod api_tests {
     use super::*;
+    use crate::auth::test_helpers::TestUser;
     use crate::state::AppState;
     use axum::{
         body::Body,
         http::{Request, StatusCode},
+        Extension,
     };
     use tower::ServiceExt;
     use tw_core::db::DbPool;
@@ -1055,6 +1064,7 @@ mod api_tests {
 
         axum::Router::new()
             .nest("/api/connectors", routes())
+            .layer(Extension(TestUser::admin()))
             .with_state(state)
     }
 

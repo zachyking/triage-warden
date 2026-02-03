@@ -10,6 +10,7 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
+use crate::auth::{RequireAdmin, RequireAnalyst};
 use crate::dto::{
     CreatePlaybookRequest, PlaybookResponse, PlaybookStageDto, PlaybookStepDto,
     UpdatePlaybookRequest,
@@ -56,6 +57,7 @@ pub fn routes() -> Router<AppState> {
 )]
 async fn list_playbooks(
     State(state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
 ) -> Result<Json<Vec<PlaybookResponse>>, ApiError> {
     let repo: Box<dyn PlaybookRepository> = create_playbook_repository(&state.db);
 
@@ -84,6 +86,7 @@ async fn list_playbooks(
 )]
 async fn get_playbook(
     State(state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
     Path(id): Path<Uuid>,
 ) -> Result<Json<PlaybookResponse>, ApiError> {
     let repo: Box<dyn PlaybookRepository> = create_playbook_repository(&state.db);
@@ -111,6 +114,7 @@ async fn get_playbook(
 )]
 async fn create_playbook(
     State(state): State<AppState>,
+    RequireAdmin(_user): RequireAdmin,
     axum::Form(request): axum::Form<CreatePlaybookRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let repo: Box<dyn PlaybookRepository> = create_playbook_repository(&state.db);
@@ -188,6 +192,7 @@ async fn create_playbook(
 )]
 async fn update_playbook(
     State(state): State<AppState>,
+    RequireAdmin(_user): RequireAdmin,
     Path(id): Path<Uuid>,
     axum::Form(request): axum::Form<UpdatePlaybookRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -291,6 +296,7 @@ async fn update_playbook(
 )]
 async fn delete_playbook(
     State(state): State<AppState>,
+    RequireAdmin(_user): RequireAdmin,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
     let repo: Box<dyn PlaybookRepository> = create_playbook_repository(&state.db);
@@ -340,6 +346,7 @@ async fn delete_playbook(
 )]
 async fn toggle_playbook(
     State(state): State<AppState>,
+    RequireAdmin(_user): RequireAdmin,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
     let repo: Box<dyn PlaybookRepository> = create_playbook_repository(&state.db);
@@ -386,6 +393,7 @@ pub struct StageForm {
 /// Add a new stage to a playbook.
 async fn add_stage(
     State(state): State<AppState>,
+    RequireAdmin(_user): RequireAdmin,
     Path(id): Path<Uuid>,
     axum::Form(form): axum::Form<StageForm>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -433,6 +441,7 @@ async fn add_stage(
 /// Update an existing stage.
 async fn update_stage(
     State(state): State<AppState>,
+    RequireAdmin(_user): RequireAdmin,
     Path((id, stage_index)): Path<(Uuid, usize)>,
     axum::Form(form): axum::Form<StageForm>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -481,6 +490,7 @@ async fn update_stage(
 /// Delete a stage from a playbook.
 async fn delete_stage(
     State(state): State<AppState>,
+    RequireAdmin(_user): RequireAdmin,
     Path((id, stage_index)): Path<(Uuid, usize)>,
 ) -> Result<impl IntoResponse, ApiError> {
     let repo = create_playbook_repository(&state.db);
@@ -542,6 +552,7 @@ pub struct StepForm {
 /// Add a new step to a stage.
 async fn add_step(
     State(state): State<AppState>,
+    RequireAdmin(_user): RequireAdmin,
     Path((id, stage_index)): Path<(Uuid, usize)>,
     axum::Form(form): axum::Form<StepForm>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -623,6 +634,7 @@ async fn add_step(
 /// Update an existing step.
 async fn update_step(
     State(state): State<AppState>,
+    RequireAdmin(_user): RequireAdmin,
     Path((id, stage_index, step_index)): Path<(Uuid, usize, usize)>,
     axum::Form(form): axum::Form<StepForm>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -706,6 +718,7 @@ async fn update_step(
 /// Delete a step from a stage.
 async fn delete_step(
     State(state): State<AppState>,
+    RequireAdmin(_user): RequireAdmin,
     Path((id, stage_index, step_index)): Path<(Uuid, usize, usize)>,
 ) -> Result<impl IntoResponse, ApiError> {
     let repo = create_playbook_repository(&state.db);
@@ -819,10 +832,12 @@ mod tests {
     use axum::{
         body::Body,
         http::{header, Request, StatusCode},
+        Extension,
     };
     use tower::ServiceExt;
     use tw_core::{db::DbPool, EventBus};
 
+    use crate::auth::test_helpers::TestUser;
     use crate::state::AppState;
 
     /// SQL to create the playbooks table for testing.
@@ -869,9 +884,10 @@ mod tests {
         let event_bus = EventBus::new(100);
         let state = AppState::new(db, event_bus);
 
-        // Create router with playbooks routes
+        // Create router with playbooks routes and admin authentication
         let router = axum::Router::new()
             .nest("/api/playbooks", routes())
+            .layer(Extension(TestUser::admin()))
             .with_state(state);
 
         (router, pool)
