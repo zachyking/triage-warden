@@ -102,7 +102,7 @@ jobs:
         working-directory: tw-bridge
         run: |
           maturin build --release
-          WHEEL=$(ls target/wheels/tw_bridge-*.whl)
+          WHEEL=$(ls ../target/wheels/tw_bridge-*.whl)
           uv pip install --system "$WHEEL"
 
       - name: Run tw-bridge Python tests
