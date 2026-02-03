@@ -24,6 +24,7 @@
   - [Components](./architecture/components.md)
   - [Data Flow](./architecture/data-flow.md)
   - [Security Model](./architecture/security.md)
+  - [Database Schema](./architecture/database-schema.md)
 
 - [Connectors](./connectors/README.md)
   - [Threat Intelligence](./connectors/threat-intel.md)
@@ -61,6 +62,7 @@
   - [Actions](./api/actions.md)
   - [Playbooks](./api/playbooks.md)
   - [Webhooks](./api/webhooks.md)
+  - [Error Codes](./api/error-codes.md)
 
 # Configuration
 
