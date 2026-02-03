@@ -8,12 +8,11 @@ description = "Rust-Python bridge using PyO3 for Triage Warden"
 
 [lib]
 name = "tw_bridge"
-crate-type = ["cdylib", "rlib"]
+# Only build cdylib for Python extension - tests are run via maturin/pytest
+crate-type = ["cdylib"]
 
 [features]
 default = []
-# Enable for integration testing with Python interpreter
-python-tests = ["pyo3/auto-initialize"]
 
 [dependencies]
 pyo3.workspace = true
@@ -41,4 +40,3 @@ tw-policy = { path = "../crates/tw-policy" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
-pyo3 = { workspace = true, features = ["auto-initialize"] }

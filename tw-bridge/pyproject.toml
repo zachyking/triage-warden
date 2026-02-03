@@ -1,0 +1,38 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "tw_bridge"
+version = "0.1.0"
+description = "Rust-Python bridge for Triage Warden connectors"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Security",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[tool.maturin]
+# Build both cdylib (for Python import) and rlib (for Rust tests)
+features = ["pyo3/extension-module"]
+python-source = "python"
+module-name = "tw_bridge"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["python/tests"]
