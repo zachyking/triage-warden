@@ -35,6 +35,9 @@ pub enum ActionError {
 
     #[error("Action not supported: {0}")]
     NotSupported(String),
+
+    #[error("Action requires manual approval: {0}")]
+    RequiresApproval(String),
 }
 
 /// Result of an action execution.

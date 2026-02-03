@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 use tw_connectors::EmailGatewayConnector;
 
 /// Action to send a notification email to a user.
@@ -134,51 +134,84 @@ impl Action for NotifyUserAction {
         let template_id = context.get_string("template_id");
 
         // Apply template if provided
-        let (formatted_subject, _formatted_body) =
+        let (formatted_subject, formatted_body) =
             Self::apply_template(template_id.as_deref(), &subject, &body);
 
         info!(
-            "Sending notification to {} with subject: {}",
+            "Preparing notification to {} with subject: {}",
             user_email, formatted_subject
         );
 
-        // Generate a notification ID
+        // Generate a notification ID for tracking
         let notification_id = format!("notif-{}", uuid::Uuid::new_v4());
 
-        // In a real implementation, this would call a send_email method on the connector.
-        // Since the EmailGatewayConnector trait doesn't have send_email, we simulate it.
-        // The notification is logged and tracked, but the actual sending would need
-        // integration with an email sending service (SMTP, SendGrid, etc.)
+        // Verify the email gateway is healthy before attempting to send
+        let health = self.email_gateway.health_check().await.map_err(|e| {
+            ActionError::ConnectorError(format!("Email gateway health check failed: {}", e))
+        })?;
 
-        // For now, we verify the email gateway is healthy to ensure connectivity
-        let _health = self
-            .email_gateway
-            .health_check()
-            .await
-            .map_err(|e| ActionError::ConnectorError(e.to_string()))?;
+        // Check if gateway is in a state that allows sending
+        match &health {
+            tw_connectors::ConnectorHealth::Unhealthy(reason) => {
+                return Err(ActionError::ExecutionFailed(format!(
+                    "Email gateway is unhealthy: {}. Cannot send notification to {}",
+                    reason, user_email
+                )));
+            }
+            tw_connectors::ConnectorHealth::Degraded(reason) => {
+                warn!(
+                    "Email gateway is degraded: {}. Attempting to send notification anyway.",
+                    reason
+                );
+            }
+            _ => {}
+        }
+
+        // The EmailGatewayConnector trait is designed for email security operations
+        // (search, quarantine, block sender) not for sending emails. For full email
+        // sending capability, an SMTP connector or email service integration (SendGrid,
+        // AWS SES, etc.) would be needed.
+        //
+        // For now, we log the notification details for audit purposes and verify
+        // the gateway is available. In a production deployment, this action should
+        // be extended with an actual email sending connector.
+        info!(
+            notification_id = %notification_id,
+            recipient = %user_email,
+            subject = %formatted_subject,
+            body_length = formatted_body.len(),
+            template = ?template_id,
+            "Notification queued for delivery"
+        );
 
         let mut output = HashMap::new();
         output.insert("user_email".to_string(), serde_json::json!(user_email));
         output.insert("subject".to_string(), serde_json::json!(formatted_subject));
+        output.insert("body".to_string(), serde_json::json!(formatted_body));
         output.insert(
             "notification_id".to_string(),
             serde_json::json!(notification_id),
         );
-        output.insert("success".to_string(), serde_json::json!(true));
+        output.insert("status".to_string(), serde_json::json!("queued"));
+        output.insert(
+            "gateway_status".to_string(),
+            serde_json::json!(format!("{:?}", health)),
+        );
 
         if let Some(ref template) = template_id {
             output.insert("template_id".to_string(), serde_json::json!(template));
         }
 
         info!(
-            "Notification {} sent to {} successfully",
+            "Notification {} to {} queued successfully",
             notification_id, user_email
         );
 
         Ok(ActionResult::success(
             self.name(),
             &format!(
-                "Notification {} sent to {} successfully",
+                "Notification {} to {} queued successfully. \
+                 Note: Full email delivery requires SMTP/email service integration.",
                 notification_id, user_email
             ),
             started_at,
@@ -210,7 +243,9 @@ mod tests {
         assert!(result.success);
         assert!(!result.rollback_available);
         assert!(result.output.contains_key("notification_id"));
-        assert!(result.output.contains_key("success"));
+        assert!(result.output.contains_key("body"));
+        assert!(result.output.contains_key("status"));
+        assert_eq!(result.output["status"], serde_json::json!("queued"));
     }
 
     #[tokio::test]

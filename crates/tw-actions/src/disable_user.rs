@@ -6,8 +6,6 @@ use crate::registry::{
     Action, ActionContext, ActionError, ActionResult, ParameterDef, ParameterType,
 };
 use async_trait::async_trait;
-use chrono::Utc;
-use std::collections::HashMap;
 use tracing::{info, instrument, warn};
 
 /// Action to disable a user account.
@@ -66,7 +64,6 @@ impl Action for DisableUserAction {
 
     #[instrument(skip(self, context))]
     async fn execute(&self, context: ActionContext) -> Result<ActionResult, ActionError> {
-        let started_at = Utc::now();
         let username = context.require_string("username")?;
         let reason = context
             .get_string("reason")
@@ -77,39 +74,31 @@ impl Action for DisableUserAction {
             .unwrap_or(true);
 
         info!(
-            "Disabling user: {} (reason: {}, revoke_sessions: {})",
+            "Attempting to disable user: {} (reason: {}, revoke_sessions: {})",
             username, reason, revoke_sessions
         );
 
-        // This is a placeholder implementation
-        // In a real implementation, this would:
-        // 1. Connect to the identity provider (Okta, Azure AD, etc.)
-        // 2. Disable the user account
-        // 3. Optionally revoke active sessions
-        // 4. Return the result
-
-        warn!("DisableUserAction is a placeholder - no identity provider configured");
-
-        let mut output = HashMap::new();
-        output.insert("username".to_string(), serde_json::json!(username));
-        output.insert(
-            "revoke_sessions".to_string(),
-            serde_json::json!(revoke_sessions),
+        // Return an error indicating this action is not implemented
+        // rather than returning a fake success which could mislead operators
+        // into thinking the user was actually disabled.
+        warn!(
+            "DisableUserAction cannot execute - no identity provider connector configured. \
+             User '{}' was NOT disabled.",
+            username
         );
-        output.insert("status".to_string(), serde_json::json!("simulated"));
 
-        let rollback_data = serde_json::json!({
-            "username": username,
-            "previous_state": "enabled",
-        });
-
-        Ok(ActionResult::success(
-            self.name(),
-            &format!("User {} would be disabled (placeholder)", username),
-            started_at,
-            output,
-        )
-        .with_rollback(rollback_data))
+        Err(ActionError::NotSupported(
+            format!(
+                "disable_user action requires an identity provider integration (Okta, Azure AD, Google Workspace, etc.). \
+                 No IdP connector is currently configured. User '{}' was NOT disabled. \
+                 To enable this action:\n\
+                 1. Configure an identity provider connector in the system settings\n\
+                 2. Ensure the connector has permissions to manage user accounts\n\
+                 3. Restart the service to apply the configuration\n\n\
+                 For immediate user disablement, please use your identity provider's admin console directly.",
+                username
+            )
+        ))
     }
 
     #[instrument(skip(self, rollback_data))]
@@ -117,25 +106,23 @@ impl Action for DisableUserAction {
         &self,
         rollback_data: serde_json::Value,
     ) -> Result<ActionResult, ActionError> {
-        let started_at = Utc::now();
         let username = rollback_data["username"].as_str().ok_or_else(|| {
             ActionError::InvalidParameters("Missing username in rollback data".to_string())
         })?;
 
-        info!("Rolling back user disable for: {}", username);
+        warn!(
+            "DisableUserAction rollback cannot execute - no identity provider connector configured. \
+             User '{}' status unchanged.",
+            username
+        );
 
-        // Placeholder - would re-enable the user
-        warn!("DisableUserAction rollback is a placeholder");
-
-        let mut output = HashMap::new();
-        output.insert("username".to_string(), serde_json::json!(username));
-        output.insert("status".to_string(), serde_json::json!("simulated"));
-
-        Ok(ActionResult::success(
-            "rollback_disable_user",
-            &format!("User {} would be re-enabled (placeholder)", username),
-            started_at,
-            output,
+        Err(ActionError::NotSupported(
+            format!(
+                "disable_user rollback requires an identity provider integration. \
+                 No IdP connector is currently configured. User '{}' status was NOT changed. \
+                 Please use your identity provider's admin console to re-enable the user if needed.",
+                username
+            )
         ))
     }
 }
@@ -146,27 +133,67 @@ mod tests {
     use uuid::Uuid;
 
     #[tokio::test]
-    async fn test_disable_user() {
+    async fn test_disable_user_returns_not_supported() {
         let action = DisableUserAction::new();
 
         let context = ActionContext::new(Uuid::new_v4())
             .with_param("username", serde_json::json!("jsmith@company.com"))
             .with_param("reason", serde_json::json!("Compromised credentials"));
 
-        let result = action.execute(context).await.unwrap();
-        assert!(result.success);
-        assert!(result.rollback_available);
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::NotSupported(_))));
+
+        if let Err(ActionError::NotSupported(msg)) = result {
+            assert!(msg.contains("identity provider integration"));
+            assert!(msg.contains("jsmith@company.com"));
+            assert!(msg.contains("NOT disabled"));
+        }
     }
 
     #[tokio::test]
-    async fn test_disable_user_with_session_revoke() {
+    async fn test_disable_user_error_message_includes_username() {
         let action = DisableUserAction::new();
 
         let context = ActionContext::new(Uuid::new_v4())
-            .with_param("username", serde_json::json!("jsmith@company.com"))
+            .with_param("username", serde_json::json!("admin@company.com"))
             .with_param("revoke_sessions", serde_json::json!(true));
 
-        let result = action.execute(context).await.unwrap();
-        assert!(result.success);
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::NotSupported(_))));
+
+        if let Err(ActionError::NotSupported(msg)) = result {
+            assert!(msg.contains("admin@company.com"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_disable_user_missing_username() {
+        let action = DisableUserAction::new();
+
+        let context = ActionContext::new(Uuid::new_v4());
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_rollback_returns_not_supported() {
+        let action = DisableUserAction::new();
+
+        let rollback_data = serde_json::json!({
+            "username": "jsmith@company.com",
+            "previous_state": "enabled",
+        });
+
+        let result = action.rollback(rollback_data).await;
+        assert!(matches!(result, Err(ActionError::NotSupported(_))));
+    }
+
+    #[test]
+    fn test_supports_rollback_true() {
+        let action = DisableUserAction::new();
+        // Even though rollback returns NotSupported, the action claims to support it
+        // because if an IdP connector were configured, it would support rollback
+        assert!(action.supports_rollback());
     }
 }
