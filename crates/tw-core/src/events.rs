@@ -8,10 +8,11 @@ use crate::incident::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc, RwLock};
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
 /// Errors that can occur in the event bus.
@@ -127,6 +128,22 @@ pub enum TriageEvent {
     },
 }
 
+impl TriageEvent {
+    /// Returns true if this is a critical event that must not be dropped.
+    /// Critical events are always delivered, even if it means blocking.
+    pub fn is_critical(&self) -> bool {
+        matches!(
+            self,
+            TriageEvent::KillSwitchActivated { .. }
+                | TriageEvent::SystemError {
+                    recoverable: false,
+                    ..
+                }
+                | TriageEvent::IncidentEscalated { .. }
+        )
+    }
+}
+
 /// Result of an action execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionResult {
@@ -182,6 +199,8 @@ pub struct EventBus {
     history_size: usize,
     /// Recent event history.
     history: Arc<RwLock<Vec<TriageEvent>>>,
+    /// Counter for dropped events (non-critical only).
+    dropped_events: AtomicU64,
 }
 
 impl EventBus {
@@ -193,6 +212,7 @@ impl EventBus {
             subscribers: Arc::new(RwLock::new(HashMap::new())),
             history_size: 1000,
             history: Arc::new(RwLock::new(Vec::with_capacity(1000))),
+            dropped_events: AtomicU64::new(0),
         }
     }
 
@@ -204,7 +224,13 @@ impl EventBus {
             subscribers: Arc::new(RwLock::new(HashMap::new())),
             history_size,
             history: Arc::new(RwLock::new(Vec::with_capacity(history_size))),
+            dropped_events: AtomicU64::new(0),
         }
+    }
+
+    /// Returns the number of dropped events since the bus was created.
+    pub fn dropped_event_count(&self) -> u64 {
+        self.dropped_events.load(Ordering::Relaxed)
     }
 
     /// Publishes an event to all subscribers.
@@ -232,11 +258,49 @@ impl EventBus {
             }
         }
 
-        // Send to named subscribers
+        // Send to named subscribers with special handling for critical events
         let subscribers = self.subscribers.read().await;
+        let is_critical = event.is_critical();
+
         for (name, tx) in subscribers.iter() {
-            if let Err(e) = tx.try_send(event.clone()) {
-                warn!("Failed to send event to subscriber {}: {}", name, e);
+            if is_critical {
+                // Critical events must be delivered - use blocking send with timeout
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    tx.send(event.clone()),
+                )
+                .await
+                {
+                    Ok(Ok(())) => {
+                        debug!("Critical event delivered to subscriber {}", name);
+                    }
+                    Ok(Err(_)) => {
+                        // Channel closed - subscriber is gone
+                        error!(
+                            "Failed to deliver critical event to subscriber {}: channel closed",
+                            name
+                        );
+                    }
+                    Err(_) => {
+                        // Timeout - subscriber is too slow for critical events
+                        error!(
+                            "Timeout delivering critical event to subscriber {} - subscriber may be stalled",
+                            name
+                        );
+                    }
+                }
+            } else {
+                // Non-critical events use try_send - drop if channel is full
+                if let Err(e) = tx.try_send(event.clone()) {
+                    let dropped = self.dropped_events.fetch_add(1, Ordering::Relaxed) + 1;
+                    // Log every 100 dropped events to avoid log spam
+                    if dropped % 100 == 1 {
+                        warn!(
+                            "Event dropped for subscriber {} (total dropped: {}): {}",
+                            name, dropped, e
+                        );
+                    }
+                }
             }
         }
 

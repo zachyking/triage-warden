@@ -198,7 +198,7 @@ impl Orchestrator {
             ));
         }
 
-        // Update stats
+        // Update stats for alert received (single lock acquisition)
         {
             let mut stats = self.stats.write().await;
             stats.alerts_received += 1;
@@ -218,20 +218,18 @@ impl Orchestrator {
             incident_id, alert.id, incident.severity
         );
 
-        // Register workflow
+        // Perform all state mutations in a single critical section to prevent race conditions
+        // This ensures atomic update of workflow registration, incident storage, and stats
         {
+            // Register workflow first
             let mut workflow_engine = self.workflow_engine.write().await;
             workflow_engine.register_workflow(&incident);
-        }
 
-        // Store incident
-        {
+            // Store incident
             let mut incidents = self.incidents.write().await;
             incidents.insert(incident_id, incident);
-        }
 
-        // Update stats
-        {
+            // Update stats atomically after successful storage
             let mut stats = self.stats.write().await;
             stats.incidents_created += 1;
             stats.incidents_in_progress += 1;

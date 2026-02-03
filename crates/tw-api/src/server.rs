@@ -266,7 +266,7 @@ impl ApiServer {
                 .with_expiry(Expiry::OnInactivity(TimeDuration::seconds(
                     self.config.session_expiry_seconds,
                 )))
-                .with_same_site(SameSite::Lax)
+                .with_same_site(SameSite::Strict)
                 .with_secure(self.config.session_secure)
                 .with_http_only(true);
 

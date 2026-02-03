@@ -92,22 +92,62 @@ impl CrowdStrikeConnector {
         Ok(Self { config, client })
     }
 
+    /// FQL special characters that need escaping.
+    /// Reference: CrowdStrike Falcon Query Language documentation
+    /// Note: Hyphens in hostnames don't need escaping when used in quoted values.
+    const FQL_SPECIAL_CHARS: &'static [char] =
+        &['\'', '"', '\\', '*', '?', '[', ']', '+', ':', '/', '(', ')'];
+
+    /// Escapes a value for safe use in FQL filters.
+    /// This prevents FQL injection attacks by escaping all special characters.
+    fn escape_fql(value: &str) -> String {
+        let mut result = String::with_capacity(value.len() * 2);
+        for c in value.chars() {
+            if Self::FQL_SPECIAL_CHARS.contains(&c) {
+                result.push('\\');
+            }
+            result.push(c);
+        }
+        result
+    }
+
+    /// Validates that a hostname only contains safe characters.
+    fn validate_hostname(hostname: &str) -> ConnectorResult<()> {
+        // Hostnames should be alphanumeric with hyphens, underscores, and dots
+        if hostname.is_empty() || hostname.len() > 253 {
+            return Err(ConnectorError::ConfigError(
+                "Hostname must be 1-253 characters".to_string(),
+            ));
+        }
+        for c in hostname.chars() {
+            if !c.is_alphanumeric() && c != '-' && c != '_' && c != '.' {
+                return Err(ConnectorError::ConfigError(format!(
+                    "Invalid character '{}' in hostname",
+                    c
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Builds a FQL filter for host search.
     pub fn build_host_filter(query: &str) -> String {
-        let escaped = query.replace('\'', "\\'");
+        let escaped = Self::escape_fql(query);
         format!("hostname:*'{}*'+status:'normal'", escaped)
     }
 
     /// Builds a FQL filter for detection search.
     pub fn build_detection_filter(hostname: &str) -> String {
-        let escaped = hostname.replace('\'', "\\'");
+        let escaped = Self::escape_fql(hostname);
         format!("device.hostname:'{}'", escaped)
     }
 
     /// Looks up hosts by hostname pattern.
     #[instrument(skip(self))]
     async fn find_host_id(&self, hostname: &str) -> ConnectorResult<String> {
-        let filter = format!("hostname:'{}'", hostname.replace('\'', "\\'"));
+        // Validate hostname to prevent injection
+        Self::validate_hostname(hostname)?;
+        let filter = format!("hostname:'{}'", Self::escape_fql(hostname));
         let path = format!(
             "/devices/queries/devices/v1?filter={}",
             urlencoding::encode(&filter)

@@ -414,8 +414,11 @@ impl PolicyEngine {
             }));
         }
 
-        // 3. Evaluate rules in order
-        for rule in &self.rules {
+        // 3. Evaluate rules in priority order (lower priority number = higher priority)
+        let mut sorted_rules: Vec<_> = self.rules.iter().filter(|r| r.enabled).collect();
+        sorted_rules.sort_by_key(|r| r.priority);
+
+        for rule in sorted_rules {
             if rule.matches(context) {
                 debug!("Rule '{}' matched", rule.name);
                 match &rule.effect {
