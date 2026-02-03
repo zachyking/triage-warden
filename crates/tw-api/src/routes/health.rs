@@ -35,27 +35,37 @@ pub fn routes() -> Router<AppState> {
     path = "/health",
     responses(
         (status = 200, description = "System is healthy", body = HealthResponse),
-        (status = 503, description = "System is unhealthy")
+        (status = 503, description = "System is unhealthy", body = HealthResponse)
     ),
     tag = "Health"
 )]
-async fn health_check(State(state): State<AppState>) -> Json<HealthResponse> {
+async fn health_check(
+    State(state): State<AppState>,
+) -> (axum::http::StatusCode, Json<HealthResponse>) {
     let db_healthy = state.db.is_healthy().await;
     let uptime = START_TIME.get().map(|t| t.elapsed().as_secs()).unwrap_or(0);
 
-    let status = if db_healthy { "healthy" } else { "degraded" };
+    let status = if db_healthy { "healthy" } else { "unhealthy" };
+    let http_status = if db_healthy {
+        axum::http::StatusCode::OK
+    } else {
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    };
 
-    Json(HealthResponse {
-        status: status.to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        database: DatabaseHealth {
-            connected: db_healthy,
-            pool_size: state.db.pool_size(),
-            idle_connections: state.db.idle_connections(),
-        },
-        uptime_seconds: uptime,
-        components: None,
-    })
+    (
+        http_status,
+        Json(HealthResponse {
+            status: status.to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            database: DatabaseHealth {
+                connected: db_healthy,
+                pool_size: state.db.pool_size(),
+                idle_connections: state.db.idle_connections(),
+            },
+            uptime_seconds: uptime,
+            components: None,
+        }),
+    )
 }
 
 /// Detailed health check endpoint.
@@ -66,11 +76,13 @@ async fn health_check(State(state): State<AppState>) -> Json<HealthResponse> {
     path = "/health/detailed",
     responses(
         (status = 200, description = "Detailed system health", body = HealthResponse),
-        (status = 503, description = "System is unhealthy")
+        (status = 503, description = "System is unhealthy", body = HealthResponse)
     ),
     tag = "Health"
 )]
-async fn health_check_detailed(State(state): State<AppState>) -> Json<HealthResponse> {
+async fn health_check_detailed(
+    State(state): State<AppState>,
+) -> (axum::http::StatusCode, Json<HealthResponse>) {
     let db_healthy = state.db.is_healthy().await;
     let uptime = START_TIME.get().map(|t| t.elapsed().as_secs()).unwrap_or(0);
 
@@ -102,22 +114,32 @@ async fn health_check_detailed(State(state): State<AppState>) -> Json<HealthResp
         llm_health.enabled && !llm_health.configured,
     );
 
-    Json(HealthResponse {
-        status,
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        database: DatabaseHealth {
-            connected: db_healthy,
-            pool_size: state.db.pool_size(),
-            idle_connections: state.db.idle_connections(),
-        },
-        uptime_seconds: uptime,
-        components: Some(ComponentsHealth {
-            kill_switch,
-            connectors: connectors_health,
-            llm: llm_health,
-            event_bus,
+    // Return 503 if database is unhealthy (critical dependency)
+    let http_status = if db_healthy {
+        axum::http::StatusCode::OK
+    } else {
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    (
+        http_status,
+        Json(HealthResponse {
+            status,
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            database: DatabaseHealth {
+                connected: db_healthy,
+                pool_size: state.db.pool_size(),
+                idle_connections: state.db.idle_connections(),
+            },
+            uptime_seconds: uptime,
+            components: Some(ComponentsHealth {
+                kill_switch,
+                connectors: connectors_health,
+                llm: llm_health,
+                event_bus,
+            }),
         }),
-    })
+    )
 }
 
 /// Get connectors health summary.

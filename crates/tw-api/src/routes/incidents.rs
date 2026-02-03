@@ -333,7 +333,7 @@ async fn approve_action(
         .ok_or_else(|| ApiError::NotFound(format!("Action {} not found", request.action_id)))?;
 
     if incident.proposed_actions[action_idx].approval_status != ApprovalStatus::Pending {
-        return Err(ApiError::BadRequest(format!(
+        return Err(ApiError::Conflict(format!(
             "Action is not pending approval (current status: {:?})",
             incident.proposed_actions[action_idx].approval_status
         )));
@@ -1678,7 +1678,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), StatusCode::CONFLICT);
     }
 
     // ==============================================

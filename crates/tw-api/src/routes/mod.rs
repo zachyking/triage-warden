@@ -20,6 +20,9 @@ use axum::Router;
 /// Creates the main API router.
 pub fn create_router(state: AppState) -> Router {
     Router::new()
+        // Versioned API endpoint
+        .nest("/api/v1", api_routes())
+        // Legacy unversioned endpoint (deprecated, will be removed in future versions)
         .nest("/api", api_routes())
         .merge(health::routes())
         .merge(metrics::routes())
