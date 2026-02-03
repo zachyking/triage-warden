@@ -567,4 +567,315 @@ mod tests {
             .await;
         assert_eq!(enriching_incidents.len(), 1);
     }
+
+    // ============================================================
+    // Concurrent Alert Processing Tests
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_concurrent_alert_processing() {
+        use std::sync::Arc;
+        use tokio::task::JoinSet;
+
+        let orchestrator = Arc::new(Orchestrator::new());
+        let mut tasks = JoinSet::new();
+
+        // Spawn 10 concurrent alert processing tasks
+        for i in 0..10 {
+            let orch = Arc::clone(&orchestrator);
+            tasks.spawn(async move {
+                let alert = Alert {
+                    id: format!("concurrent-alert-{}", i),
+                    source: AlertSource::EmailSecurity("M365".to_string()),
+                    alert_type: "phishing".to_string(),
+                    severity: Severity::Medium,
+                    title: format!("Concurrent test alert {}", i),
+                    description: Some("Test description".to_string()),
+                    data: serde_json::json!({}),
+                    timestamp: Utc::now(),
+                    tags: vec![],
+                };
+                orch.process_alert(alert).await
+            });
+        }
+
+        // All should complete successfully
+        let mut incident_ids = Vec::new();
+        while let Some(result) = tasks.join_next().await {
+            let id = result.unwrap().unwrap();
+            incident_ids.push(id);
+        }
+
+        // All incidents should be unique
+        assert_eq!(incident_ids.len(), 10);
+        incident_ids.sort();
+        incident_ids.dedup();
+        assert_eq!(incident_ids.len(), 10);
+
+        // Stats should reflect all processed alerts
+        let stats = orchestrator.stats().await;
+        assert_eq!(stats.alerts_received, 10);
+        assert_eq!(stats.incidents_created, 10);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_status_transitions() {
+        use std::sync::Arc;
+        use tokio::task::JoinSet;
+
+        let orchestrator = Arc::new(Orchestrator::new());
+
+        // Create multiple incidents
+        let mut incident_ids = Vec::new();
+        for i in 0..5 {
+            let mut alert = create_test_alert();
+            alert.id = format!("status-test-{}", i);
+            let id = orchestrator.process_alert(alert).await.unwrap();
+            incident_ids.push(id);
+        }
+
+        // Transition all concurrently
+        let mut tasks = JoinSet::new();
+        for id in incident_ids.clone() {
+            let orch = Arc::clone(&orchestrator);
+            tasks.spawn(async move {
+                orch.transition_incident(id, IncidentStatus::Enriching)
+                    .await
+            });
+        }
+
+        // All should succeed
+        while let Some(result) = tasks.join_next().await {
+            assert!(result.unwrap().is_ok());
+        }
+
+        // Verify all are now enriching
+        let enriching = orchestrator
+            .get_incidents_by_status(IncidentStatus::Enriching)
+            .await;
+        assert_eq!(enriching.len(), 5);
+    }
+
+    // ============================================================
+    // State Transition Tests
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_basic_state_transition() {
+        let orchestrator = Orchestrator::new();
+        let alert = create_test_alert();
+        let incident_id = orchestrator.process_alert(alert).await.unwrap();
+
+        // New -> Enriching (no condition required)
+        orchestrator
+            .transition_incident(incident_id, IncidentStatus::Enriching)
+            .await
+            .unwrap();
+
+        let incident = orchestrator.get_incident(incident_id).await.unwrap();
+        assert_eq!(incident.status, IncidentStatus::Enriching);
+    }
+
+    #[tokio::test]
+    async fn test_invalid_state_transition_blocked() {
+        let orchestrator = Orchestrator::new();
+        let alert = create_test_alert();
+        let incident_id = orchestrator.process_alert(alert).await.unwrap();
+
+        // New -> Analyzing requires going through Enriching first
+        // This should fail because the workflow requires EnrichmentsComplete
+        let result = orchestrator
+            .transition_incident(incident_id, IncidentStatus::Analyzing)
+            .await;
+
+        // Should fail with either InvalidTransition or ConditionNotMet
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_workflow_enforces_conditions() {
+        let orchestrator = Orchestrator::new();
+        let alert = create_test_alert();
+        let incident_id = orchestrator.process_alert(alert).await.unwrap();
+
+        // New -> Enriching (OK, no condition)
+        orchestrator
+            .transition_incident(incident_id, IncidentStatus::Enriching)
+            .await
+            .unwrap();
+
+        // Enriching -> Analyzing requires EnrichmentsComplete condition
+        // Without setting that context, this should fail
+        let result = orchestrator
+            .transition_incident(incident_id, IncidentStatus::Analyzing)
+            .await;
+
+        // This tests that conditions are enforced
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_transition_nonexistent_incident() {
+        let orchestrator = Orchestrator::new();
+        let fake_id = uuid::Uuid::new_v4();
+
+        let result = orchestrator
+            .transition_incident(fake_id, IncidentStatus::Enriching)
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(OrchestratorError::IncidentNotFound(_))
+        ));
+    }
+
+    // ============================================================
+    // Kill Switch Concurrent Tests
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_kill_switch_blocks_concurrent_processing() {
+        use std::sync::Arc;
+        use tokio::task::JoinSet;
+
+        let orchestrator = Arc::new(Orchestrator::new());
+
+        // Activate kill switch
+        orchestrator.activate_kill_switch("Test", "admin").await;
+
+        // Try to process multiple alerts concurrently
+        let mut tasks = JoinSet::new();
+        for i in 0..5 {
+            let orch = Arc::clone(&orchestrator);
+            tasks.spawn(async move {
+                let mut alert = create_test_alert();
+                alert.id = format!("blocked-alert-{}", i);
+                orch.process_alert(alert).await
+            });
+        }
+
+        // All should fail with KillSwitchActivated
+        while let Some(result) = tasks.join_next().await {
+            assert!(matches!(
+                result.unwrap(),
+                Err(OrchestratorError::KillSwitchActivated(_))
+            ));
+        }
+
+        // Stats should show 0 processed
+        let stats = orchestrator.stats().await;
+        assert_eq!(stats.incidents_created, 0);
+    }
+
+    #[tokio::test]
+    async fn test_kill_switch_toggle_during_processing() {
+        use std::sync::Arc;
+
+        let orchestrator = Arc::new(Orchestrator::new());
+
+        // Process one alert
+        let alert1 = create_test_alert();
+        let id1 = orchestrator.process_alert(alert1).await.unwrap();
+
+        // Activate kill switch
+        orchestrator.activate_kill_switch("Test", "admin").await;
+
+        // Try another - should fail
+        let mut alert2 = create_test_alert();
+        alert2.id = "blocked-alert".to_string();
+        let result = orchestrator.process_alert(alert2).await;
+        assert!(matches!(
+            result,
+            Err(OrchestratorError::KillSwitchActivated(_))
+        ));
+
+        // Deactivate
+        orchestrator.deactivate_kill_switch("admin").await;
+
+        // Now should work
+        let mut alert3 = create_test_alert();
+        alert3.id = "unblocked-alert".to_string();
+        let id3 = orchestrator.process_alert(alert3).await.unwrap();
+
+        assert_ne!(id1, id3);
+    }
+
+    // ============================================================
+    // Operation Mode Tests
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_operation_mode_transitions() {
+        let orchestrator = Orchestrator::new();
+
+        // Default is Supervised
+        assert_eq!(
+            orchestrator.operation_mode().await,
+            OperationMode::Supervised
+        );
+
+        // Transition through all modes
+        orchestrator
+            .set_operation_mode(OperationMode::Assisted)
+            .await;
+        assert_eq!(orchestrator.operation_mode().await, OperationMode::Assisted);
+
+        orchestrator
+            .set_operation_mode(OperationMode::Autonomous)
+            .await;
+        assert_eq!(
+            orchestrator.operation_mode().await,
+            OperationMode::Autonomous
+        );
+
+        orchestrator
+            .set_operation_mode(OperationMode::Supervised)
+            .await;
+        assert_eq!(
+            orchestrator.operation_mode().await,
+            OperationMode::Supervised
+        );
+    }
+
+    // ============================================================
+    // Edge Cases
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_get_nonexistent_incident() {
+        let orchestrator = Orchestrator::new();
+        let fake_id = uuid::Uuid::new_v4();
+
+        let result = orchestrator.get_incident(fake_id).await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_multiple_severity_levels() {
+        let orchestrator = Orchestrator::new();
+
+        let mut alerts = vec![];
+        for (i, severity) in [
+            Severity::Info,
+            Severity::Low,
+            Severity::Medium,
+            Severity::High,
+            Severity::Critical,
+        ]
+        .iter()
+        .enumerate()
+        {
+            let mut alert = create_test_alert();
+            alert.id = format!("severity-test-{}", i);
+            alert.severity = *severity;
+            alerts.push(alert);
+        }
+
+        for alert in alerts {
+            let expected_severity = alert.severity;
+            let id = orchestrator.process_alert(alert).await.unwrap();
+            let incident = orchestrator.get_incident(id).await.unwrap();
+            assert_eq!(incident.severity, expected_severity);
+        }
+    }
 }

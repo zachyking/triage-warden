@@ -603,4 +603,354 @@ mod tests {
         assert!(deny_list.is_target_protected("db-prod-cluster"));
         assert!(!deny_list.is_target_protected("web-dev-01"));
     }
+
+    // ============================================================
+    // Rate Limiter Edge Cases
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_rate_limiting_daily_limit() {
+        let mut rate_limits = HashMap::new();
+        rate_limits.insert(
+            "test_action".to_string(),
+            RateLimitConfig {
+                max_per_hour: 100, // High hourly limit
+                max_per_day: 3,    // Low daily limit
+                max_concurrent: None,
+            },
+        );
+
+        let engine = PolicyEngine::new(vec![], DenyList::default(), rate_limits);
+        let context = create_test_context("test_action", 0.95);
+
+        // First three should succeed
+        for _ in 0..3 {
+            engine.record_execution("test_action").await;
+        }
+
+        // Fourth should hit daily limit
+        let decision = engine.evaluate(&context).await.unwrap();
+        assert!(matches!(decision, PolicyDecision::Denied(_)));
+        if let PolicyDecision::Denied(reason) = decision {
+            assert!(reason.message.contains("daily limit"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiting_concurrent_limit() {
+        let mut rate_limits = HashMap::new();
+        rate_limits.insert(
+            "concurrent_action".to_string(),
+            RateLimitConfig {
+                max_per_hour: 100,
+                max_per_day: 100,
+                max_concurrent: Some(2),
+            },
+        );
+
+        let rate_limiter = RateLimiter::new(rate_limits);
+
+        // Start two concurrent actions
+        rate_limiter.start_concurrent("concurrent_action").await;
+        rate_limiter.start_concurrent("concurrent_action").await;
+
+        // Third should fail
+        let result = rate_limiter.check("concurrent_action").await;
+        assert!(result.is_err());
+        assert!(matches!(result, Err(PolicyError::RateLimitExceeded(_))));
+
+        // End one, then third should succeed
+        rate_limiter.end_concurrent("concurrent_action").await;
+        let result = rate_limiter.check("concurrent_action").await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_cleanup() {
+        let mut rate_limits = HashMap::new();
+        rate_limits.insert(
+            "cleanup_action".to_string(),
+            RateLimitConfig {
+                max_per_hour: 10,
+                max_per_day: 50,
+                max_concurrent: None,
+            },
+        );
+
+        let rate_limiter = RateLimiter::new(rate_limits);
+
+        // Record some actions
+        for _ in 0..5 {
+            rate_limiter.record("cleanup_action").await;
+        }
+
+        // Cleanup should not fail
+        rate_limiter.cleanup().await;
+
+        // Should still be able to check
+        let result = rate_limiter.check("cleanup_action").await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_no_rate_limit_configured() {
+        let rate_limiter = RateLimiter::new(HashMap::new());
+
+        // Should pass when no limit is configured
+        let result = rate_limiter.check("unconfigured_action").await;
+        assert!(result.is_ok());
+    }
+
+    // ============================================================
+    // Complex Rule Combinations
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_first_matching_rule_wins() {
+        // Create rules where a more specific rule should take precedence
+        let rules = vec![
+            // First rule: Allow ticket actions with high confidence
+            PolicyRule::new(
+                "allow_tickets".to_string(),
+                vec![
+                    RuleCondition::ActionTypeIn(vec!["create_ticket".to_string()]),
+                    RuleCondition::ConfidenceAbove(0.8),
+                ],
+                RuleEffect::Allow,
+            ),
+            // Second rule: All actions require approval (catch-all)
+            PolicyRule::new(
+                "default_approval".to_string(),
+                vec![],
+                RuleEffect::RequireApproval(ApprovalLevel::Analyst),
+            ),
+        ];
+
+        let engine = PolicyEngine::new(rules, DenyList::default(), HashMap::new());
+
+        // High confidence ticket should be allowed
+        let ticket_context = create_test_context("create_ticket", 0.95);
+        let decision = engine.evaluate(&ticket_context).await.unwrap();
+        assert_eq!(decision, PolicyDecision::Allowed);
+
+        // Low confidence ticket should require approval
+        let low_conf_context = create_test_context("create_ticket", 0.5);
+        let decision = engine.evaluate(&low_conf_context).await.unwrap();
+        assert!(matches!(
+            decision,
+            PolicyDecision::RequiresApproval(ApprovalLevel::Analyst)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_deny_list_takes_precedence() {
+        // Create an allow rule
+        let rules = vec![PolicyRule::new(
+            "allow_all".to_string(),
+            vec![],
+            RuleEffect::Allow,
+        )];
+
+        // But deny list blocks the action
+        let deny_list = DenyList {
+            actions: vec!["blocked_action".to_string()],
+            target_patterns: vec![],
+            protected_ips: vec![],
+            protected_users: vec![],
+        };
+
+        let engine = PolicyEngine::new(rules, deny_list, HashMap::new());
+        let context = create_test_context("blocked_action", 0.99);
+
+        let decision = engine.evaluate(&context).await.unwrap();
+        assert!(matches!(decision, PolicyDecision::Denied(_)));
+    }
+
+    #[tokio::test]
+    async fn test_multiple_conditions_must_all_match() {
+        let rules = vec![PolicyRule::new(
+            "strict_rule".to_string(),
+            vec![
+                RuleCondition::ActionTypeIn(vec!["sensitive_action".to_string()]),
+                RuleCondition::ConfidenceAbove(0.95),
+                RuleCondition::IncidentSeverityIn(vec!["critical".to_string()]),
+            ],
+            RuleEffect::Allow,
+        )];
+
+        let engine = PolicyEngine::new(rules, DenyList::default(), HashMap::new());
+
+        // Context that matches all conditions
+        let mut full_match_context = create_test_context("sensitive_action", 0.99);
+        full_match_context.incident_severity = "critical".to_string();
+        let decision = engine.evaluate(&full_match_context).await.unwrap();
+        assert_eq!(decision, PolicyDecision::Allowed);
+
+        // Context missing severity match (defaults to "high")
+        let partial_context = create_test_context("sensitive_action", 0.99);
+        let decision = engine.evaluate(&partial_context).await.unwrap();
+        // Should fall through to default (RequiresApproval)
+        assert!(matches!(
+            decision,
+            PolicyDecision::RequiresApproval(ApprovalLevel::Analyst)
+        ));
+    }
+
+    // ============================================================
+    // Protected Resources
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_protected_ips() {
+        let deny_list = DenyList {
+            actions: vec![],
+            target_patterns: vec![],
+            protected_ips: vec!["10.0.0.1".to_string(), "192.168.1.1".to_string()],
+            protected_users: vec![],
+        };
+
+        assert!(deny_list.is_ip_protected("10.0.0.1"));
+        assert!(deny_list.is_ip_protected("192.168.1.1"));
+        assert!(!deny_list.is_ip_protected("10.0.0.2"));
+    }
+
+    #[tokio::test]
+    async fn test_protected_users() {
+        let deny_list = DenyList {
+            actions: vec![],
+            target_patterns: vec![],
+            protected_ips: vec![],
+            protected_users: vec![
+                "admin".to_string(),
+                "root".to_string(),
+                "service_account".to_string(),
+            ],
+        };
+
+        assert!(deny_list.is_user_protected("admin"));
+        assert!(deny_list.is_user_protected("root"));
+        assert!(deny_list.is_user_protected("service_account"));
+        assert!(!deny_list.is_user_protected("regular_user"));
+    }
+
+    #[tokio::test]
+    async fn test_domain_controller_pattern_protection() {
+        let engine = PolicyEngine::default_config();
+        let mut context = create_test_context("isolate_host", 0.99);
+        context.target.identifier = "dc01.corp.local".to_string();
+
+        let decision = engine.evaluate(&context).await.unwrap();
+        assert!(matches!(decision, PolicyDecision::Denied(_)));
+    }
+
+    // ============================================================
+    // Concurrent Policy Evaluation
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_concurrent_policy_evaluation() {
+        use std::sync::Arc;
+        use tokio::task::JoinSet;
+
+        let engine = Arc::new(PolicyEngine::default_config());
+        let mut tasks = JoinSet::new();
+
+        // Spawn 10 concurrent evaluations
+        for i in 0..10 {
+            let engine = Arc::clone(&engine);
+            let action = if i % 2 == 0 {
+                "create_ticket"
+            } else {
+                "isolate_host"
+            };
+            tasks.spawn(async move {
+                let context = create_test_context(action, 0.95);
+                engine.evaluate(&context).await
+            });
+        }
+
+        // All should complete successfully
+        let mut results = Vec::new();
+        while let Some(result) = tasks.join_next().await {
+            results.push(result.unwrap());
+        }
+
+        assert_eq!(results.len(), 10);
+        for result in results {
+            assert!(result.is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_rate_limit_recording() {
+        use std::sync::Arc;
+        use tokio::task::JoinSet;
+
+        let mut rate_limits = HashMap::new();
+        rate_limits.insert(
+            "concurrent_test".to_string(),
+            RateLimitConfig {
+                max_per_hour: 1000,
+                max_per_day: 5000,
+                max_concurrent: None,
+            },
+        );
+
+        let rate_limiter = Arc::new(RateLimiter::new(rate_limits));
+        let mut tasks = JoinSet::new();
+
+        // Spawn 50 concurrent recordings
+        for _ in 0..50 {
+            let limiter = Arc::clone(&rate_limiter);
+            tasks.spawn(async move {
+                limiter.record("concurrent_test").await;
+            });
+        }
+
+        // All should complete
+        while tasks.join_next().await.is_some() {}
+
+        // Should still be under limit
+        let result = rate_limiter.check("concurrent_test").await;
+        assert!(result.is_ok());
+    }
+
+    // ============================================================
+    // Edge Cases
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_empty_rules_uses_default() {
+        let engine = PolicyEngine::new(vec![], DenyList::default(), HashMap::new());
+        let context = create_test_context("any_action", 0.95);
+
+        let decision = engine.evaluate(&context).await.unwrap();
+        // Default is RequiresApproval(Analyst)
+        assert!(matches!(
+            decision,
+            PolicyDecision::RequiresApproval(ApprovalLevel::Analyst)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_very_low_confidence_handling() {
+        let engine = PolicyEngine::default_config();
+        let context = create_test_context("create_ticket", 0.1);
+
+        // Low confidence should not match high-confidence rules
+        let decision = engine.evaluate(&context).await.unwrap();
+        // Falls through to default
+        assert!(matches!(
+            decision,
+            PolicyDecision::RequiresApproval(ApprovalLevel::Analyst)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_target_criticality_ordering() {
+        // Verify criticality enum ordering
+        assert!(Criticality::Low < Criticality::Medium);
+        assert!(Criticality::Medium < Criticality::High);
+        assert!(Criticality::High < Criticality::Critical);
+    }
 }
