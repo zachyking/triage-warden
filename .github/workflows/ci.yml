@@ -98,12 +98,11 @@ jobs:
       - name: Install maturin and test dependencies
         run: uv pip install --system maturin pytest pytest-asyncio
 
-      - name: Build tw-bridge wheel
+      - name: Build and install tw-bridge
         working-directory: tw-bridge
-        run: maturin build --release
-
-      - name: Install tw-bridge wheel
-        run: uv pip install --system tw-bridge/target/wheels/*.whl
+        run: |
+          maturin build --release
+          uv pip install --system target/wheels/tw_bridge*.whl
 
       - name: Run tw-bridge Python tests
         working-directory: tw-bridge

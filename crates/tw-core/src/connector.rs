@@ -258,7 +258,7 @@ impl ConnectorConfig {
 
     /// Returns a redacted version of the config suitable for logging/display.
     ///
-    /// Sensitive fields are replaced with "[REDACTED]" to prevent accidental
+    /// Sensitive fields are replaced with `[REDACTED]` to prevent accidental
     /// exposure of credentials in logs or API responses.
     pub fn redacted_config(&self) -> serde_json::Value {
         redact_sensitive_fields(&self.config)
