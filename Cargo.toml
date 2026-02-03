@@ -59,7 +59,7 @@ metrics = "0.22"
 metrics-exporter-prometheus = "0.14"
 
 # PyO3 for Python interop
-pyo3 = { version = "0.20", features = ["extension-module"] }
+pyo3 = { version = "0.22", features = ["extension-module"] }
 
 # Testing
 mockall = "0.12"

@@ -1,6 +1,5 @@
-// Suppress PyO3 macro warnings from older version
-// TODO: Update to PyO3 0.22+ when API migration is complete
-#![allow(non_local_definitions)]
+// PyO3's procedural macros generate code that triggers this lint incorrectly
+#![allow(clippy::useless_conversion)]
 
 //! # tw-bridge
 //!
@@ -130,6 +129,8 @@ pub struct PyTriageResult {
 #[pymethods]
 impl PyTriageResult {
     #[new]
+    #[pyo3(signature = (success, verdict, confidence, summary, reasoning, recommended_actions, mitre_techniques, error=None))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         success: bool,
         verdict: String,
@@ -193,6 +194,7 @@ pub struct PyThreatIntelResult {
 #[pymethods]
 impl PyThreatIntelResult {
     #[new]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         indicator_type: String,
         indicator: String,
@@ -392,8 +394,9 @@ impl ThreatIntelBridge {
             .block_on(async move { connector.lookup_hash(&hash).await })
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Look up an IP address in threat intelligence.
@@ -418,8 +421,9 @@ impl ThreatIntelBridge {
             .block_on(async move { connector.lookup_ip(&ip_addr).await })
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Look up a domain in threat intelligence.
@@ -440,8 +444,9 @@ impl ThreatIntelBridge {
             .block_on(async move { connector.lookup_domain(&domain).await })
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Look up a URL in threat intelligence.
@@ -462,8 +467,9 @@ impl ThreatIntelBridge {
             .block_on(async move { connector.lookup_url(&url).await })
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Check the health of the connector.
@@ -504,8 +510,9 @@ impl ThreatIntelBridge {
             }),
         };
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 }
 
@@ -642,8 +649,9 @@ impl SIEMBridge {
             .block_on(async move { connector.search(&query, timerange).await })
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Get recent alerts from the SIEM.
@@ -669,8 +677,9 @@ impl SIEMBridge {
             .block_on(async move { connector.get_recent_alerts(limit).await })
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Get saved searches/alerts configured in the SIEM.
@@ -687,8 +696,9 @@ impl SIEMBridge {
             .block_on(async move { connector.get_saved_searches().await })
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Get unique values for a field within a time range.
@@ -719,8 +729,9 @@ impl SIEMBridge {
             .block_on(async move { connector.get_field_values(&field, timerange, limit).await })
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Check the health of the connector.
@@ -734,8 +745,9 @@ impl SIEMBridge {
             .block_on(async move { connector.health_check().await })
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 }
 
@@ -919,8 +931,9 @@ impl EDRBridge {
             .block_on(async move { connector.get_host_info(&hostname).await })
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Search for hosts matching a query.
@@ -943,8 +956,9 @@ impl EDRBridge {
             .block_on(async move { connector.search_hosts(&query, limit).await })
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Isolate a host from the network.
@@ -972,8 +986,9 @@ impl EDRBridge {
             .block_on(async move { connector.isolate_host(&hostname).await })
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Remove network isolation from a host.
@@ -994,8 +1009,9 @@ impl EDRBridge {
             .block_on(async move { connector.unisolate_host(&hostname).await })
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Get detections/alerts for a host.
@@ -1026,8 +1042,9 @@ impl EDRBridge {
             .block_on(async move { connector.get_host_detections(&hostname).await })
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Get process information for a host.
@@ -1051,8 +1068,9 @@ impl EDRBridge {
             .block_on(async move { connector.get_processes(&hostname, timerange).await })
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Get network connections for a host.
@@ -1085,8 +1103,9 @@ impl EDRBridge {
             })
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Check the health of the connector.
@@ -1100,8 +1119,9 @@ impl EDRBridge {
             .block_on(async move { connector.health_check().await })
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 }
 
@@ -1273,8 +1293,9 @@ impl EmailGatewayBridge {
             .block_on(async move { connector.search_emails(search_query).await })
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Get a specific email by message ID.
@@ -1295,8 +1316,9 @@ impl EmailGatewayBridge {
             .block_on(async move { connector.get_email(&message_id).await })
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Quarantine an email (move to junk/quarantine folder).
@@ -1421,8 +1443,9 @@ impl EmailGatewayBridge {
             }),
         };
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 }
 
@@ -1497,8 +1520,9 @@ impl PolicyBridge {
                 "reason": "Kill switch is active - all automation halted",
                 "approval_level": null
             });
-            return pythonize::pythonize(py, &result)
-                .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)));
+            return Ok(pythonize::pythonize(py, &result)
+                .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+                .unbind());
         }
 
         // Build action context for policy evaluation
@@ -1554,8 +1578,9 @@ impl PolicyBridge {
             }),
         };
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Get the current operation mode.
@@ -1680,8 +1705,9 @@ impl PolicyBridge {
             }),
         };
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 }
 
@@ -1703,7 +1729,7 @@ impl Default for PolicyBridge {
 /// Enum to hold different ticketing connector types.
 enum TicketingConnectorType {
     Mock(MockTicketingConnector),
-    Jira(JiraConnector),
+    Jira(Box<JiraConnector>),
 }
 
 /// Bridge for ticketing system operations (Jira, Mock).
@@ -1803,7 +1829,7 @@ impl TicketingBridge {
                 })?;
 
                 Ok(Self {
-                    connector: TicketingConnectorType::Jira(connector),
+                    connector: TicketingConnectorType::Jira(Box::new(connector)),
                     connector_type: mode.to_string(),
                 })
             }
@@ -1884,8 +1910,9 @@ impl TicketingBridge {
         }
         .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Get a ticket by ID or key.
@@ -1909,8 +1936,9 @@ impl TicketingBridge {
         }
         .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Update an existing ticket.
@@ -1935,7 +1963,7 @@ impl TicketingBridge {
         &self,
         py: Python<'_>,
         ticket_id: &str,
-        updates: &PyAny,
+        updates: &Bound<'_, PyAny>,
     ) -> PyResult<PyObject> {
         // Parse updates from Python dict
         let updates_dict: std::collections::HashMap<String, PyObject> = updates
@@ -1946,25 +1974,25 @@ impl TicketingBridge {
 
         // Extract optional fields from the dict
         if let Some(title) = updates_dict.get("title") {
-            if let Ok(t) = title.extract::<String>(py) {
+            if let Ok(t) = title.bind(py).extract::<String>() {
                 update_request.title = Some(t);
             }
         }
 
         if let Some(description) = updates_dict.get("description") {
-            if let Ok(d) = description.extract::<String>(py) {
+            if let Ok(d) = description.bind(py).extract::<String>() {
                 update_request.description = Some(d);
             }
         }
 
         if let Some(status) = updates_dict.get("status") {
-            if let Ok(s) = status.extract::<String>(py) {
+            if let Ok(s) = status.bind(py).extract::<String>() {
                 update_request.status = Some(s);
             }
         }
 
         if let Some(priority) = updates_dict.get("priority") {
-            if let Ok(p) = priority.extract::<String>(py) {
+            if let Ok(p) = priority.bind(py).extract::<String>() {
                 let ticket_priority = match p.to_lowercase().as_str() {
                     "lowest" => TicketPriority::Lowest,
                     "low" => TicketPriority::Low,
@@ -1978,19 +2006,19 @@ impl TicketingBridge {
         }
 
         if let Some(assignee) = updates_dict.get("assignee") {
-            if let Ok(a) = assignee.extract::<String>(py) {
+            if let Ok(a) = assignee.bind(py).extract::<String>() {
                 update_request.assignee = Some(a);
             }
         }
 
         if let Some(add_labels) = updates_dict.get("add_labels") {
-            if let Ok(labels) = add_labels.extract::<Vec<String>>(py) {
+            if let Ok(labels) = add_labels.bind(py).extract::<Vec<String>>() {
                 update_request.add_labels = labels;
             }
         }
 
         if let Some(remove_labels) = updates_dict.get("remove_labels") {
-            if let Ok(labels) = remove_labels.extract::<Vec<String>>(py) {
+            if let Ok(labels) = remove_labels.bind(py).extract::<Vec<String>>() {
                 update_request.remove_labels = labels;
             }
         }
@@ -2005,8 +2033,9 @@ impl TicketingBridge {
             }
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Add a comment to a ticket.
@@ -2061,8 +2090,9 @@ impl TicketingBridge {
         }
         .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Check the health of the ticketing connector.
@@ -2084,8 +2114,9 @@ impl TicketingBridge {
         }
         .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 }
 
@@ -2358,8 +2389,9 @@ impl TriageWardenBridge {
             .block_on(async move { connector.lookup_hash(&hash).await })
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Look up an IP in threat intelligence.
@@ -2379,8 +2411,9 @@ impl TriageWardenBridge {
             .block_on(async move { connector.lookup_ip(&ip_addr).await })
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Look up a domain in threat intelligence.
@@ -2397,8 +2430,9 @@ impl TriageWardenBridge {
             .block_on(async move { connector.lookup_domain(&domain).await })
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Get host information from EDR.
@@ -2414,7 +2448,8 @@ impl TriageWardenBridge {
         match get_runtime().block_on(async move { connector.get_host_info(&hostname).await }) {
             Ok(result) => {
                 let obj = pythonize::pythonize(py, &result)
-                    .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?;
+                    .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+                    .unbind();
                 Ok(Some(obj))
             }
             Err(tw_connectors::ConnectorError::NotFound(_)) => Ok(None),
@@ -2437,8 +2472,9 @@ impl TriageWardenBridge {
             .block_on(async move { connector.search(&query, timerange).await })
             .map_err(connector_error_to_py)?;
 
-        pythonize::pythonize(py, &result)
-            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))
+        Ok(pythonize::pythonize(py, &result)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
+            .unbind())
     }
 
     /// Create a ticket.
@@ -2489,7 +2525,7 @@ impl TriageWardenBridge {
 
 /// Python module definition.
 #[pymodule]
-fn tw_bridge(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+fn tw_bridge(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Legacy classes
     m.add_class::<PyTriageRequest>()?;
     m.add_class::<PyTriageResult>()?;
