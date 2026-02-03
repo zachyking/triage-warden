@@ -1,3 +1,7 @@
+// Suppress PyO3 macro warnings from older version
+// TODO: Update to PyO3 0.22+ when API migration is complete
+#![allow(non_local_definitions)]
+
 //! # tw-bridge
 //!
 //! Rust-Python bridge using PyO3 for Triage Warden.
