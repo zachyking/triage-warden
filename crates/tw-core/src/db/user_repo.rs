@@ -538,7 +538,7 @@ impl UserRepository for PgUserRepository {
                 }
 
                 if let Some(search) = &filter.search {
-                    let pattern = format!("%{}%", search);
+                    let pattern = format!("%{}%", escape_like_pattern(search));
                     sqlx_query = sqlx_query.bind(pattern.clone());
                     sqlx_query = sqlx_query.bind(pattern.clone());
                     sqlx_query = sqlx_query.bind(pattern);

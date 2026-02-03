@@ -333,16 +333,23 @@ async fn approve_action(
         .ok_or_else(|| ApiError::NotFound(format!("Incident {} not found", incident_id)))?;
 
     // Find and update the action
+    // Use get() instead of direct index to handle potential concurrent modifications safely
     let action_idx = incident
         .proposed_actions
         .iter()
         .position(|a| a.id == request.action_id)
         .ok_or_else(|| ApiError::NotFound(format!("Action {} not found", request.action_id)))?;
 
-    if incident.proposed_actions[action_idx].approval_status != ApprovalStatus::Pending {
+    // Re-verify the action exists at the index (handles race conditions)
+    let action = incident
+        .proposed_actions
+        .get(action_idx)
+        .ok_or_else(|| ApiError::NotFound("Action no longer exists".to_string()))?;
+
+    if action.approval_status != ApprovalStatus::Pending {
         return Err(ApiError::Conflict(format!(
             "Action is not pending approval (current status: {:?})",
-            incident.proposed_actions[action_idx].approval_status
+            action.approval_status
         )));
     }
 

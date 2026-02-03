@@ -243,16 +243,28 @@ impl From<tw_core::db::DbError> for ApiError {
             }
             tw_core::db::DbError::Constraint(msg) => {
                 // Constraint errors are usually safe to expose (e.g., "email already exists")
-                // but sanitize potential internal details
+                // but in production, ALWAYS sanitize to prevent information leakage
                 if is_production_environment() {
-                    // In production, use generic message if the constraint name looks internal
-                    if msg.contains("sqlite") || msg.contains("pg_") || msg.contains("idx_") {
-                        tracing::error!(error = %msg, "Database constraint violation");
-                        ApiError::Conflict("A conflicting resource already exists".to_string())
-                    } else {
-                        ApiError::Conflict(msg)
-                    }
+                    // Log the full error server-side for debugging
+                    tracing::error!(error = %msg, "Database constraint violation");
+
+                    // Check for common user-friendly constraint patterns that are safe to expose
+                    let msg_lower = msg.to_lowercase();
+                    let safe_message =
+                        if msg_lower.contains("email") && msg_lower.contains("unique") {
+                            "A user with this email already exists"
+                        } else if msg_lower.contains("username") && msg_lower.contains("unique") {
+                            "A user with this username already exists"
+                        } else if msg_lower.contains("duplicate") || msg_lower.contains("unique") {
+                            "A conflicting resource already exists"
+                        } else {
+                            // Default generic message for any other constraint
+                            "This operation conflicts with an existing resource"
+                        };
+
+                    ApiError::Conflict(safe_message.to_string())
                 } else {
+                    // In development, include full details for debugging
                     ApiError::Conflict(msg)
                 }
             }

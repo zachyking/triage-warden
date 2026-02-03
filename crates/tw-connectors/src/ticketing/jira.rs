@@ -14,6 +14,49 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info, instrument, warn};
 
+/// JQL special characters that need to be escaped.
+/// Reference: https://support.atlassian.com/jira-software-cloud/docs/search-syntax-for-text-fields/
+const JQL_SPECIAL_CHARS: &[char] = &[
+    '+', '-', '&', '|', '!', '(', ')', '{', '}', '[', ']', '^', '"', '~', '*', '?', ':', '\\',
+];
+
+/// Escapes JQL special characters in a search query.
+///
+/// This function escapes all JQL reserved characters to prevent injection attacks
+/// and ensure the query is interpreted literally.
+fn escape_jql(value: &str) -> String {
+    let mut result = String::with_capacity(value.len() * 2);
+    for c in value.chars() {
+        if JQL_SPECIAL_CHARS.contains(&c) {
+            result.push('\\');
+        }
+        result.push(c);
+    }
+    result
+}
+
+/// Validates that a project key contains only valid characters.
+///
+/// Jira project keys must be alphanumeric with optional underscores,
+/// typically uppercase (e.g., "SEC", "IT_SUPPORT").
+fn validate_project_key(key: &str) -> ConnectorResult<()> {
+    if key.is_empty() {
+        return Err(ConnectorError::ConfigError(
+            "Project key cannot be empty".to_string(),
+        ));
+    }
+
+    // Project keys should be alphanumeric (and underscore allowed for some Jira configs)
+    if !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(ConnectorError::ConfigError(format!(
+            "Invalid project key '{}': must contain only alphanumeric characters and underscores",
+            key
+        )));
+    }
+
+    Ok(())
+}
+
 /// Jira-specific configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JiraConfig {
@@ -611,8 +654,13 @@ impl TicketingConnector for JiraConnector {
 
     #[instrument(skip(self), fields(query = %query))]
     async fn search_tickets(&self, query: &str, limit: usize) -> ConnectorResult<Vec<Ticket>> {
-        // Escape special JQL characters in the query
-        let escaped_query = query.replace("\"", "\\\"");
+        // Validate project key to prevent JQL injection
+        validate_project_key(&self.config.project_key)?;
+
+        // Escape all JQL special characters in the search query
+        let escaped_query = escape_jql(query);
+
+        // Use proper JQL escaping for the text search
         let jql = format!(
             "project = {} AND (summary ~ \"{}\" OR description ~ \"{}\")",
             self.config.project_key, escaped_query, escaped_query

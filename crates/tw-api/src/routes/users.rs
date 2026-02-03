@@ -39,6 +39,20 @@ pub struct ListUsersQuery {
     pub role: Option<String>,
     pub enabled: Option<bool>,
     pub search: Option<String>,
+    /// Page number (1-indexed). Defaults to 1.
+    #[serde(default = "default_page")]
+    pub page: u32,
+    /// Number of items per page. Defaults to 50, max 100.
+    #[serde(default = "default_per_page")]
+    pub per_page: u32,
+}
+
+fn default_page() -> u32 {
+    1
+}
+
+fn default_per_page() -> u32 {
+    50
 }
 
 /// Response for a user (excludes sensitive fields).
@@ -103,12 +117,34 @@ pub struct ResetPasswordRequest {
     pub password: String,
 }
 
-/// Lists all users.
+/// Paginated response for users list.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PaginatedUsersResponse {
+    /// List of users on this page.
+    pub users: Vec<UserResponse>,
+    /// Current page number (1-indexed).
+    pub page: u32,
+    /// Number of items per page.
+    pub per_page: u32,
+    /// Total number of users matching the filter.
+    pub total: u64,
+    /// Total number of pages.
+    pub total_pages: u32,
+}
+
+/// Maximum allowed items per page.
+const MAX_PER_PAGE: u32 = 100;
+
+/// Lists all users with pagination.
 async fn list_users(
     State(state): State<AppState>,
     RequireAdmin(_admin): RequireAdmin,
     Query(query): Query<ListUsersQuery>,
-) -> Result<Json<Vec<UserResponse>>, ApiError> {
+) -> Result<Json<PaginatedUsersResponse>, ApiError> {
+    // Validate and clamp pagination parameters
+    let page = query.page.max(1);
+    let per_page = query.per_page.clamp(1, MAX_PER_PAGE);
+
     let filter = UserFilter {
         role: query.role.as_deref().and_then(|r| r.parse().ok()),
         enabled: query.enabled,
@@ -116,10 +152,29 @@ async fn list_users(
     };
 
     let user_repo = create_user_repository(&state.db);
-    let users = user_repo.list(&filter).await?;
 
-    let responses: Vec<UserResponse> = users.into_iter().map(Into::into).collect();
-    Ok(Json(responses))
+    // Get total count for pagination metadata
+    let total = user_repo.count(&filter).await?;
+    let total_pages = ((total as f64) / (per_page as f64)).ceil() as u32;
+
+    // Get all users and apply pagination in-memory
+    // TODO: For better performance, add pagination support to UserRepository
+    let all_users = user_repo.list(&filter).await?;
+    let start = ((page - 1) * per_page) as usize;
+    let users: Vec<UserResponse> = all_users
+        .into_iter()
+        .skip(start)
+        .take(per_page as usize)
+        .map(Into::into)
+        .collect();
+
+    Ok(Json(PaginatedUsersResponse {
+        users,
+        page,
+        per_page,
+        total,
+        total_pages,
+    }))
 }
 
 /// Creates a new user.
