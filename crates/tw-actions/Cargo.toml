@@ -33,3 +33,4 @@ hkdf = "0.12"
 [dev-dependencies]
 mockall.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
+tw-policy = { path = "../tw-policy" }
