@@ -6,11 +6,19 @@
 //!
 //! This action includes safeguards to prevent accidental isolation of critical infrastructure:
 //! - Critical host patterns are checked before isolation
-//! - Hosts matching critical patterns require manual approval
+//! - Hosts matching critical patterns ALWAYS require manual approval workflow
+//! - Only users with SystemAdmin permission can execute emergency overrides (via approval workflow)
+//! - No parameter-based bypass is allowed - all critical host isolations must go through approval
 //! - Default auto-rollback timeout of 4 hours
+//!
+//! # Security Note
+//!
+//! Critical host isolation cannot be bypassed via parameters. The approval workflow must be used
+//! for all critical hosts. SystemAdmin users can approve emergency isolations through the
+//! workflow, but cannot bypass the workflow entirely.
 
 use crate::registry::{
-    Action, ActionContext, ActionError, ActionResult, ParameterDef, ParameterType,
+    Action, ActionContext, ActionError, ActionResult, ParameterDef, ParameterType, Permission,
 };
 use async_trait::async_trait;
 use chrono::Utc;
@@ -124,12 +132,6 @@ impl Action for IsolateHostAction {
                 ParameterType::String,
                 serde_json::json!("Automated isolation by Triage Warden"),
             ),
-            ParameterDef::optional(
-                "force",
-                "Force isolation even for critical hosts (requires admin authorization)",
-                ParameterType::Boolean,
-                serde_json::json!(false),
-            ),
         ]
     }
 
@@ -144,29 +146,48 @@ impl Action for IsolateHostAction {
         let reason = context
             .get_string("reason")
             .unwrap_or_else(|| "Automated isolation by Triage Warden".to_string());
-        let force = context
-            .get_param("force")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
 
         info!("Isolating host: {} (reason: {})", hostname, reason);
 
         // Check if this is a critical host that requires manual approval
+        // Critical hosts ALWAYS require the approval workflow - no parameter-based bypass allowed
         if let Some(matched_pattern) = self.is_critical_host(&hostname) {
-            if !force {
+            // Check if this action has been approved through the approval workflow
+            if !context.is_approved() {
                 warn!(
                     "Host '{}' matches critical pattern '{}' - manual approval required",
                     hostname, matched_pattern
                 );
+
+                // Provide guidance on how to proceed
+                let approval_msg = if context.has_permission(Permission::SystemAdmin) {
+                    "You have SystemAdmin permission. Please use the approval workflow to authorize this emergency isolation."
+                } else {
+                    "Please submit this action through the approval workflow for review by a SystemAdmin."
+                };
+
                 return Err(ActionError::RequiresApproval(format!(
                     "Host '{}' matches critical infrastructure pattern '{}'. \
                      This host cannot be automatically isolated without explicit approval. \
-                     To override, set force=true with admin authorization or use the manual approval workflow.",
-                    hostname, matched_pattern
+                     {}",
+                    hostname, matched_pattern, approval_msg
                 )));
             }
-            warn!(
-                "Force flag set - isolating critical host '{}' despite matching pattern '{}'",
+
+            // Verify the approval came from a SystemAdmin for critical hosts
+            if !context.approval_has_permission(Permission::SystemAdmin) {
+                warn!(
+                    "Approval for critical host '{}' was not from a SystemAdmin",
+                    hostname
+                );
+                return Err(ActionError::RequiresApproval(format!(
+                    "Critical host '{}' isolation requires approval from a user with SystemAdmin permission.",
+                    hostname
+                )));
+            }
+
+            info!(
+                "Executing approved emergency isolation of critical host '{}' (pattern: '{}')",
                 hostname, matched_pattern
             );
         }
@@ -371,7 +392,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_critical_host_with_force_flag() {
+    async fn test_critical_host_requires_approval_even_with_permissions() {
+        // Even users with SystemAdmin permission must go through approval workflow
+        let edr = Arc::new(MockEDRConnector::with_sample_data("test"));
+        let action = IsolateHostAction::new(edr);
+
+        // User has SystemAdmin permission but hasn't gone through approval
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("hostname", serde_json::json!("prod-db-primary"))
+            .with_permission(Permission::SystemAdmin);
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::RequiresApproval(_))));
+
+        if let Err(ActionError::RequiresApproval(msg)) = result {
+            assert!(msg.contains("approval workflow"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_critical_host_with_valid_sysadmin_approval() {
         use chrono::Utc;
         use tw_connectors::{HostInfo, HostStatus};
 
@@ -395,13 +435,78 @@ mod tests {
 
         let action = IsolateHostAction::new(edr);
 
-        // Force isolation of a critical host
+        // Proper approval workflow: action is marked as approved by a SystemAdmin
         let context = ActionContext::new(Uuid::new_v4())
             .with_param("hostname", serde_json::json!("prod-db-primary"))
-            .with_param("force", serde_json::json!(true));
+            .with_approval(Permission::SystemAdmin);
 
         let result = action.execute(context).await.unwrap();
         assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_critical_host_approval_requires_sysadmin() {
+        // Approval from non-SystemAdmin should be rejected for critical hosts
+        let edr = Arc::new(MockEDRConnector::with_sample_data("test"));
+        let action = IsolateHostAction::new(edr);
+
+        // Approved but not by a SystemAdmin (using default Operator permission)
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("hostname", serde_json::json!("prod-db-primary"))
+            .with_approval(Permission::Operator);
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::RequiresApproval(_))));
+
+        if let Err(ActionError::RequiresApproval(msg)) = result {
+            assert!(msg.contains("SystemAdmin permission"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_critical_host_always_requires_approval_no_bypass() {
+        // This test verifies that there is NO way to bypass approval for critical hosts
+        // via parameters - the force flag has been removed
+        let edr = Arc::new(MockEDRConnector::with_sample_data("test"));
+        let action = IsolateHostAction::new(edr);
+
+        // Attempt to pass a "force" parameter - it should be ignored
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("hostname", serde_json::json!("prod-db-primary"))
+            .with_param("force", serde_json::json!(true)); // This parameter is no longer recognized
+
+        let result = action.execute(context).await;
+
+        // Should still require approval - force parameter has no effect
+        assert!(
+            matches!(result, Err(ActionError::RequiresApproval(_))),
+            "Critical host isolation should require approval regardless of any parameters"
+        );
+    }
+
+    #[test]
+    fn test_force_parameter_not_in_definitions() {
+        // Verify that 'force' is not in the parameter definitions
+        let edr = Arc::new(tw_connectors::edr::MockEDRConnector::with_sample_data(
+            "test",
+        ));
+        let action = IsolateHostAction::new(edr);
+
+        let params = action.required_parameters();
+        let param_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+
+        assert!(
+            !param_names.contains(&"force"),
+            "The 'force' parameter should not exist in action parameters"
+        );
+        assert!(
+            param_names.contains(&"hostname"),
+            "hostname parameter should exist"
+        );
+        assert!(
+            param_names.contains(&"reason"),
+            "reason parameter should exist"
+        );
     }
 
     #[tokio::test]

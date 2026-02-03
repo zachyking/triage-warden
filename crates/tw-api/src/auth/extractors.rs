@@ -64,6 +64,10 @@ where
                     if !user.enabled {
                         return Err(ApiError::AccountDisabled);
                     }
+                    // Store session auth context for scope checking
+                    parts
+                        .extensions
+                        .insert(SessionAuthContext { role: user.role });
                     return Ok(AuthenticatedUser(user));
                 }
             }
@@ -350,10 +354,60 @@ pub mod scopes {
     pub const ALL: &str = "*";
 }
 
+/// Context for session-based authentication.
+///
+/// Stored in request extensions to enable scope validation for session users.
+#[derive(Debug, Clone)]
+pub struct SessionAuthContext {
+    /// The role of the authenticated session user.
+    pub role: Role,
+}
+
+/// Maps a user role to its equivalent set of API scopes.
+///
+/// This ensures session-based authentication respects the same scope
+/// restrictions as API key authentication.
+///
+/// # Scope Mapping
+///
+/// - **Admin**: All scopes (`*`) - full access to everything
+/// - **Analyst**: `read`, `write`, `incidents`, `connectors`, `webhooks` - operational access
+/// - **Viewer**: `read` only - read-only access to dashboards and incidents
+pub fn scopes_for_role(role: &Role) -> &'static [&'static str] {
+    match role {
+        Role::Admin => &[scopes::ALL],
+        Role::Analyst => &[
+            scopes::READ,
+            scopes::WRITE,
+            scopes::INCIDENTS,
+            scopes::CONNECTORS,
+            scopes::WEBHOOKS,
+        ],
+        Role::Viewer => &[scopes::READ],
+    }
+}
+
+/// Checks if a role has a specific scope.
+///
+/// Returns true if the role's equivalent scope set includes the required scope
+/// or the wildcard scope (`*`).
+pub fn role_has_scope(role: &Role, required_scope: &str) -> bool {
+    let role_scopes = scopes_for_role(role);
+    role_scopes.contains(&scopes::ALL) || role_scopes.contains(&required_scope)
+}
+
 /// Macro to create scope-specific extractors.
 ///
 /// This generates extractor types that check for specific API key scopes.
-/// Session-based authentication implicitly has all scopes.
+/// Session-based authentication is validated against role-based equivalent scopes.
+///
+/// # Scope Validation
+///
+/// - **API Key Auth**: Checks if the API key has the required scope or wildcard (`*`)
+/// - **Session Auth**: Maps user role to equivalent scopes and validates:
+///   - Admin role has all scopes
+///   - Analyst role has read, write, incidents, connectors, webhooks
+///   - Viewer role has read-only scope
 macro_rules! define_scope_extractor {
     ($name:ident, $scope:expr, $doc:literal) => {
         #[doc = $doc]
@@ -370,6 +424,7 @@ macro_rules! define_scope_extractor {
             async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
                 let AuthenticatedUser(user) = AuthenticatedUser::from_request_parts(parts, state).await?;
 
+                // Check API key scopes if authenticated via API key
                 if let Some(api_key) = parts.extensions.get::<ApiKey>() {
                     if !api_key.has_scope($scope) {
                         warn!(
@@ -383,6 +438,32 @@ macro_rules! define_scope_extractor {
                             $scope
                         )));
                     }
+                }
+                // Check session-based auth scopes based on user role
+                else if let Some(session_ctx) = parts.extensions.get::<SessionAuthContext>() {
+                    if !role_has_scope(&session_ctx.role, $scope) {
+                        warn!(
+                            scope = $scope,
+                            role = ?session_ctx.role,
+                            "Session user role does not have required scope"
+                        );
+                        return Err(ApiError::Forbidden(format!(
+                            "Insufficient permissions: {} scope required",
+                            $scope
+                        )));
+                    }
+                }
+                // Fallback: check user role directly (defensive)
+                else if !role_has_scope(&user.role, $scope) {
+                    warn!(
+                        scope = $scope,
+                        role = ?user.role,
+                        "User role does not have required scope"
+                    );
+                    return Err(ApiError::Forbidden(format!(
+                        "Insufficient permissions: {} scope required",
+                        $scope
+                    )));
                 }
 
                 Ok($name(user))
@@ -428,10 +509,58 @@ define_scope_extractor!(
     "Extractor that requires the 'webhooks' API key scope."
 );
 
-/// Helper function to check if an API key (if present) has a required scope.
+/// Helper function to check if the current auth context has a required scope.
+///
+/// This function validates scopes for both API key and session-based authentication:
+/// - For API keys: Checks if the key has the required scope or wildcard
+/// - For sessions: Maps user role to equivalent scopes and validates
+///
 /// Returns Ok if:
-/// - No API key is present (session auth - all scopes granted)
+/// - API key has the required scope (or wildcard `*`)
+/// - Session user's role grants the required scope
+///
+/// Returns Err(403 Forbidden) if the scope is insufficient.
+pub fn check_scope(parts: &Parts, required_scope: &str) -> Result<(), ApiError> {
+    // Check API key scopes
+    if let Some(api_key) = parts.extensions.get::<ApiKey>() {
+        if !api_key.has_scope(required_scope) {
+            return Err(ApiError::Forbidden(format!(
+                "API key does not have required scope: {}",
+                required_scope
+            )));
+        }
+        return Ok(());
+    }
+
+    // Check session-based auth scopes
+    if let Some(session_ctx) = parts.extensions.get::<SessionAuthContext>() {
+        if !role_has_scope(&session_ctx.role, required_scope) {
+            return Err(ApiError::Forbidden(format!(
+                "Insufficient permissions: {} scope required",
+                required_scope
+            )));
+        }
+        return Ok(());
+    }
+
+    // No auth context found - this shouldn't happen if AuthenticatedUser was used
+    Err(ApiError::Forbidden(format!(
+        "Unable to verify scope: {}",
+        required_scope
+    )))
+}
+
+/// Helper function to check if an API key (if present) has a required scope.
+///
+/// **DEPRECATED**: Use `check_scope` instead, which validates both API key and session scopes.
+///
+/// Returns Ok if:
+/// - No API key is present (session auth - WARNING: this bypasses scope checks!)
 /// - API key has the required scope
+#[deprecated(
+    since = "0.2.0",
+    note = "Use check_scope() instead, which validates both API key and session scopes"
+)]
 pub fn check_api_key_scope(parts: &Parts, required_scope: &str) -> Result<(), ApiError> {
     if let Some(api_key) = parts.extensions.get::<ApiKey>() {
         if !api_key.has_scope(required_scope) {

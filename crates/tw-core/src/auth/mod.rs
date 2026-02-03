@@ -5,14 +5,280 @@
 //! - API key management
 //! - Session data structures
 //! - Password hashing utilities
+//! - Fine-grained permissions for workflow authorization
+//! - Authorization context for action execution
 
 pub mod password;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fmt;
 use std::str::FromStr;
 use uuid::Uuid;
+
+/// Fine-grained permissions for workflow and action authorization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Permission {
+    /// Read incidents and their data.
+    ReadIncidents,
+    /// Write/modify incidents (status changes, add enrichments, etc.).
+    WriteIncidents,
+    /// Approve proposed actions for execution.
+    ApproveActions,
+    /// Execute approved actions.
+    ExecuteActions,
+    /// Manage playbooks (create, update, delete).
+    ManagePlaybooks,
+    /// Manage policies (create, update, delete).
+    ManagePolicies,
+    /// Manage users (create, update, delete).
+    ManageUsers,
+    /// Manage connectors (create, update, delete).
+    ManageConnectors,
+    /// Manage system settings.
+    ManageSettings,
+    /// Activate/deactivate kill switch.
+    ManageKillSwitch,
+}
+
+impl Permission {
+    /// Returns all available permissions.
+    pub fn all() -> HashSet<Permission> {
+        HashSet::from([
+            Permission::ReadIncidents,
+            Permission::WriteIncidents,
+            Permission::ApproveActions,
+            Permission::ExecuteActions,
+            Permission::ManagePlaybooks,
+            Permission::ManagePolicies,
+            Permission::ManageUsers,
+            Permission::ManageConnectors,
+            Permission::ManageSettings,
+            Permission::ManageKillSwitch,
+        ])
+    }
+
+    /// Returns the permission name as a string.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Permission::ReadIncidents => "read_incidents",
+            Permission::WriteIncidents => "write_incidents",
+            Permission::ApproveActions => "approve_actions",
+            Permission::ExecuteActions => "execute_actions",
+            Permission::ManagePlaybooks => "manage_playbooks",
+            Permission::ManagePolicies => "manage_policies",
+            Permission::ManageUsers => "manage_users",
+            Permission::ManageConnectors => "manage_connectors",
+            Permission::ManageSettings => "manage_settings",
+            Permission::ManageKillSwitch => "manage_kill_switch",
+        }
+    }
+}
+
+impl fmt::Display for Permission {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// Authorization context for workflow operations.
+///
+/// This struct carries identity and permission information through
+/// workflow transitions, enabling fine-grained access control and
+/// comprehensive audit logging.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthorizationContext {
+    /// Unique identifier of the actor (user or service).
+    pub actor_id: Uuid,
+    /// Human-readable actor name for audit logs.
+    pub actor_name: String,
+    /// The actor's role.
+    pub role: Role,
+    /// Explicit permissions granted to this actor.
+    pub permissions: HashSet<Permission>,
+    /// Session or request ID for tracing.
+    pub session_id: Option<String>,
+    /// IP address of the request origin (for audit).
+    pub ip_address: Option<String>,
+}
+
+impl AuthorizationContext {
+    /// Creates a new authorization context from a user.
+    pub fn from_user(user: &User) -> Self {
+        Self {
+            actor_id: user.id,
+            actor_name: user.display().to_string(),
+            role: user.role,
+            permissions: Self::permissions_for_role(user.role),
+            session_id: None,
+            ip_address: None,
+        }
+    }
+
+    /// Creates a system context for automated operations.
+    pub fn system() -> Self {
+        Self {
+            actor_id: Uuid::nil(),
+            actor_name: "system".to_string(),
+            role: Role::Admin,
+            permissions: Permission::all(),
+            session_id: None,
+            ip_address: None,
+        }
+    }
+
+    /// Creates an authorization context with explicit permissions.
+    pub fn with_permissions(
+        actor_id: Uuid,
+        actor_name: impl Into<String>,
+        role: Role,
+        permissions: HashSet<Permission>,
+    ) -> Self {
+        Self {
+            actor_id,
+            actor_name: actor_name.into(),
+            role,
+            permissions,
+            session_id: None,
+            ip_address: None,
+        }
+    }
+
+    /// Adds session tracking information.
+    pub fn with_session(mut self, session_id: impl Into<String>) -> Self {
+        self.session_id = Some(session_id.into());
+        self
+    }
+
+    /// Adds IP address for audit purposes.
+    pub fn with_ip_address(mut self, ip: impl Into<String>) -> Self {
+        self.ip_address = Some(ip.into());
+        self
+    }
+
+    /// Returns the permissions for a given role.
+    pub fn permissions_for_role(role: Role) -> HashSet<Permission> {
+        match role {
+            Role::Admin => Permission::all(),
+            Role::Analyst => HashSet::from([
+                Permission::ReadIncidents,
+                Permission::WriteIncidents,
+                Permission::ApproveActions,
+                Permission::ExecuteActions,
+            ]),
+            Role::Viewer => HashSet::from([Permission::ReadIncidents]),
+        }
+    }
+
+    /// Checks if this context has a specific permission.
+    pub fn has_permission(&self, permission: Permission) -> bool {
+        self.permissions.contains(&permission)
+    }
+
+    /// Checks if this context has all of the specified permissions.
+    pub fn has_all_permissions(&self, permissions: &[Permission]) -> bool {
+        permissions.iter().all(|p| self.permissions.contains(p))
+    }
+
+    /// Checks if this context has any of the specified permissions.
+    pub fn has_any_permission(&self, permissions: &[Permission]) -> bool {
+        permissions.iter().any(|p| self.permissions.contains(p))
+    }
+
+    /// Returns the actor identity string for audit logging.
+    pub fn audit_identity(&self) -> String {
+        format!("{}:{}", self.actor_id, self.actor_name)
+    }
+
+    /// Validates that this context has permission to execute actions.
+    ///
+    /// Returns an error if the `ExecuteActions` permission is missing.
+    pub fn validate_execute_permission(&self) -> Result<(), AuthorizationError> {
+        if !self.has_permission(Permission::ExecuteActions) {
+            return Err(AuthorizationError::InsufficientPermissions {
+                actor_id: self.actor_id,
+                actor_name: self.actor_name.clone(),
+                required: Permission::ExecuteActions,
+                role: self.role,
+            });
+        }
+        Ok(())
+    }
+
+    /// Validates that this context has permission for destructive actions.
+    ///
+    /// Destructive actions require both `ExecuteActions` and `ApproveActions` permissions.
+    pub fn validate_destructive_permission(&self) -> Result<(), AuthorizationError> {
+        self.validate_execute_permission()?;
+        if !self.has_permission(Permission::ApproveActions) {
+            return Err(AuthorizationError::InsufficientPermissions {
+                actor_id: self.actor_id,
+                actor_name: self.actor_name.clone(),
+                required: Permission::ApproveActions,
+                role: self.role,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Errors that can occur during authorization checks.
+#[derive(Debug, Clone)]
+pub enum AuthorizationError {
+    /// The actor lacks a required permission.
+    InsufficientPermissions {
+        actor_id: Uuid,
+        actor_name: String,
+        required: Permission,
+        role: Role,
+    },
+    /// No authorization context was provided.
+    MissingContext,
+    /// The authorization context is invalid.
+    InvalidContext(String),
+}
+
+impl std::fmt::Display for AuthorizationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AuthorizationError::InsufficientPermissions {
+                actor_name,
+                required,
+                role,
+                ..
+            } => {
+                write!(
+                    f,
+                    "User '{}' (role: {}) lacks required permission: {:?}",
+                    actor_name, role, required
+                )
+            }
+            AuthorizationError::MissingContext => {
+                write!(f, "No authorization context provided")
+            }
+            AuthorizationError::InvalidContext(msg) => {
+                write!(f, "Invalid authorization context: {}", msg)
+            }
+        }
+    }
+}
+
+impl std::error::Error for AuthorizationError {}
+
+/// List of action names considered destructive and requiring approval permission.
+pub const DESTRUCTIVE_ACTIONS: &[&str] = &[
+    "isolate_host",
+    "disable_user",
+    "block_sender",
+    "quarantine_email",
+];
+
+/// Checks if an action is considered destructive (requires approval permission).
+pub fn is_destructive_action(action_name: &str) -> bool {
+    DESTRUCTIVE_ACTIONS.contains(&action_name)
+}
 
 /// User role for role-based access control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -360,5 +626,99 @@ mod tests {
         assert!(api_key.has_scope("read"));
         assert!(api_key.has_scope("write"));
         assert!(api_key.has_scope("anything"));
+    }
+
+    #[test]
+    fn test_permission_enum() {
+        let all_perms = Permission::all();
+        assert!(all_perms.contains(&Permission::ReadIncidents));
+        assert!(all_perms.contains(&Permission::WriteIncidents));
+        assert!(all_perms.contains(&Permission::ApproveActions));
+        assert!(all_perms.contains(&Permission::ExecuteActions));
+        assert_eq!(all_perms.len(), 10);
+    }
+
+    #[test]
+    fn test_authorization_context_from_user() {
+        let user = User::new("test@example.com", "testuser", "hash", Role::Analyst);
+        let ctx = AuthorizationContext::from_user(&user);
+
+        assert_eq!(ctx.actor_id, user.id);
+        assert_eq!(ctx.actor_name, "testuser");
+        assert_eq!(ctx.role, Role::Analyst);
+        assert!(ctx.has_permission(Permission::ReadIncidents));
+        assert!(ctx.has_permission(Permission::WriteIncidents));
+        assert!(ctx.has_permission(Permission::ApproveActions));
+        assert!(!ctx.has_permission(Permission::ManageUsers));
+    }
+
+    #[test]
+    fn test_authorization_context_system() {
+        let ctx = AuthorizationContext::system();
+
+        assert_eq!(ctx.actor_id, Uuid::nil());
+        assert_eq!(ctx.actor_name, "system");
+        assert_eq!(ctx.role, Role::Admin);
+        // System context has all permissions
+        assert!(ctx.has_permission(Permission::ManageUsers));
+        assert!(ctx.has_permission(Permission::ManageKillSwitch));
+    }
+
+    #[test]
+    fn test_authorization_context_viewer_permissions() {
+        let user = User::new("viewer@example.com", "viewer", "hash", Role::Viewer);
+        let ctx = AuthorizationContext::from_user(&user);
+
+        assert!(ctx.has_permission(Permission::ReadIncidents));
+        assert!(!ctx.has_permission(Permission::WriteIncidents));
+        assert!(!ctx.has_permission(Permission::ApproveActions));
+        assert!(!ctx.has_permission(Permission::ExecuteActions));
+    }
+
+    #[test]
+    fn test_authorization_context_with_session_and_ip() {
+        let user = User::new("test@example.com", "testuser", "hash", Role::Analyst);
+        let ctx = AuthorizationContext::from_user(&user)
+            .with_session("session-123")
+            .with_ip_address("192.168.1.100");
+
+        assert_eq!(ctx.session_id, Some("session-123".to_string()));
+        assert_eq!(ctx.ip_address, Some("192.168.1.100".to_string()));
+    }
+
+    #[test]
+    fn test_authorization_context_has_all_permissions() {
+        let user = User::new("admin@example.com", "admin", "hash", Role::Admin);
+        let ctx = AuthorizationContext::from_user(&user);
+
+        assert!(ctx.has_all_permissions(&[
+            Permission::ReadIncidents,
+            Permission::WriteIncidents,
+            Permission::ManageUsers
+        ]));
+
+        let viewer = User::new("viewer@example.com", "viewer", "hash", Role::Viewer);
+        let viewer_ctx = AuthorizationContext::from_user(&viewer);
+        assert!(!viewer_ctx
+            .has_all_permissions(&[Permission::ReadIncidents, Permission::WriteIncidents,]));
+    }
+
+    #[test]
+    fn test_authorization_context_has_any_permission() {
+        let viewer = User::new("viewer@example.com", "viewer", "hash", Role::Viewer);
+        let ctx = AuthorizationContext::from_user(&viewer);
+
+        assert!(ctx.has_any_permission(&[Permission::ReadIncidents, Permission::WriteIncidents,]));
+        assert!(!ctx.has_any_permission(&[Permission::ManageUsers, Permission::ManageSettings,]));
+    }
+
+    #[test]
+    fn test_audit_identity() {
+        let user = User::new("test@example.com", "testuser", "hash", Role::Analyst);
+        let ctx = AuthorizationContext::from_user(&user);
+
+        let identity = ctx.audit_identity();
+        assert!(identity.contains(&user.id.to_string()));
+        assert!(identity.contains("testuser"));
     }
 }

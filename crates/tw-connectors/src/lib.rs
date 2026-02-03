@@ -8,14 +8,20 @@
 pub mod edr;
 pub mod email;
 pub mod http;
+pub mod secure_string;
 pub mod siem;
 pub mod threat_intel;
 pub mod ticketing;
 pub mod traits;
 
+// Re-export SecureString at the crate root
+pub use secure_string::SecureString;
+
 // Re-export traits
 pub use traits::{
     ActionResult,
+    // Auth
+    AuthConfig,
     Connector,
     ConnectorConfig,
     ConnectorError,

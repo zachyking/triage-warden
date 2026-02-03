@@ -61,5 +61,5 @@ pub use notify_reporter::{IncidentStatus, NotifyReporterAction};
 pub use notify_user::NotifyUserAction;
 pub use parse_email::ParseEmailAction;
 pub use quarantine_email::QuarantineEmailAction;
-pub use registry::{Action, ActionContext, ActionError, ActionRegistry, ActionResult};
+pub use registry::{Action, ActionContext, ActionError, ActionRegistry, ActionResult, Permission};
 pub use run_triage_agent::{AgentConfig, RunTriageAgentAction, TriageResult};

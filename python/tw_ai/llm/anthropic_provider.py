@@ -28,8 +28,16 @@ class AnthropicProvider(LLMProvider):
         Args:
             api_key: Anthropic API key. If not provided, uses ANTHROPIC_API_KEY env var.
             model: Model to use.
+
+        Raises:
+            ValueError: If API key is not provided and ANTHROPIC_API_KEY env var is not set.
         """
-        self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+        self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        if not self.api_key:
+            raise ValueError(
+                "ANTHROPIC_API_KEY environment variable not set. "
+                "Please set the ANTHROPIC_API_KEY environment variable or pass api_key parameter."
+            )
         self.model = model
         self.client = AsyncAnthropic(api_key=self.api_key)
 

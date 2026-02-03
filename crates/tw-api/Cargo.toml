@@ -33,6 +33,7 @@ validator.workspace = true
 
 # Rate limiting
 governor.workspace = true
+lru = "0.12"
 
 # HTTP client (for test notifications)
 reqwest.workspace = true

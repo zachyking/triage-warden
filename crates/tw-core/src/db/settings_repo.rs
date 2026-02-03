@@ -1,9 +1,11 @@
 //! Settings repository for database operations.
 
 use super::{DbError, DbPool};
+use crate::crypto::CredentialEncryptor;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// General application settings.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -99,12 +101,13 @@ pub trait SettingsRepository: Send + Sync {
 #[cfg(feature = "database")]
 pub struct SqliteSettingsRepository {
     pool: sqlx::SqlitePool,
+    encryptor: Arc<dyn CredentialEncryptor>,
 }
 
 #[cfg(feature = "database")]
 impl SqliteSettingsRepository {
-    pub fn new(pool: sqlx::SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(pool: sqlx::SqlitePool, encryptor: Arc<dyn CredentialEncryptor>) -> Self {
+        Self { pool, encryptor }
     }
 }
 
@@ -183,13 +186,32 @@ impl SettingsRepository for SqliteSettingsRepository {
                 .await?;
 
         match row {
-            Some(row) => Ok(serde_json::from_str(&row.value)?),
+            Some(row) => {
+                let mut settings: LlmSettings = serde_json::from_str(&row.value)?;
+                // Decrypt the API key if it's not empty
+                if !settings.api_key.is_empty() {
+                    settings.api_key = self.encryptor.decrypt(&settings.api_key).map_err(|e| {
+                        tracing::error!("Failed to decrypt LLM API key: {}", e);
+                        DbError::Crypto(format!(
+                            "Failed to decrypt LLM API key (data may be corrupted or key changed): {}",
+                            e
+                        ))
+                    })?;
+                }
+                Ok(settings)
+            }
             None => Ok(LlmSettings::default()),
         }
     }
 
     async fn save_llm(&self, settings: &LlmSettings) -> Result<(), DbError> {
-        let value = serde_json::to_string(settings)?;
+        // Clone settings and encrypt the API key before storage
+        let mut settings_to_store = settings.clone();
+        if !settings_to_store.api_key.is_empty() {
+            settings_to_store.api_key = self.encryptor.encrypt(&settings_to_store.api_key)?;
+        }
+
+        let value = serde_json::to_string(&settings_to_store)?;
         let now = Utc::now().to_rfc3339();
 
         sqlx::query(
@@ -240,12 +262,13 @@ impl SettingsRepository for SqliteSettingsRepository {
 #[cfg(feature = "database")]
 pub struct PgSettingsRepository {
     pool: sqlx::PgPool,
+    encryptor: Arc<dyn CredentialEncryptor>,
 }
 
 #[cfg(feature = "database")]
 impl PgSettingsRepository {
-    pub fn new(pool: sqlx::PgPool) -> Self {
-        Self { pool }
+    pub fn new(pool: sqlx::PgPool, encryptor: Arc<dyn CredentialEncryptor>) -> Self {
+        Self { pool, encryptor }
     }
 }
 
@@ -320,13 +343,32 @@ impl SettingsRepository for PgSettingsRepository {
                 .await?;
 
         match row {
-            Some(row) => Ok(serde_json::from_value(row.value)?),
+            Some(row) => {
+                let mut settings: LlmSettings = serde_json::from_value(row.value)?;
+                // Decrypt the API key if it's not empty
+                if !settings.api_key.is_empty() {
+                    settings.api_key = self.encryptor.decrypt(&settings.api_key).map_err(|e| {
+                        tracing::error!("Failed to decrypt LLM API key: {}", e);
+                        DbError::Crypto(format!(
+                            "Failed to decrypt LLM API key (data may be corrupted or key changed): {}",
+                            e
+                        ))
+                    })?;
+                }
+                Ok(settings)
+            }
             None => Ok(LlmSettings::default()),
         }
     }
 
     async fn save_llm(&self, settings: &LlmSettings) -> Result<(), DbError> {
-        let value = serde_json::to_value(settings)?;
+        // Clone settings and encrypt the API key before storage
+        let mut settings_to_store = settings.clone();
+        if !settings_to_store.api_key.is_empty() {
+            settings_to_store.api_key = self.encryptor.encrypt(&settings_to_store.api_key)?;
+        }
+
+        let value = serde_json::to_value(&settings_to_store)?;
 
         sqlx::query(
             r#"
@@ -372,11 +414,19 @@ impl SettingsRepository for PgSettingsRepository {
 }
 
 /// Factory function to create the appropriate repository based on pool type.
+///
+/// # Arguments
+///
+/// * `pool` - The database connection pool
+/// * `encryptor` - The credential encryptor for encrypting/decrypting sensitive fields like API keys
 #[cfg(feature = "database")]
-pub fn create_settings_repository(pool: &DbPool) -> Box<dyn SettingsRepository> {
+pub fn create_settings_repository(
+    pool: &DbPool,
+    encryptor: Arc<dyn CredentialEncryptor>,
+) -> Box<dyn SettingsRepository> {
     match pool {
-        DbPool::Sqlite(pool) => Box::new(SqliteSettingsRepository::new(pool.clone())),
-        DbPool::Postgres(pool) => Box::new(PgSettingsRepository::new(pool.clone())),
+        DbPool::Sqlite(pool) => Box::new(SqliteSettingsRepository::new(pool.clone(), encryptor)),
+        DbPool::Postgres(pool) => Box::new(PgSettingsRepository::new(pool.clone(), encryptor)),
     }
 }
 

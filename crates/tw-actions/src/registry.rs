@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
-use tracing::{debug, info, instrument};
+use tracing::{debug, info, instrument, warn};
+use tw_core::{is_destructive_action, AuthorizationContext};
 use uuid::Uuid;
 
 /// Errors that can occur during action execution.
@@ -38,6 +39,9 @@ pub enum ActionError {
 
     #[error("Action requires manual approval: {0}")]
     RequiresApproval(String),
+
+    #[error("Unauthorized: {0}")]
+    Unauthorized(String),
 }
 
 /// Result of an action execution.
@@ -126,6 +130,14 @@ pub struct ActionContext {
     pub dry_run: bool,
     /// Additional context data.
     pub metadata: HashMap<String, serde_json::Value>,
+    /// Permissions of the user executing this action.
+    permissions: Vec<Permission>,
+    /// Whether this action has been approved through the approval workflow.
+    approved: bool,
+    /// Permission level of the user who approved this action (if approved).
+    approver_permission: Option<Permission>,
+    /// Authorization context for the user executing this action.
+    pub auth_context: Option<AuthorizationContext>,
 }
 
 impl ActionContext {
@@ -137,7 +149,17 @@ impl ActionContext {
             timeout_secs: 60,
             dry_run: false,
             metadata: HashMap::new(),
+            permissions: vec![Permission::Operator], // Default permission
+            approved: false,
+            approver_permission: None,
+            auth_context: None,
         }
+    }
+
+    /// Sets the authorization context.
+    pub fn with_auth_context(mut self, auth_context: AuthorizationContext) -> Self {
+        self.auth_context = Some(auth_context);
+        self
     }
 
     /// Sets a parameter.
@@ -156,6 +178,44 @@ impl ActionContext {
     pub fn with_dry_run(mut self, dry_run: bool) -> Self {
         self.dry_run = dry_run;
         self
+    }
+
+    /// Adds a permission to the context (for the executing user).
+    pub fn with_permission(mut self, permission: Permission) -> Self {
+        if !self.permissions.contains(&permission) {
+            self.permissions.push(permission);
+        }
+        self
+    }
+
+    /// Sets the permissions for the executing user.
+    pub fn with_permissions(mut self, permissions: Vec<Permission>) -> Self {
+        self.permissions = permissions;
+        self
+    }
+
+    /// Marks this action as approved through the approval workflow.
+    /// The approver_permission indicates the permission level of the approving user.
+    pub fn with_approval(mut self, approver_permission: Permission) -> Self {
+        self.approved = true;
+        self.approver_permission = Some(approver_permission);
+        self
+    }
+
+    /// Checks if the executing user has a specific permission.
+    pub fn has_permission(&self, permission: Permission) -> bool {
+        self.permissions.contains(&permission)
+    }
+
+    /// Checks if this action has been approved through the approval workflow.
+    pub fn is_approved(&self) -> bool {
+        self.approved
+    }
+
+    /// Checks if the approver has a specific permission.
+    /// Returns false if not approved or if the approver doesn't have the permission.
+    pub fn approval_has_permission(&self, permission: Permission) -> bool {
+        self.approver_permission == Some(permission)
     }
 
     /// Gets a parameter value.
@@ -279,6 +339,25 @@ pub enum ParameterType {
     Object,
 }
 
+/// Permission levels for action execution and approval.
+///
+/// These permissions control what actions a user can perform and approve.
+/// The approval workflow enforces that critical actions require approval
+/// from users with appropriate permissions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Permission {
+    /// Standard operator permission - can execute most actions
+    Operator,
+    /// Security analyst - can execute security-related actions
+    SecurityAnalyst,
+    /// System administrator - can approve critical actions including
+    /// emergency overrides for critical host isolation
+    SystemAdmin,
+    /// Read-only viewer - cannot execute actions
+    Viewer,
+}
+
 /// Registry for managing available actions.
 pub struct ActionRegistry {
     actions: HashMap<String, Arc<dyn Action>>,
@@ -319,6 +398,46 @@ impl ActionRegistry {
         let action = self
             .get(name)
             .ok_or_else(|| ActionError::NotFound(name.to_string()))?;
+
+        // Authorization check
+        let auth_context = context.auth_context.as_ref().ok_or_else(|| {
+            ActionError::Unauthorized(
+                "No authorization context provided for action execution".to_string(),
+            )
+        })?;
+
+        // Check if this is a destructive action requiring approval permission
+        if is_destructive_action(name) {
+            auth_context
+                .validate_destructive_permission()
+                .map_err(|e| {
+                    warn!(
+                        executor = %auth_context.audit_identity(),
+                        action = %name,
+                        "Authorization failed for destructive action: {}",
+                        e
+                    );
+                    ActionError::Unauthorized(e.to_string())
+                })?;
+        } else {
+            auth_context.validate_execute_permission().map_err(|e| {
+                warn!(
+                    executor = %auth_context.audit_identity(),
+                    action = %name,
+                    "Authorization failed: {}",
+                    e
+                );
+                ActionError::Unauthorized(e.to_string())
+            })?;
+        }
+
+        // Log the execution with executor identity
+        info!(
+            executor = %auth_context.audit_identity(),
+            action = %name,
+            incident_id = %context.incident_id,
+            "Executing action"
+        );
 
         // Validate parameters
         action.validate(&context)?;

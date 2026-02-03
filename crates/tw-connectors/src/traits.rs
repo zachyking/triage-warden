@@ -3,6 +3,7 @@
 //! This module defines the interfaces that all connectors must implement,
 //! providing a consistent API for interacting with external systems.
 
+use crate::secure_string::SecureString;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -81,22 +82,42 @@ pub struct ConnectorConfig {
 }
 
 /// Authentication configuration.
+///
+/// All credential fields use `SecureString` to ensure sensitive data is
+/// automatically zeroized from memory when no longer needed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AuthConfig {
     /// No authentication.
     None,
     /// API key authentication.
-    ApiKey { key: String, header_name: String },
+    ApiKey {
+        /// The API key (zeroized on drop).
+        key: SecureString,
+        /// The header name to use for the API key.
+        header_name: String,
+    },
     /// Bearer token authentication.
-    BearerToken { token: String },
+    BearerToken {
+        /// The bearer token (zeroized on drop).
+        token: SecureString,
+    },
     /// Basic authentication.
-    Basic { username: String, password: String },
+    Basic {
+        /// The username.
+        username: String,
+        /// The password (zeroized on drop).
+        password: SecureString,
+    },
     /// OAuth2 client credentials.
     OAuth2 {
+        /// The client ID.
         client_id: String,
-        client_secret: String,
+        /// The client secret (zeroized on drop).
+        client_secret: SecureString,
+        /// The token URL.
         token_url: String,
+        /// The scopes to request.
         scopes: Vec<String>,
     },
 }

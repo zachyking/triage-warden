@@ -1,4 +1,12 @@
 //! HTTP middleware for the API server.
+//!
+//! This module provides middleware functions and layers for:
+//! - Request ID generation and propagation
+//! - Request logging with timing
+//! - Security headers (CSP, HSTS, etc.)
+//! - CORS configuration
+//! - Request body size limits
+//! - Rate limiting (via rate_limit module)
 
 use axum::{
     extract::Request,

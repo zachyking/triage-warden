@@ -25,7 +25,6 @@ metrics.workspace = true
 
 tw-policy = { path = "../tw-policy" }
 tw-connectors = { path = "../tw-connectors" }
-tw-actions = { path = "../tw-actions" }
 tw-observability = { path = "../tw-observability" }
 
 # Optional database support
@@ -41,6 +40,7 @@ subtle = "2.5"
 # Credential encryption
 aes-gcm = "0.10"
 base64 = "0.22"
+zeroize = { version = "1.8", features = ["derive"] }
 
 [dev-dependencies]
 mockall.workspace = true

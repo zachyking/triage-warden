@@ -1061,6 +1061,7 @@ fn extract_urls_from_body(content: Option<&str>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::secure_string::SecureString;
     use crate::traits::AuthConfig;
 
     fn create_test_config() -> M365Config {
@@ -1070,7 +1071,7 @@ mod tests {
                 base_url: "https://graph.microsoft.com/v1.0".to_string(),
                 auth: AuthConfig::OAuth2 {
                     client_id: "test-client-id".to_string(),
-                    client_secret: "test-client-secret".to_string(),
+                    client_secret: SecureString::new("test-client-secret".to_string()),
                     token_url: "https://login.microsoftonline.com/test-tenant/oauth2/v2.0/token"
                         .to_string(),
                     scopes: vec!["https://graph.microsoft.com/.default".to_string()],

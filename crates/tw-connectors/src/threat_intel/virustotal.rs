@@ -774,6 +774,7 @@ struct VTQuotaUser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::secure_string::SecureString;
     use crate::traits::AuthConfig;
     use std::collections::HashMap;
 
@@ -783,7 +784,7 @@ mod tests {
                 name: "virustotal-test".to_string(),
                 base_url: "https://www.virustotal.com".to_string(),
                 auth: AuthConfig::ApiKey {
-                    key: "test-api-key".to_string(),
+                    key: SecureString::new("test-api-key".to_string()),
                     header_name: "x-apikey".to_string(),
                 },
                 timeout_secs: 30,

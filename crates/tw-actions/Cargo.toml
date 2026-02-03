@@ -19,6 +19,7 @@ chrono.workspace = true
 regex = "1"
 
 tw-connectors = { path = "../tw-connectors" }
+tw-core = { path = "../tw-core" }
 
 [dev-dependencies]
 mockall.workspace = true

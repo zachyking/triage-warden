@@ -2,7 +2,15 @@
 //!
 //! This module implements the workflow state machine that manages the
 //! progression of incidents through the triage process.
+//!
+//! ## Authorization
+//!
+//! Workflow transitions require appropriate permissions:
+//! - Transitions to `Executing` require `ApproveActions` permission
+//! - Transitions to `Resolved` require `WriteIncidents` permission
+//! - All state transitions are logged with actor identity
 
+use crate::auth::{AuthorizationContext, Permission};
 use crate::incident::{Incident, IncidentStatus};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -30,6 +38,16 @@ pub enum WorkflowError {
 
     #[error("Step execution failed: {0}")]
     StepExecutionFailed(String),
+
+    #[error("Unauthorized: {action} requires {required_permission} permission (actor: {actor})")]
+    Unauthorized {
+        /// The action that was attempted.
+        action: String,
+        /// The permission that was required.
+        required_permission: String,
+        /// The actor who attempted the action.
+        actor: String,
+    },
 }
 
 /// Represents a state transition in the workflow.
@@ -320,13 +338,34 @@ impl WorkflowEngine {
     }
 
     /// Attempts to transition an incident to a new state.
-    #[instrument(skip(self, incident))]
+    ///
+    /// ## Authorization Requirements
+    ///
+    /// - Transitions to `Executing` require `ApproveActions` permission
+    /// - Transitions to `Resolved` require `WriteIncidents` permission
+    /// - All transitions are logged with actor identity for audit purposes
+    ///
+    /// ## Parameters
+    ///
+    /// - `incident`: The incident to transition
+    /// - `to`: The target status
+    /// - `auth_ctx`: Authorization context containing actor identity and permissions
+    ///
+    /// ## Returns
+    ///
+    /// Returns the list of transition actions to execute on success, or a
+    /// `WorkflowError::Unauthorized` if the actor lacks required permissions.
+    #[instrument(skip(self, incident, auth_ctx), fields(actor = %auth_ctx.actor_name))]
     pub fn transition(
         &mut self,
         incident: &mut Incident,
         to: IncidentStatus,
+        auth_ctx: &AuthorizationContext,
     ) -> Result<Vec<TransitionAction>, WorkflowError> {
         let from = incident.status.clone();
+
+        // Check authorization for sensitive transitions
+        self.check_transition_authorization(&to, auth_ctx)?;
 
         // Check if transition is valid
         let transition = self
@@ -344,8 +383,8 @@ impl WorkflowEngine {
             }
         }
 
-        // Update incident status
-        incident.update_status(to.clone(), "workflow_engine");
+        // Update incident status with actor identity for audit trail
+        incident.update_status(to.clone(), &auth_ctx.audit_identity());
 
         // Update workflow state
         if let Some(state) = self.active_workflows.get_mut(&incident.id) {
@@ -353,11 +392,45 @@ impl WorkflowEngine {
         }
 
         info!(
-            "Transitioned incident {} from {:?} to {:?}",
-            incident.id, from, to
+            "Transitioned incident {} from {:?} to {:?} by {} (role: {:?})",
+            incident.id, from, to, auth_ctx.actor_name, auth_ctx.role
         );
 
         Ok(transition.actions)
+    }
+
+    /// Checks if the given authorization context has permission for the transition.
+    ///
+    /// ## Permission Requirements
+    ///
+    /// - `Executing`: Requires `ApproveActions` - allows execution of approved actions
+    /// - `Resolved`: Requires `WriteIncidents` - allows marking incidents as resolved
+    fn check_transition_authorization(
+        &self,
+        to: &IncidentStatus,
+        auth_ctx: &AuthorizationContext,
+    ) -> Result<(), WorkflowError> {
+        let required_permission = match to {
+            IncidentStatus::Executing => Some(Permission::ApproveActions),
+            IncidentStatus::Resolved => Some(Permission::WriteIncidents),
+            _ => None,
+        };
+
+        if let Some(permission) = required_permission {
+            if !auth_ctx.has_permission(permission) {
+                warn!(
+                    "Authorization denied: actor {} (role: {:?}) attempted transition to {:?} without {} permission",
+                    auth_ctx.actor_name, auth_ctx.role, to, permission
+                );
+                return Err(WorkflowError::Unauthorized {
+                    action: format!("transition to {:?}", to),
+                    required_permission: permission.to_string(),
+                    actor: auth_ctx.audit_identity(),
+                });
+            }
+        }
+
+        Ok(())
     }
 
     /// Evaluates a transition condition.
@@ -440,6 +513,7 @@ impl Default for WorkflowEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::{Role, User};
     use crate::incident::{Alert, AlertSource, Enrichment, EnrichmentType, Severity};
     use chrono::Utc;
 
@@ -458,6 +532,21 @@ mod tests {
         Incident::from_alert(alert)
     }
 
+    fn create_analyst_context() -> AuthorizationContext {
+        let user = User::new("analyst@test.com", "analyst", "hash", Role::Analyst);
+        AuthorizationContext::from_user(&user)
+    }
+
+    fn create_viewer_context() -> AuthorizationContext {
+        let user = User::new("viewer@test.com", "viewer", "hash", Role::Viewer);
+        AuthorizationContext::from_user(&user)
+    }
+
+    fn create_admin_context() -> AuthorizationContext {
+        let user = User::new("admin@test.com", "admin", "hash", Role::Admin);
+        AuthorizationContext::from_user(&user)
+    }
+
     #[test]
     fn test_workflow_registration() {
         let mut engine = WorkflowEngine::new();
@@ -472,10 +561,11 @@ mod tests {
     fn test_valid_transition() {
         let mut engine = WorkflowEngine::new();
         let mut incident = create_test_incident();
+        let auth_ctx = create_analyst_context();
         engine.register_workflow(&incident);
 
         // New -> Enriching should succeed
-        let result = engine.transition(&mut incident, IncidentStatus::Enriching);
+        let result = engine.transition(&mut incident, IncidentStatus::Enriching, &auth_ctx);
         assert!(result.is_ok());
         assert_eq!(incident.status, IncidentStatus::Enriching);
     }
@@ -484,10 +574,11 @@ mod tests {
     fn test_invalid_transition() {
         let mut engine = WorkflowEngine::new();
         let mut incident = create_test_incident();
+        let auth_ctx = create_analyst_context();
         engine.register_workflow(&incident);
 
         // New -> Resolved should fail (not a valid direct transition)
-        let result = engine.transition(&mut incident, IncidentStatus::Resolved);
+        let result = engine.transition(&mut incident, IncidentStatus::Resolved, &auth_ctx);
         assert!(result.is_err());
     }
 
@@ -495,15 +586,16 @@ mod tests {
     fn test_condition_not_met() {
         let mut engine = WorkflowEngine::new();
         let mut incident = create_test_incident();
+        let auth_ctx = create_analyst_context();
         engine.register_workflow(&incident);
 
         // Transition to Enriching first
         engine
-            .transition(&mut incident, IncidentStatus::Enriching)
+            .transition(&mut incident, IncidentStatus::Enriching, &auth_ctx)
             .unwrap();
 
         // Enriching -> Analyzing should fail without enrichments
-        let result = engine.transition(&mut incident, IncidentStatus::Analyzing);
+        let result = engine.transition(&mut incident, IncidentStatus::Analyzing, &auth_ctx);
         assert!(matches!(result, Err(WorkflowError::ConditionNotMet(_))));
     }
 
@@ -511,11 +603,12 @@ mod tests {
     fn test_condition_met() {
         let mut engine = WorkflowEngine::new();
         let mut incident = create_test_incident();
+        let auth_ctx = create_analyst_context();
         engine.register_workflow(&incident);
 
         // Transition to Enriching
         engine
-            .transition(&mut incident, IncidentStatus::Enriching)
+            .transition(&mut incident, IncidentStatus::Enriching, &auth_ctx)
             .unwrap();
 
         // Add an enrichment
@@ -528,7 +621,7 @@ mod tests {
         });
 
         // Now Enriching -> Analyzing should succeed
-        let result = engine.transition(&mut incident, IncidentStatus::Analyzing);
+        let result = engine.transition(&mut incident, IncidentStatus::Analyzing, &auth_ctx);
         assert!(result.is_ok());
     }
 
@@ -558,5 +651,253 @@ mod tests {
         state.resume();
         assert!(!state.paused);
         assert!(state.pause_reason.is_none());
+    }
+
+    // ============================================================
+    // Authorization Tests
+    // ============================================================
+
+    #[test]
+    fn test_transition_to_executing_requires_approve_actions() {
+        let mut engine = WorkflowEngine::new();
+        let mut incident = create_test_incident();
+        let viewer_ctx = create_viewer_context();
+        let analyst_ctx = create_analyst_context();
+        engine.register_workflow(&incident);
+
+        // Setup: Get to PendingApproval state
+        engine
+            .transition(&mut incident, IncidentStatus::Enriching, &analyst_ctx)
+            .unwrap();
+        incident.add_enrichment(Enrichment {
+            enrichment_type: EnrichmentType::ThreatIntel,
+            source: "test".to_string(),
+            data: serde_json::json!({}),
+            timestamp: Utc::now(),
+            ttl_seconds: None,
+        });
+        engine
+            .transition(&mut incident, IncidentStatus::Analyzing, &analyst_ctx)
+            .unwrap();
+        incident.set_analysis(crate::incident::TriageAnalysis {
+            verdict: crate::incident::TriageVerdict::TruePositive,
+            confidence: 0.9,
+            summary: "Test".to_string(),
+            reasoning: "Test".to_string(),
+            mitre_techniques: vec![],
+            iocs: vec![],
+            recommendations: vec![],
+            risk_score: 80,
+            analyzed_by: "test".to_string(),
+            timestamp: Utc::now(),
+        });
+        engine
+            .transition(&mut incident, IncidentStatus::PendingReview, &analyst_ctx)
+            .unwrap();
+        engine
+            .transition(&mut incident, IncidentStatus::PendingApproval, &analyst_ctx)
+            .unwrap();
+
+        // Mark all actions as reviewed (empty list means all reviewed)
+        // Viewer should NOT be able to transition to Executing
+        let result = engine.transition(&mut incident, IncidentStatus::Executing, &viewer_ctx);
+        assert!(matches!(result, Err(WorkflowError::Unauthorized { .. })));
+
+        // Analyst SHOULD be able to transition to Executing (has ApproveActions permission)
+        let result = engine.transition(&mut incident, IncidentStatus::Executing, &analyst_ctx);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_transition_to_resolved_requires_write_incidents() {
+        let mut engine = WorkflowEngine::new();
+        let mut incident = create_test_incident();
+        let viewer_ctx = create_viewer_context();
+        let analyst_ctx = create_analyst_context();
+        engine.register_workflow(&incident);
+
+        // Setup: Get to Executing state (using analyst who has permissions)
+        engine
+            .transition(&mut incident, IncidentStatus::Enriching, &analyst_ctx)
+            .unwrap();
+        incident.add_enrichment(Enrichment {
+            enrichment_type: EnrichmentType::ThreatIntel,
+            source: "test".to_string(),
+            data: serde_json::json!({}),
+            timestamp: Utc::now(),
+            ttl_seconds: None,
+        });
+        engine
+            .transition(&mut incident, IncidentStatus::Analyzing, &analyst_ctx)
+            .unwrap();
+        incident.set_analysis(crate::incident::TriageAnalysis {
+            verdict: crate::incident::TriageVerdict::TruePositive,
+            confidence: 0.9,
+            summary: "Test".to_string(),
+            reasoning: "Test".to_string(),
+            mitre_techniques: vec![],
+            iocs: vec![],
+            recommendations: vec![],
+            risk_score: 80,
+            analyzed_by: "test".to_string(),
+            timestamp: Utc::now(),
+        });
+        engine
+            .transition(&mut incident, IncidentStatus::PendingReview, &analyst_ctx)
+            .unwrap();
+        engine
+            .transition(&mut incident, IncidentStatus::PendingApproval, &analyst_ctx)
+            .unwrap();
+        engine
+            .transition(&mut incident, IncidentStatus::Executing, &analyst_ctx)
+            .unwrap();
+
+        // Viewer should NOT be able to transition to Resolved
+        let result = engine.transition(&mut incident, IncidentStatus::Resolved, &viewer_ctx);
+        assert!(matches!(result, Err(WorkflowError::Unauthorized { .. })));
+
+        // Analyst SHOULD be able to transition to Resolved (has WriteIncidents permission)
+        let result = engine.transition(&mut incident, IncidentStatus::Resolved, &analyst_ctx);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_admin_can_perform_all_transitions() {
+        let mut engine = WorkflowEngine::new();
+        let mut incident = create_test_incident();
+        let admin_ctx = create_admin_context();
+        engine.register_workflow(&incident);
+
+        // Admin should be able to do all transitions
+        engine
+            .transition(&mut incident, IncidentStatus::Enriching, &admin_ctx)
+            .unwrap();
+        incident.add_enrichment(Enrichment {
+            enrichment_type: EnrichmentType::ThreatIntel,
+            source: "test".to_string(),
+            data: serde_json::json!({}),
+            timestamp: Utc::now(),
+            ttl_seconds: None,
+        });
+        engine
+            .transition(&mut incident, IncidentStatus::Analyzing, &admin_ctx)
+            .unwrap();
+        incident.set_analysis(crate::incident::TriageAnalysis {
+            verdict: crate::incident::TriageVerdict::TruePositive,
+            confidence: 0.9,
+            summary: "Test".to_string(),
+            reasoning: "Test".to_string(),
+            mitre_techniques: vec![],
+            iocs: vec![],
+            recommendations: vec![],
+            risk_score: 80,
+            analyzed_by: "test".to_string(),
+            timestamp: Utc::now(),
+        });
+        engine
+            .transition(&mut incident, IncidentStatus::PendingReview, &admin_ctx)
+            .unwrap();
+        engine
+            .transition(&mut incident, IncidentStatus::PendingApproval, &admin_ctx)
+            .unwrap();
+        engine
+            .transition(&mut incident, IncidentStatus::Executing, &admin_ctx)
+            .unwrap();
+        engine
+            .transition(&mut incident, IncidentStatus::Resolved, &admin_ctx)
+            .unwrap();
+
+        assert_eq!(incident.status, IncidentStatus::Resolved);
+    }
+
+    #[test]
+    fn test_system_context_can_perform_all_transitions() {
+        let mut engine = WorkflowEngine::new();
+        let mut incident = create_test_incident();
+        let system_ctx = AuthorizationContext::system();
+        engine.register_workflow(&incident);
+
+        // System context should be able to do all transitions
+        let result = engine.transition(&mut incident, IncidentStatus::Enriching, &system_ctx);
+        assert!(result.is_ok());
+        assert_eq!(incident.status, IncidentStatus::Enriching);
+    }
+
+    #[test]
+    fn test_audit_log_includes_actor_identity() {
+        let mut engine = WorkflowEngine::new();
+        let mut incident = create_test_incident();
+        let analyst_ctx = create_analyst_context();
+        engine.register_workflow(&incident);
+
+        let initial_audit_count = incident.audit_log.len();
+
+        // Perform transition
+        engine
+            .transition(&mut incident, IncidentStatus::Enriching, &analyst_ctx)
+            .unwrap();
+
+        // Check that audit log was updated with actor identity
+        assert!(incident.audit_log.len() > initial_audit_count);
+        let last_entry = incident.audit_log.last().unwrap();
+        assert!(last_entry.actor.contains("analyst"));
+    }
+
+    #[test]
+    fn test_unauthorized_error_contains_useful_info() {
+        let mut engine = WorkflowEngine::new();
+        let mut incident = create_test_incident();
+        let viewer_ctx = create_viewer_context();
+        let analyst_ctx = create_analyst_context();
+        engine.register_workflow(&incident);
+
+        // Setup: Get to PendingApproval state
+        engine
+            .transition(&mut incident, IncidentStatus::Enriching, &analyst_ctx)
+            .unwrap();
+        incident.add_enrichment(Enrichment {
+            enrichment_type: EnrichmentType::ThreatIntel,
+            source: "test".to_string(),
+            data: serde_json::json!({}),
+            timestamp: Utc::now(),
+            ttl_seconds: None,
+        });
+        engine
+            .transition(&mut incident, IncidentStatus::Analyzing, &analyst_ctx)
+            .unwrap();
+        incident.set_analysis(crate::incident::TriageAnalysis {
+            verdict: crate::incident::TriageVerdict::TruePositive,
+            confidence: 0.9,
+            summary: "Test".to_string(),
+            reasoning: "Test".to_string(),
+            mitre_techniques: vec![],
+            iocs: vec![],
+            recommendations: vec![],
+            risk_score: 80,
+            analyzed_by: "test".to_string(),
+            timestamp: Utc::now(),
+        });
+        engine
+            .transition(&mut incident, IncidentStatus::PendingReview, &analyst_ctx)
+            .unwrap();
+        engine
+            .transition(&mut incident, IncidentStatus::PendingApproval, &analyst_ctx)
+            .unwrap();
+
+        // Try unauthorized transition
+        let result = engine.transition(&mut incident, IncidentStatus::Executing, &viewer_ctx);
+
+        match result {
+            Err(WorkflowError::Unauthorized {
+                action,
+                required_permission,
+                actor,
+            }) => {
+                assert!(action.contains("Executing"));
+                assert!(required_permission.contains("approve_actions"));
+                assert!(actor.contains("viewer"));
+            }
+            _ => panic!("Expected Unauthorized error"),
+        }
     }
 }

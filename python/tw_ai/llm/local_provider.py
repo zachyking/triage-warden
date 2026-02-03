@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 import httpx
@@ -19,7 +20,7 @@ class LocalProvider(LLMProvider):
 
     def __init__(
         self,
-        base_url: str = "http://localhost:8000/v1",
+        base_url: str | None = None,
         model: str = "foundation-sec-8b",
         api_key: str = "not-needed",
     ):
@@ -27,11 +28,21 @@ class LocalProvider(LLMProvider):
         Initialize the local provider.
 
         Args:
-            base_url: Base URL for the local API server.
+            base_url: Base URL for the local API server. If not provided, uses
+                LOCAL_LLM_ENDPOINT env var.
             model: Model name/identifier.
             api_key: API key (often not needed for local deployments).
+
+        Raises:
+            ValueError: If base_url is not provided and LOCAL_LLM_ENDPOINT env var is not set.
         """
-        self.base_url = base_url.rstrip("/")
+        self.base_url = base_url or os.environ.get("LOCAL_LLM_ENDPOINT")
+        if not self.base_url:
+            raise ValueError(
+                "LOCAL_LLM_ENDPOINT environment variable not set. "
+                "Please set the LOCAL_LLM_ENDPOINT environment variable or pass base_url parameter."
+            )
+        self.base_url = self.base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
         self.client = httpx.AsyncClient(

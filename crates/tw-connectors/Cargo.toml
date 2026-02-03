@@ -28,6 +28,10 @@ base64 = "0.22"
 regex = "1.10"
 urlencoding = "2.1"
 
+# Secure credential handling
+zeroize = { version = "1.8", features = ["derive"] }
+subtle = "2.5"
+
 [dev-dependencies]
 mockall.workspace = true
 wiremock.workspace = true

@@ -135,6 +135,8 @@ pub fn is_transient_error(error: &DbError) -> bool {
         DbError::NotFound { .. } => false,
         // Migration errors are not transient
         DbError::Migration(_) => false,
+        // Crypto errors are not transient (corrupted data or wrong key)
+        DbError::Crypto(_) => false,
     }
 }
 

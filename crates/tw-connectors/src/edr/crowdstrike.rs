@@ -1025,6 +1025,7 @@ struct RTRCommandResultResource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::secure_string::SecureString;
     use crate::traits::AuthConfig;
 
     fn create_test_config() -> CrowdStrikeConfig {
@@ -1034,7 +1035,7 @@ mod tests {
                 base_url: "https://api.crowdstrike.com".to_string(),
                 auth: AuthConfig::OAuth2 {
                     client_id: "test-client-id".to_string(),
-                    client_secret: "test-client-secret".to_string(),
+                    client_secret: SecureString::new("test-client-secret".to_string()),
                     token_url: "https://api.crowdstrike.com/oauth2/token".to_string(),
                     scopes: vec!["hosts:read".to_string(), "hosts:write".to_string()],
                 },

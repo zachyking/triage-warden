@@ -465,7 +465,7 @@ async fn test_virustotal_connection(config: &serde_json::Value) -> InternalTestR
             name: "virustotal".to_string(),
             base_url: base_url.to_string(),
             auth: AuthConfig::ApiKey {
-                key: api_key.to_string(),
+                key: api_key.to_string().into(),
                 header_name: "x-apikey".to_string(),
             },
             timeout_secs: 30,

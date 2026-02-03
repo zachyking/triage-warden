@@ -851,6 +851,7 @@ struct JiraTransition {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::secure_string::SecureString;
     use crate::traits::AuthConfig;
 
     fn create_test_config() -> JiraConfig {
@@ -860,7 +861,7 @@ mod tests {
                 base_url: "https://example.atlassian.net".to_string(),
                 auth: AuthConfig::Basic {
                     username: "test@example.com".to_string(),
-                    password: "api-token".to_string(),
+                    password: SecureString::new("api-token".to_string()),
                 },
                 timeout_secs: 30,
                 max_retries: 3,

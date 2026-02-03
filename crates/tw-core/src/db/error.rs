@@ -1,5 +1,6 @@
 //! Database error types.
 
+use crate::crypto::CryptoError;
 use thiserror::Error;
 
 /// Errors that can occur during database operations.
@@ -40,6 +41,16 @@ pub enum DbError {
     /// Invalid configuration.
     #[error("Invalid database configuration: {0}")]
     Configuration(String),
+
+    /// Cryptographic operation error (e.g., encryption/decryption failure).
+    #[error("Cryptographic error: {0}")]
+    Crypto(String),
+}
+
+impl From<CryptoError> for DbError {
+    fn from(err: CryptoError) -> Self {
+        DbError::Crypto(err.to_string())
+    }
 }
 
 #[cfg(feature = "database")]

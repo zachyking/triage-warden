@@ -31,8 +31,16 @@ class OpenAIProvider(LLMProvider):
             api_key: OpenAI API key. If not provided, uses OPENAI_API_KEY env var.
             model: Model to use.
             base_url: Optional custom base URL for API-compatible services.
+
+        Raises:
+            ValueError: If API key is not provided and OPENAI_API_KEY env var is not set.
         """
-        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
+        if not self.api_key:
+            raise ValueError(
+                "OPENAI_API_KEY environment variable not set. "
+                "Please set the OPENAI_API_KEY environment variable or pass api_key parameter."
+            )
         self.model = model
         self.client = AsyncOpenAI(api_key=self.api_key, base_url=base_url)
 

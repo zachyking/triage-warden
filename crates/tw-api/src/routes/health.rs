@@ -187,7 +187,7 @@ async fn get_connectors_health(state: &AppState) -> ConnectorsHealth {
 async fn get_llm_health(state: &AppState) -> LlmHealth {
     use tw_core::db::create_settings_repository;
 
-    let repo = create_settings_repository(&state.db);
+    let repo = create_settings_repository(&state.db, state.encryptor.clone());
     let llm_settings = repo.get_llm().await.ok();
 
     match llm_settings {

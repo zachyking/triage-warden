@@ -91,7 +91,8 @@ async fn get_general_settings(
     State(state): State<AppState>,
     RequireAdmin(_user): RequireAdmin,
 ) -> Result<Json<GeneralSettingsResponse>, ApiError> {
-    let repo: Box<dyn SettingsRepository> = create_settings_repository(&state.db);
+    let repo: Box<dyn SettingsRepository> =
+        create_settings_repository(&state.db, state.encryptor.clone());
 
     let settings = repo.get_general().await?;
 
@@ -108,7 +109,8 @@ async fn save_general_settings(
     RequireAdmin(_user): RequireAdmin,
     Form(form): Form<GeneralSettingsForm>,
 ) -> Result<Response, ApiError> {
-    let repo: Box<dyn SettingsRepository> = create_settings_repository(&state.db);
+    let repo: Box<dyn SettingsRepository> =
+        create_settings_repository(&state.db, state.encryptor.clone());
 
     let settings = GeneralSettings {
         org_name: form.org_name,
@@ -142,7 +144,8 @@ async fn get_rate_limits(
     State(state): State<AppState>,
     RequireAdmin(_user): RequireAdmin,
 ) -> Result<Json<RateLimitsResponse>, ApiError> {
-    let repo: Box<dyn SettingsRepository> = create_settings_repository(&state.db);
+    let repo: Box<dyn SettingsRepository> =
+        create_settings_repository(&state.db, state.encryptor.clone());
 
     let limits = repo.get_rate_limits().await?;
 
@@ -159,7 +162,8 @@ async fn save_rate_limits(
     RequireAdmin(_user): RequireAdmin,
     Form(form): Form<RateLimitsForm>,
 ) -> Result<Response, ApiError> {
-    let repo: Box<dyn SettingsRepository> = create_settings_repository(&state.db);
+    let repo: Box<dyn SettingsRepository> =
+        create_settings_repository(&state.db, state.encryptor.clone());
 
     let limits = RateLimits {
         isolate_host_hour: form.isolate_host_hour,
@@ -193,7 +197,8 @@ async fn get_llm_settings(
     State(state): State<AppState>,
     RequireAdmin(_user): RequireAdmin,
 ) -> Result<Json<LlmSettingsResponse>, ApiError> {
-    let repo: Box<dyn SettingsRepository> = create_settings_repository(&state.db);
+    let repo: Box<dyn SettingsRepository> =
+        create_settings_repository(&state.db, state.encryptor.clone());
 
     let settings = repo.get_llm().await?;
 
@@ -214,7 +219,8 @@ async fn save_llm_settings(
     RequireAdmin(_user): RequireAdmin,
     Form(form): Form<LlmSettingsForm>,
 ) -> Result<Response, ApiError> {
-    let repo: Box<dyn SettingsRepository> = create_settings_repository(&state.db);
+    let repo: Box<dyn SettingsRepository> =
+        create_settings_repository(&state.db, state.encryptor.clone());
 
     // Get existing settings to preserve API key if not provided
     let existing = repo.get_llm().await?;
@@ -445,7 +451,7 @@ mod tests {
         let state = create_test_state().await;
 
         // Pre-populate the database with settings
-        let repo = create_settings_repository(&state.db);
+        let repo = create_settings_repository(&state.db, state.encryptor.clone());
         let settings = GeneralSettings {
             org_name: "Security Team".to_string(),
             timezone: "America/Los_Angeles".to_string(),
@@ -544,7 +550,7 @@ mod tests {
         );
 
         // Verify settings were actually saved
-        let repo = create_settings_repository(&state.db);
+        let repo = create_settings_repository(&state.db, state.encryptor.clone());
         let saved = repo.get_general().await.unwrap();
         assert_eq!(saved.org_name, "New Org");
         assert_eq!(saved.timezone, "Europe/London");
@@ -556,7 +562,7 @@ mod tests {
         let state = create_test_state().await;
 
         // Save initial settings
-        let repo = create_settings_repository(&state.db);
+        let repo = create_settings_repository(&state.db, state.encryptor.clone());
         let initial = GeneralSettings {
             org_name: "Old Org".to_string(),
             timezone: "UTC".to_string(),
@@ -610,7 +616,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         // Verify empty values were saved
-        let repo = create_settings_repository(&state.db);
+        let repo = create_settings_repository(&state.db, state.encryptor.clone());
         let saved = repo.get_general().await.unwrap();
         assert_eq!(saved.org_name, "");
         assert_eq!(saved.timezone, "");
@@ -640,7 +646,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         // Verify unicode was saved correctly
-        let repo = create_settings_repository(&state.db);
+        let repo = create_settings_repository(&state.db, state.encryptor.clone());
         let saved = repo.get_general().await.unwrap();
         assert_eq!(
             saved.org_name,
@@ -685,7 +691,7 @@ mod tests {
         let state = create_test_state().await;
 
         // Pre-populate the database with rate limits
-        let repo = create_settings_repository(&state.db);
+        let repo = create_settings_repository(&state.db, state.encryptor.clone());
         let limits = RateLimits {
             isolate_host_hour: 50,
             disable_user_hour: 25,
@@ -784,7 +790,7 @@ mod tests {
         );
 
         // Verify settings were actually saved
-        let repo = create_settings_repository(&state.db);
+        let repo = create_settings_repository(&state.db, state.encryptor.clone());
         let saved = repo.get_rate_limits().await.unwrap();
         assert_eq!(saved.isolate_host_hour, 30);
         assert_eq!(saved.disable_user_hour, 15);
@@ -796,7 +802,7 @@ mod tests {
         let state = create_test_state().await;
 
         // Save initial rate limits
-        let repo = create_settings_repository(&state.db);
+        let repo = create_settings_repository(&state.db, state.encryptor.clone());
         let initial = RateLimits {
             isolate_host_hour: 10,
             disable_user_hour: 5,
@@ -852,7 +858,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         // Verify zero values were saved
-        let repo = create_settings_repository(&state.db);
+        let repo = create_settings_repository(&state.db, state.encryptor.clone());
         let saved = repo.get_rate_limits().await.unwrap();
         assert_eq!(saved.isolate_host_hour, 0);
         assert_eq!(saved.disable_user_hour, 0);
@@ -884,7 +890,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         // Verify max values were saved
-        let repo = create_settings_repository(&state.db);
+        let repo = create_settings_repository(&state.db, state.encryptor.clone());
         let saved = repo.get_rate_limits().await.unwrap();
         assert_eq!(saved.isolate_host_hour, u32::MAX);
         assert_eq!(saved.disable_user_hour, u32::MAX);
@@ -1038,7 +1044,7 @@ mod tests {
         }
 
         // Final state should be one of the updates (last writer wins)
-        let repo = create_settings_repository(&state.db);
+        let repo = create_settings_repository(&state.db, state.encryptor.clone());
         let saved = repo.get_general().await.unwrap();
         assert!(saved.org_name.starts_with("Org"));
     }

@@ -3,6 +3,7 @@
 //! This module provides HTTP client utilities with retry logic, rate limiting,
 //! and caching support for use by all connectors.
 
+use crate::secure_string::SecureString;
 use crate::traits::{AuthConfig, ConnectorConfig, ConnectorError, ConnectorResult};
 use governor::{
     clock::DefaultClock,
@@ -33,10 +34,24 @@ pub struct HttpClient {
 }
 
 /// OAuth2 token with expiration.
-#[derive(Debug, Clone)]
+///
+/// The access token is stored in a `SecureString` to ensure it is
+/// zeroized from memory when no longer needed.
+#[derive(Clone)]
 struct OAuthToken {
-    access_token: String,
+    /// The OAuth2 access token (zeroized on drop).
+    access_token: SecureString,
+    /// When the token expires.
     expires_at: std::time::Instant,
+}
+
+impl std::fmt::Debug for OAuthToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OAuthToken")
+            .field("access_token", &"[REDACTED]")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 /// Rate limiter configuration.
@@ -71,31 +86,37 @@ impl HttpClient {
         config: ConnectorConfig,
         rate_limit: Option<RateLimitConfig>,
     ) -> ConnectorResult<Self> {
-        // Warn and enforce restrictions when TLS verification is disabled
-        if !config.verify_tls {
-            warn!(
-                base_url = %config.base_url,
-                connector_name = %config.name,
-                "TLS certificate verification DISABLED - connection is vulnerable to MITM attacks"
-            );
-
-            // In production mode, require explicit override
-            if is_production_environment() {
-                if std::env::var("ALLOW_INSECURE_TLS").as_deref() != Ok("true") {
-                    return Err(ConnectorError::ConfigError(
-                        "TLS verification cannot be disabled in production without setting ALLOW_INSECURE_TLS=true environment variable".into()
-                    ));
-                }
+        // SECURITY: Enforce TLS verification based on build mode
+        // TLS verification cannot be disabled in release builds
+        let verify_tls = if !config.verify_tls {
+            #[cfg(debug_assertions)]
+            {
+                // In debug/development mode, allow disabling TLS with a warning
                 warn!(
                     base_url = %config.base_url,
-                    "ALLOW_INSECURE_TLS override in production - this is a security risk"
+                    connector_name = %config.name,
+                    "TLS certificate verification DISABLED in development mode - connection is vulnerable to MITM attacks"
                 );
+                false
             }
-        }
+            #[cfg(not(debug_assertions))]
+            {
+                // In release/production mode, TLS verification is ALWAYS enabled
+                // This cannot be overridden - it's a compile-time security guarantee
+                warn!(
+                    base_url = %config.base_url,
+                    connector_name = %config.name,
+                    "Attempted to disable TLS verification in production - request IGNORED for security"
+                );
+                true // Force TLS verification in production
+            }
+        } else {
+            true // TLS verification requested, always honor it
+        };
 
         let mut builder = Client::builder()
             .timeout(Duration::from_secs(config.timeout_secs))
-            .danger_accept_invalid_certs(!config.verify_tls)
+            .danger_accept_invalid_certs(!verify_tls)
             .pool_max_idle_per_host(10)
             .pool_idle_timeout(Duration::from_secs(90));
 
@@ -344,14 +365,16 @@ impl HttpClient {
         match &self.config.auth {
             AuthConfig::None => Ok(request),
 
-            AuthConfig::ApiKey { key, header_name } => Ok(request.header(header_name, key)),
+            AuthConfig::ApiKey { key, header_name } => {
+                Ok(request.header(header_name, key.expose_secret()))
+            }
 
             AuthConfig::BearerToken { token } => {
-                Ok(request.header("Authorization", format!("Bearer {}", token)))
+                Ok(request.header("Authorization", format!("Bearer {}", token.expose_secret())))
             }
 
             AuthConfig::Basic { username, password } => {
-                Ok(request.basic_auth(username, Some(password)))
+                Ok(request.basic_auth(username, Some(password.expose_secret())))
             }
 
             AuthConfig::OAuth2 {
@@ -363,19 +386,22 @@ impl HttpClient {
                 let token = self
                     .get_oauth_token(client_id, client_secret, token_url, scopes)
                     .await?;
-                Ok(request.header("Authorization", format!("Bearer {}", token)))
+                Ok(request.header("Authorization", format!("Bearer {}", token.expose_secret())))
             }
         }
     }
 
     /// Gets or refreshes an OAuth2 token.
+    ///
+    /// Returns a `SecureString` containing the access token, ensuring
+    /// the token is zeroized from memory when no longer needed.
     async fn get_oauth_token(
         &self,
         client_id: &str,
-        client_secret: &str,
+        client_secret: &SecureString,
         token_url: &str,
         scopes: &[String],
-    ) -> ConnectorResult<String> {
+    ) -> ConnectorResult<SecureString> {
         // Check if we have a valid token
         {
             let token = self.oauth_token.read().await;
@@ -392,7 +418,7 @@ impl HttpClient {
         let params = [
             ("grant_type", "client_credentials"),
             ("client_id", client_id),
-            ("client_secret", client_secret),
+            ("client_secret", client_secret.expose_secret()),
             ("scope", &scopes.join(" ")),
         ];
 
@@ -422,8 +448,11 @@ impl HttpClient {
             .await
             .map_err(|e| ConnectorError::InvalidResponse(e.to_string()))?;
 
+        // Wrap the access token in SecureString immediately
+        let secure_access_token = SecureString::new(token_response.access_token);
+
         let oauth_token = OAuthToken {
-            access_token: token_response.access_token.clone(),
+            access_token: secure_access_token.clone(),
             expires_at: std::time::Instant::now() + Duration::from_secs(token_response.expires_in),
         };
 
@@ -433,7 +462,7 @@ impl HttpClient {
             *token = Some(oauth_token);
         }
 
-        Ok(token_response.access_token)
+        Ok(secure_access_token)
     }
 }
 
@@ -447,18 +476,20 @@ fn rand_jitter() -> Duration {
 }
 
 /// Checks if the application is running in production mode.
-fn is_production_environment() -> bool {
-    // Check common environment variable patterns for production detection
-    matches!(
-        std::env::var("ENVIRONMENT").as_deref(),
-        Ok("production") | Ok("prod")
-    ) || matches!(
-        std::env::var("RUST_ENV").as_deref(),
-        Ok("production") | Ok("prod")
-    ) || matches!(
-        std::env::var("APP_ENV").as_deref(),
-        Ok("production") | Ok("prod")
-    )
+/// Returns whether TLS verification can be disabled.
+///
+/// SECURITY: In release builds, this always returns false.
+/// TLS verification cannot be disabled in production.
+#[inline]
+pub fn can_disable_tls_verification() -> bool {
+    #[cfg(debug_assertions)]
+    {
+        true
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        false
+    }
 }
 
 /// Response cache using moka for high-performance async caching.

@@ -7,7 +7,7 @@ use tw_core::db::DbPool;
 use tw_core::{create_encryptor_or_panic, CredentialEncryptor, EventBus};
 use tw_policy::{KillSwitch, PolicyEngine};
 
-use crate::rate_limit::{ApiRateLimiter, LoginRateLimiter};
+use crate::rate_limit::{ApiRateLimiter, LoginRateLimiter, WebhookRateLimiter};
 
 /// Shared application state.
 #[derive(Clone)]
@@ -30,6 +30,8 @@ pub struct AppState {
     pub login_rate_limiter: LoginRateLimiter,
     /// API rate limiter for protecting against excessive API usage.
     pub api_rate_limiter: ApiRateLimiter,
+    /// Webhook rate limiter for protecting against alert flooding.
+    pub webhook_rate_limiter: WebhookRateLimiter,
 }
 
 impl AppState {
@@ -51,6 +53,7 @@ impl AppState {
             encryptor: create_encryptor_or_panic(),
             login_rate_limiter: LoginRateLimiter::default(),
             api_rate_limiter: ApiRateLimiter::default(),
+            webhook_rate_limiter: WebhookRateLimiter::default(),
         }
     }
 

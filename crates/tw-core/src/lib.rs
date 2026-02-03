@@ -37,11 +37,14 @@ pub use workflow::{WorkflowEngine, WorkflowState, WorkflowTransition};
 pub use auth::password::{
     hash_password, validate_password_strength, verify_password, PasswordError,
 };
-pub use auth::{ApiKey, Role, SessionData, User, UserFilter, UserUpdate};
+pub use auth::{
+    is_destructive_action, ApiKey, AuthorizationContext, AuthorizationError, Permission, Role,
+    SessionData, User, UserFilter, UserUpdate, DESTRUCTIVE_ACTIONS,
+};
 
 // Crypto exports
 pub use crypto::{
     create_encryptor, create_encryptor_or_panic, generate_encryption_key,
     is_production_environment, Aes256GcmEncryptor, CredentialEncryptor, CryptoError,
-    PlaintextEncryptor,
+    PlaintextEncryptor, SecureString,
 };

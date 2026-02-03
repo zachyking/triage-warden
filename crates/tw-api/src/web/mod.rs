@@ -482,7 +482,7 @@ async fn settings(
     let nav = fetch_nav_counts(repo.as_ref()).await;
 
     // Load general settings from database
-    let settings_repo = create_settings_repository(&state.db);
+    let settings_repo = create_settings_repository(&state.db, state.encryptor.clone());
     let general_settings = settings_repo
         .get_general()
         .await

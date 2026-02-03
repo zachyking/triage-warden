@@ -25,6 +25,7 @@ use crate::middleware::{
     cors_layer_with_origins, request_body_limit_layer, request_id, request_logging,
     security_headers,
 };
+use crate::rate_limit::{global_rate_limit_middleware, register_rate_limit_metrics};
 use crate::routes;
 use crate::state::AppState;
 use crate::web;
@@ -179,6 +180,8 @@ impl ApiServer {
             Ok(handle) => {
                 // Register metric descriptions
                 routes::metrics::register_metrics();
+                // Register rate limit metrics
+                register_rate_limit_metrics();
 
                 // Store the handle in AppState
                 self.state = self.state.with_prometheus_handle(handle);
@@ -240,13 +243,21 @@ impl ApiServer {
         app = app.nest_service("/static", ServeDir::new(static_path));
 
         // Apply middleware (order matters: innermost first)
+        // Middleware is applied in reverse order - last added runs first
         app = app
-            // Security headers
+            // Security headers (runs after response is generated)
             .layer(middleware::from_fn(security_headers))
-            // Request logging
+            // Request logging (logs request/response)
             .layer(middleware::from_fn(request_logging))
-            // Request ID
+            // Request ID (generates/propagates request ID)
             .layer(middleware::from_fn(request_id))
+            // Global rate limiting (must run early to reject before processing)
+            // This applies per-IP and per-user rate limits to all API endpoints
+            // Health/metrics endpoints are exempt; webhooks have stricter limits
+            .layer(middleware::from_fn_with_state(
+                self.state.clone(),
+                global_rate_limit_middleware,
+            ))
             // Tracing
             .layer(TraceLayer::new_for_http())
             // Request body size limit

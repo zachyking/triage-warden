@@ -2,7 +2,13 @@
 //!
 //! The orchestrator manages the main agent loop, coordinating between
 //! connectors, the policy engine, AI analysis, and action execution.
+//!
+//! ## Authorization
+//!
+//! All state transitions require an `AuthorizationContext` to ensure
+//! proper permission checks and audit logging.
 
+use crate::auth::AuthorizationContext;
 use crate::events::{EventBus, TriageEvent};
 use crate::incident::{Alert, Incident, IncidentStatus};
 use crate::workflow::{WorkflowEngine, WorkflowError};
@@ -269,11 +275,33 @@ impl Orchestrator {
     }
 
     /// Transitions an incident to a new status.
-    #[instrument(skip(self), fields(incident_id = %incident_id))]
+    ///
+    /// ## Authorization
+    ///
+    /// This method requires an `AuthorizationContext` to verify that the caller
+    /// has the necessary permissions for the requested transition:
+    ///
+    /// - Transitions to `Executing` require `ApproveActions` permission
+    /// - Transitions to `Resolved` require `WriteIncidents` permission
+    ///
+    /// All transitions are logged with the actor's identity for audit purposes.
+    ///
+    /// ## Parameters
+    ///
+    /// - `incident_id`: The UUID of the incident to transition
+    /// - `new_status`: The target status
+    /// - `auth_ctx`: Authorization context containing actor identity and permissions
+    ///
+    /// ## Errors
+    ///
+    /// Returns `OrchestratorError::WorkflowError` with `Unauthorized` variant if
+    /// the caller lacks the required permissions.
+    #[instrument(skip(self, auth_ctx), fields(incident_id = %incident_id, actor = %auth_ctx.actor_name))]
     pub async fn transition_incident(
         &self,
         incident_id: Uuid,
         new_status: IncidentStatus,
+        auth_ctx: &AuthorizationContext,
     ) -> Result<(), OrchestratorError> {
         // Check kill switch for certain transitions
         if self.is_kill_switch_active().await && new_status == IncidentStatus::Executing {
@@ -285,7 +313,7 @@ impl Orchestrator {
         let old_status;
         let transition_actions;
 
-        // Get incident and perform transition
+        // Get incident and perform transition with authorization
         {
             let mut incidents = self.incidents.write().await;
             let incident = incidents
@@ -295,7 +323,8 @@ impl Orchestrator {
             old_status = incident.status.clone();
 
             let mut workflow_engine = self.workflow_engine.write().await;
-            transition_actions = workflow_engine.transition(incident, new_status.clone())?;
+            transition_actions =
+                workflow_engine.transition(incident, new_status.clone(), auth_ctx)?;
         }
 
         // Publish status changed event
@@ -333,8 +362,8 @@ impl Orchestrator {
         }
 
         info!(
-            "Transitioned incident {} from {:?} to {:?}",
-            incident_id, old_status, new_status
+            "Transitioned incident {} from {:?} to {:?} by {} (role: {:?})",
+            incident_id, old_status, new_status, auth_ctx.actor_name, auth_ctx.role
         );
 
         Ok(())
@@ -416,6 +445,7 @@ impl Default for Orchestrator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::{Role, User};
     use crate::incident::{AlertSource, Severity};
     use chrono::Utc;
 
@@ -431,6 +461,11 @@ mod tests {
             timestamp: Utc::now(),
             tags: vec!["phishing".to_string()],
         }
+    }
+
+    fn create_analyst_context() -> AuthorizationContext {
+        let user = User::new("analyst@test.com", "analyst", "hash", Role::Analyst);
+        AuthorizationContext::from_user(&user)
     }
 
     #[tokio::test]
@@ -459,12 +494,13 @@ mod tests {
     async fn test_transition_incident() {
         let orchestrator = Orchestrator::new();
         let alert = create_test_alert();
+        let auth_ctx = create_analyst_context();
 
         let incident_id = orchestrator.process_alert(alert).await.unwrap();
 
         // Transition to Enriching
         orchestrator
-            .transition_incident(incident_id, IncidentStatus::Enriching)
+            .transition_incident(incident_id, IncidentStatus::Enriching, &auth_ctx)
             .await
             .unwrap();
 
@@ -541,6 +577,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_incidents_by_status() {
         let orchestrator = Orchestrator::new();
+        let auth_ctx = create_analyst_context();
 
         let alert1 = create_test_alert();
         let mut alert2 = create_test_alert();
@@ -551,7 +588,7 @@ mod tests {
 
         // Transition one to Enriching
         orchestrator
-            .transition_incident(id1, IncidentStatus::Enriching)
+            .transition_incident(id1, IncidentStatus::Enriching, &auth_ctx)
             .await
             .unwrap();
 
@@ -622,6 +659,7 @@ mod tests {
         use tokio::task::JoinSet;
 
         let orchestrator = Arc::new(Orchestrator::new());
+        let auth_ctx = Arc::new(create_analyst_context());
 
         // Create multiple incidents
         let mut incident_ids = Vec::new();
@@ -636,8 +674,9 @@ mod tests {
         let mut tasks = JoinSet::new();
         for id in incident_ids.clone() {
             let orch = Arc::clone(&orchestrator);
+            let ctx = Arc::clone(&auth_ctx);
             tasks.spawn(async move {
-                orch.transition_incident(id, IncidentStatus::Enriching)
+                orch.transition_incident(id, IncidentStatus::Enriching, &ctx)
                     .await
             });
         }
@@ -662,11 +701,12 @@ mod tests {
     async fn test_basic_state_transition() {
         let orchestrator = Orchestrator::new();
         let alert = create_test_alert();
+        let auth_ctx = create_analyst_context();
         let incident_id = orchestrator.process_alert(alert).await.unwrap();
 
         // New -> Enriching (no condition required)
         orchestrator
-            .transition_incident(incident_id, IncidentStatus::Enriching)
+            .transition_incident(incident_id, IncidentStatus::Enriching, &auth_ctx)
             .await
             .unwrap();
 
@@ -678,12 +718,13 @@ mod tests {
     async fn test_invalid_state_transition_blocked() {
         let orchestrator = Orchestrator::new();
         let alert = create_test_alert();
+        let auth_ctx = create_analyst_context();
         let incident_id = orchestrator.process_alert(alert).await.unwrap();
 
         // New -> Analyzing requires going through Enriching first
         // This should fail because the workflow requires EnrichmentsComplete
         let result = orchestrator
-            .transition_incident(incident_id, IncidentStatus::Analyzing)
+            .transition_incident(incident_id, IncidentStatus::Analyzing, &auth_ctx)
             .await;
 
         // Should fail with either InvalidTransition or ConditionNotMet
@@ -694,18 +735,19 @@ mod tests {
     async fn test_workflow_enforces_conditions() {
         let orchestrator = Orchestrator::new();
         let alert = create_test_alert();
+        let auth_ctx = create_analyst_context();
         let incident_id = orchestrator.process_alert(alert).await.unwrap();
 
         // New -> Enriching (OK, no condition)
         orchestrator
-            .transition_incident(incident_id, IncidentStatus::Enriching)
+            .transition_incident(incident_id, IncidentStatus::Enriching, &auth_ctx)
             .await
             .unwrap();
 
         // Enriching -> Analyzing requires EnrichmentsComplete condition
         // Without setting that context, this should fail
         let result = orchestrator
-            .transition_incident(incident_id, IncidentStatus::Analyzing)
+            .transition_incident(incident_id, IncidentStatus::Analyzing, &auth_ctx)
             .await;
 
         // This tests that conditions are enforced
@@ -715,10 +757,11 @@ mod tests {
     #[tokio::test]
     async fn test_transition_nonexistent_incident() {
         let orchestrator = Orchestrator::new();
+        let auth_ctx = create_analyst_context();
         let fake_id = uuid::Uuid::new_v4();
 
         let result = orchestrator
-            .transition_incident(fake_id, IncidentStatus::Enriching)
+            .transition_incident(fake_id, IncidentStatus::Enriching, &auth_ctx)
             .await;
 
         assert!(matches!(

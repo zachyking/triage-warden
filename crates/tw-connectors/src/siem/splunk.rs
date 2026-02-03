@@ -695,6 +695,7 @@ fn parse_splunk_time(s: &str) -> Option<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::secure_string::SecureString;
     use crate::traits::AuthConfig;
 
     fn create_test_config() -> SplunkConfig {
@@ -704,7 +705,7 @@ mod tests {
                 base_url: "https://localhost:8089".to_string(),
                 auth: AuthConfig::Basic {
                     username: "admin".to_string(),
-                    password: "changeme".to_string(),
+                    password: SecureString::new("changeme".to_string()),
                 },
                 timeout_secs: 30,
                 max_retries: 3,
