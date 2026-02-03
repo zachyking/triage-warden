@@ -4,7 +4,10 @@
 //! file into structured configuration types.
 
 use crate::approval::ApprovalLevel;
-use crate::engine::{Criticality, DenyList, PolicyEngine, RateLimitConfig};
+use crate::engine::{
+    validate_regex_safe, Criticality, DenyList, PolicyEngine, RateLimitConfig,
+    RegexValidationError, ValidatedDenyList,
+};
 use crate::rules::{PolicyRule, RuleCondition, RuleEffect};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -24,6 +27,9 @@ pub enum ConfigError {
 
     #[error("Invalid regex pattern '{pattern}': {message}")]
     InvalidRegex { pattern: String, message: String },
+
+    #[error("Unsafe regex pattern (potential ReDoS): {0}")]
+    UnsafeRegex(#[from] RegexValidationError),
 
     #[error("Missing required field: {0}")]
     MissingField(String),
@@ -256,12 +262,21 @@ fn substitute_env_vars(input: &str) -> Result<String, ConfigError> {
     Ok(result)
 }
 
-/// Validates that a regex pattern compiles successfully.
+/// Validates that a regex pattern compiles successfully and is safe against ReDoS.
+///
+/// This function performs two validation steps:
+/// 1. Checks that the pattern is syntactically valid
+/// 2. Checks that the pattern doesn't contain constructs prone to catastrophic backtracking
 fn validate_regex(pattern: &str) -> Result<(), ConfigError> {
+    // First check basic syntax
     Regex::new(pattern).map_err(|e| ConfigError::InvalidRegex {
         pattern: pattern.to_string(),
         message: e.to_string(),
     })?;
+
+    // Then check for ReDoS patterns
+    validate_regex_safe(pattern)?;
+
     Ok(())
 }
 
@@ -352,6 +367,9 @@ fn validate_config(config: &GuardrailsConfig) -> Result<(), ConfigError> {
 
 impl DenyListConfig {
     /// Converts to the engine's DenyList type.
+    ///
+    /// **Note**: This returns a raw `DenyList` with uncompiled patterns.
+    /// For production use with ReDoS protection, use `to_validated_deny_list()` instead.
     pub fn to_deny_list(&self) -> DenyList {
         DenyList {
             actions: self.actions.clone(),
@@ -359,6 +377,37 @@ impl DenyListConfig {
             protected_ips: self.protected_ips.clone(),
             protected_users: self.protected_users.clone(),
         }
+    }
+
+    /// Converts to a ValidatedDenyList with pre-compiled and validated regex patterns.
+    ///
+    /// This method:
+    /// 1. Validates all patterns for potential ReDoS vulnerabilities
+    /// 2. Compiles patterns once and caches them as `Arc<Regex>`
+    /// 3. Returns a `ValidatedDenyList` that is safe and efficient for repeated use
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any pattern is invalid or potentially unsafe.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tw_policy::config::DenyListConfig;
+    ///
+    /// let config = DenyListConfig {
+    ///     actions: vec!["delete_user".to_string()],
+    ///     target_patterns: vec![r".*-prod-.*".to_string()],
+    ///     protected_ips: vec![],
+    ///     protected_users: vec![],
+    /// };
+    ///
+    /// let validated = config.to_validated_deny_list().expect("Safe patterns");
+    /// assert!(validated.is_target_protected("web-prod-01"));
+    /// ```
+    pub fn to_validated_deny_list(&self) -> Result<ValidatedDenyList, ConfigError> {
+        let deny_list = self.to_deny_list();
+        ValidatedDenyList::try_from_deny_list(&deny_list).map_err(ConfigError::from)
     }
 }
 

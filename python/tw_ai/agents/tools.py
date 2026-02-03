@@ -6,9 +6,10 @@ import os
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import structlog
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 # Import email analysis modules
 from tw_ai.analysis.email import (
@@ -128,6 +129,649 @@ class ToolResult:
     def fail(cls, error: str, execution_time_ms: int = 0) -> ToolResult:
         """Create a failed result."""
         return cls(success=False, error=error, execution_time_ms=execution_time_ms)
+
+
+# =============================================================================
+# Pydantic Argument Schemas for Tool Validation (Security Task 5.4)
+# =============================================================================
+
+# Maximum size limits for string arguments to prevent DoS attacks
+MAX_HASH_LENGTH = 128  # SHA-512 is 128 chars
+MAX_IP_LENGTH = 45  # IPv6 max length
+MAX_DOMAIN_LENGTH = 253  # RFC 1035
+MAX_QUERY_LENGTH = 4096  # Reasonable query limit
+MAX_DESCRIPTION_LENGTH = 10000  # Limit for long text fields
+MAX_EMAIL_LENGTH = 254  # RFC 5321
+MAX_TEXT_LENGTH = 100000  # Maximum text content
+MAX_ARRAY_SIZE = 100  # Maximum array items
+
+
+class ToolArgumentValidationError(Exception):
+    """Exception raised when tool arguments fail validation."""
+
+    def __init__(self, message: str, errors: list[dict[str, Any]] | None = None):
+        super().__init__(message)
+        self.message = message
+        self.errors = errors or []
+
+
+class StrictBaseModel(BaseModel):
+    """Base model with strict validation settings for all tool arguments.
+
+    Configuration:
+    - extra='forbid': Reject unknown/extra arguments
+    - strict=True: Strict type coercion (no implicit conversions)
+    - validate_default=True: Validate default values
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        strict=True,
+        validate_default=True,
+    )
+
+
+# Threat Intelligence Tool Schemas
+class LookupHashArgs(StrictBaseModel):
+    """Arguments for lookup_hash tool."""
+
+    hash: str = Field(
+        ...,
+        min_length=32,
+        max_length=MAX_HASH_LENGTH,
+        description="File hash (MD5, SHA1, or SHA256)",
+    )
+
+    @field_validator("hash")
+    @classmethod
+    def validate_hash_format(cls, v: str) -> str:
+        """Validate hash is hexadecimal and correct length."""
+        v = v.strip().lower()
+        if not v:
+            raise ValueError("Hash cannot be empty")
+        # Valid hash lengths: MD5=32, SHA1=40, SHA256=64, SHA512=128
+        valid_lengths = {32, 40, 64, 128}
+        if len(v) not in valid_lengths:
+            raise ValueError(
+                f"Invalid hash length {len(v)}. "
+                "Expected 32 (MD5), 40 (SHA1), 64 (SHA256), or 128 (SHA512)"
+            )
+        if not all(c in "0123456789abcdef" for c in v):
+            raise ValueError("Hash must contain only hexadecimal characters (0-9, a-f)")
+        return v
+
+
+class LookupIpArgs(StrictBaseModel):
+    """Arguments for lookup_ip tool."""
+
+    ip: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_IP_LENGTH,
+        description="IP address (IPv4 or IPv6)",
+    )
+
+    @field_validator("ip")
+    @classmethod
+    def validate_ip_format(cls, v: str) -> str:
+        """Validate IP address format."""
+        import ipaddress
+
+        v = v.strip()
+        if not v:
+            raise ValueError("IP address cannot be empty")
+        try:
+            ipaddress.ip_address(v)
+        except ValueError:
+            raise ValueError(f"Invalid IP address format: {v}")
+        return v
+
+
+class LookupDomainArgs(StrictBaseModel):
+    """Arguments for lookup_domain tool."""
+
+    domain: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_DOMAIN_LENGTH,
+        description="Domain to look up",
+    )
+
+    @field_validator("domain")
+    @classmethod
+    def validate_domain_format(cls, v: str) -> str:
+        """Validate domain format."""
+        import re
+
+        v = v.strip().lower()
+        if not v:
+            raise ValueError("Domain cannot be empty")
+        # Basic domain validation pattern
+        domain_pattern = re.compile(
+            r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+        )
+        if not domain_pattern.match(v):
+            raise ValueError(f"Invalid domain format: {v}")
+        return v
+
+
+# SIEM Tool Schemas
+class SearchSiemArgs(StrictBaseModel):
+    """Arguments for search_siem tool."""
+
+    query: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_QUERY_LENGTH,
+        description="Search query string",
+    )
+    hours: int = Field(
+        default=24,
+        ge=1,
+        le=8760,  # Max 1 year
+        description="Number of hours to search back",
+    )
+    limit: int = Field(
+        default=100,
+        ge=1,
+        le=10000,
+        description="Maximum number of events to return",
+    )
+
+
+class GetRecentAlertsArgs(StrictBaseModel):
+    """Arguments for get_recent_alerts tool."""
+
+    limit: int = Field(
+        default=10,
+        ge=1,
+        le=1000,
+        description="Maximum number of alerts to return",
+    )
+
+
+# EDR Tool Schemas
+class GetHostInfoArgs(StrictBaseModel):
+    """Arguments for get_host_info tool."""
+
+    hostname: str = Field(
+        ...,
+        min_length=1,
+        max_length=253,  # Max hostname length
+        description="Hostname to look up",
+    )
+
+    @field_validator("hostname")
+    @classmethod
+    def validate_hostname(cls, v: str) -> str:
+        """Validate hostname format."""
+        import re
+
+        v = v.strip()
+        if not v:
+            raise ValueError("Hostname cannot be empty")
+        # Allow hostnames with letters, numbers, hyphens, dots
+        hostname_pattern = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9\-\.]{0,251}[a-zA-Z0-9])?$")
+        if not hostname_pattern.match(v):
+            raise ValueError(f"Invalid hostname format: {v}")
+        return v
+
+
+class GetDetectionsArgs(StrictBaseModel):
+    """Arguments for get_detections tool."""
+
+    hostname: str = Field(
+        ...,
+        min_length=1,
+        max_length=253,
+        description="Hostname to get detections for",
+    )
+    hours: int = Field(
+        default=24,
+        ge=1,
+        le=8760,
+        description="Number of hours to look back",
+    )
+
+    @field_validator("hostname")
+    @classmethod
+    def validate_hostname(cls, v: str) -> str:
+        """Validate hostname format."""
+        import re
+
+        v = v.strip()
+        if not v:
+            raise ValueError("Hostname cannot be empty")
+        hostname_pattern = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9\-\.]{0,251}[a-zA-Z0-9])?$")
+        if not hostname_pattern.match(v):
+            raise ValueError(f"Invalid hostname format: {v}")
+        return v
+
+
+class GetProcessesArgs(StrictBaseModel):
+    """Arguments for get_processes tool."""
+
+    hostname: str = Field(
+        ...,
+        min_length=1,
+        max_length=253,
+        description="Hostname to get processes for",
+    )
+    hours: int = Field(
+        default=24,
+        ge=1,
+        le=8760,
+        description="Number of hours to look back",
+    )
+
+    @field_validator("hostname")
+    @classmethod
+    def validate_hostname(cls, v: str) -> str:
+        """Validate hostname format."""
+        import re
+
+        v = v.strip()
+        if not v:
+            raise ValueError("Hostname cannot be empty")
+        hostname_pattern = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9\-\.]{0,251}[a-zA-Z0-9])?$")
+        if not hostname_pattern.match(v):
+            raise ValueError(f"Invalid hostname format: {v}")
+        return v
+
+
+class GetNetworkConnectionsArgs(StrictBaseModel):
+    """Arguments for get_network_connections tool."""
+
+    hostname: str = Field(
+        ...,
+        min_length=1,
+        max_length=253,
+        description="Hostname to get network connections for",
+    )
+    hours: int = Field(
+        default=24,
+        ge=1,
+        le=8760,
+        description="Number of hours to look back",
+    )
+
+    @field_validator("hostname")
+    @classmethod
+    def validate_hostname(cls, v: str) -> str:
+        """Validate hostname format."""
+        import re
+
+        v = v.strip()
+        if not v:
+            raise ValueError("Hostname cannot be empty")
+        hostname_pattern = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9\-\.]{0,251}[a-zA-Z0-9])?$")
+        if not hostname_pattern.match(v):
+            raise ValueError(f"Invalid hostname format: {v}")
+        return v
+
+
+# MITRE Tool Schemas
+class MapToMitreArgs(StrictBaseModel):
+    """Arguments for map_to_mitre tool."""
+
+    description: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_DESCRIPTION_LENGTH,
+        description="Description of attack behavior to map",
+    )
+
+
+# Policy Tool Schemas
+class CheckPolicyArgs(StrictBaseModel):
+    """Arguments for check_policy tool."""
+
+    action_type: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="Type of action to check",
+    )
+    target: str = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="Target of the action",
+    )
+    confidence: float = Field(
+        default=0.9,
+        ge=0.0,
+        le=1.0,
+        description="Confidence score from AI analysis",
+    )
+
+
+class SubmitApprovalArgs(StrictBaseModel):
+    """Arguments for submit_approval tool."""
+
+    action_type: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="Type of action requiring approval",
+    )
+    target: str = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="Target of the action",
+    )
+    level: Literal["analyst", "senior", "manager", "executive"] = Field(
+        default="analyst",
+        description="Required approval level",
+    )
+
+
+class GetApprovalStatusArgs(StrictBaseModel):
+    """Arguments for get_approval_status tool."""
+
+    request_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="Unique request ID from submit_approval",
+    )
+
+
+# Email Triage Tool Schemas
+class AnalyzeEmailArgs(StrictBaseModel):
+    """Arguments for analyze_email tool."""
+
+    email_data: dict[str, Any] = Field(
+        ...,
+        description="Email alert data to analyze",
+    )
+
+    @field_validator("email_data")
+    @classmethod
+    def validate_email_data_size(cls, v: dict[str, Any]) -> dict[str, Any]:
+        """Validate email data size and structure."""
+        import json
+
+        # Check serialized size to prevent DoS
+        try:
+            serialized = json.dumps(v)
+            if len(serialized) > 1_000_000:  # 1MB limit
+                raise ValueError("Email data exceeds maximum size (1MB)")
+        except (TypeError, ValueError) as e:
+            if "exceeds maximum size" in str(e):
+                raise
+            raise ValueError(f"Email data must be JSON-serializable: {e}")
+        return v
+
+
+class CheckPhishingIndicatorsArgs(StrictBaseModel):
+    """Arguments for check_phishing_indicators tool."""
+
+    email_data: dict[str, Any] = Field(
+        ...,
+        description="Email data to analyze for phishing indicators",
+    )
+
+    @field_validator("email_data")
+    @classmethod
+    def validate_email_data_size(cls, v: dict[str, Any]) -> dict[str, Any]:
+        """Validate email data size."""
+        import json
+
+        try:
+            serialized = json.dumps(v)
+            if len(serialized) > 1_000_000:
+                raise ValueError("Email data exceeds maximum size (1MB)")
+        except (TypeError, ValueError) as e:
+            if "exceeds maximum size" in str(e):
+                raise
+            raise ValueError(f"Email data must be JSON-serializable: {e}")
+        return v
+
+
+class ExtractEmailUrlsArgs(StrictBaseModel):
+    """Arguments for extract_email_urls tool."""
+
+    text: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_TEXT_LENGTH,
+        description="Text content to extract URLs from",
+    )
+    include_html: bool = Field(
+        default=True,
+        description="Extract from HTML anchor tags if present",
+    )
+
+
+class CheckSenderReputationArgs(StrictBaseModel):
+    """Arguments for check_sender_reputation tool."""
+
+    sender_email: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_EMAIL_LENGTH,
+        description="Sender email address to check",
+    )
+
+    @field_validator("sender_email")
+    @classmethod
+    def validate_email_format(cls, v: str) -> str:
+        """Validate email address format."""
+        import re
+
+        v = v.strip()
+        if not v:
+            raise ValueError("Email address cannot be empty")
+        # Basic email validation
+        email_pattern = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+        if not email_pattern.match(v):
+            raise ValueError(f"Invalid email address format: {v}")
+        return v
+
+
+# Phishing Response Action Tool Schemas
+class QuarantineEmailArgs(StrictBaseModel):
+    """Arguments for quarantine_email tool."""
+
+    message_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="Unique identifier of the email message",
+    )
+    reason: str = Field(
+        ...,
+        min_length=1,
+        max_length=1000,
+        description="Reason for quarantining the email",
+    )
+
+
+class BlockSenderArgs(StrictBaseModel):
+    """Arguments for block_sender tool."""
+
+    sender: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_EMAIL_LENGTH,
+        description="Email address or domain to block",
+    )
+    block_type: Literal["email", "domain"] = Field(
+        ...,
+        description="Block type: email for address, domain for entire domain",
+    )
+    reason: str = Field(
+        ...,
+        min_length=1,
+        max_length=1000,
+        description="Reason for blocking the sender",
+    )
+
+
+class NotifyUserArgs(StrictBaseModel):
+    """Arguments for notify_user tool."""
+
+    recipient: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_EMAIL_LENGTH,
+        description="Email address of the notification recipient",
+    )
+    notification_type: Literal["phishing_warning", "security_alert", "action_taken"] = Field(
+        ...,
+        description="Type of notification to send",
+    )
+    subject: str = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="Subject line of the notification",
+    )
+    body: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_DESCRIPTION_LENGTH,
+        description="Body content of the notification message",
+    )
+
+    @field_validator("recipient")
+    @classmethod
+    def validate_recipient_email(cls, v: str) -> str:
+        """Validate recipient email address format."""
+        import re
+
+        v = v.strip()
+        if not v:
+            raise ValueError("Recipient email cannot be empty")
+        email_pattern = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+        if not email_pattern.match(v):
+            raise ValueError(f"Invalid recipient email format: {v}")
+        return v
+
+
+class CreateSecurityTicketArgs(StrictBaseModel):
+    """Arguments for create_security_ticket tool."""
+
+    title: str = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="Title/summary of the security ticket",
+    )
+    description: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_DESCRIPTION_LENGTH,
+        description="Detailed description of the incident",
+    )
+    severity: Literal["critical", "high", "medium", "low"] = Field(
+        ...,
+        description="Severity level of the incident",
+    )
+    indicators: list[str] = Field(
+        ...,
+        max_length=MAX_ARRAY_SIZE,
+        description="List of indicators of compromise (IOCs)",
+    )
+
+    @field_validator("indicators")
+    @classmethod
+    def validate_indicators(cls, v: list[str]) -> list[str]:
+        """Validate indicators list."""
+        if len(v) > MAX_ARRAY_SIZE:
+            raise ValueError(f"Too many indicators (max {MAX_ARRAY_SIZE})")
+        validated = []
+        for indicator in v:
+            if not isinstance(indicator, str):
+                raise ValueError(f"Indicator must be a string, got {type(indicator)}")
+            indicator = indicator.strip()
+            if len(indicator) > 1000:
+                raise ValueError("Indicator string too long (max 1000 characters)")
+            validated.append(indicator)
+        return validated
+
+
+# Mapping of tool names to their argument schemas
+TOOL_ARGUMENT_SCHEMAS: dict[str, type[StrictBaseModel]] = {
+    "lookup_hash": LookupHashArgs,
+    "lookup_ip": LookupIpArgs,
+    "lookup_domain": LookupDomainArgs,
+    "search_siem": SearchSiemArgs,
+    "get_recent_alerts": GetRecentAlertsArgs,
+    "get_host_info": GetHostInfoArgs,
+    "get_detections": GetDetectionsArgs,
+    "get_processes": GetProcessesArgs,
+    "get_network_connections": GetNetworkConnectionsArgs,
+    "map_to_mitre": MapToMitreArgs,
+    "check_policy": CheckPolicyArgs,
+    "submit_approval": SubmitApprovalArgs,
+    "get_approval_status": GetApprovalStatusArgs,
+    "analyze_email": AnalyzeEmailArgs,
+    "check_phishing_indicators": CheckPhishingIndicatorsArgs,
+    "extract_email_urls": ExtractEmailUrlsArgs,
+    "check_sender_reputation": CheckSenderReputationArgs,
+    "quarantine_email": QuarantineEmailArgs,
+    "block_sender": BlockSenderArgs,
+    "notify_user": NotifyUserArgs,
+    "create_security_ticket": CreateSecurityTicketArgs,
+}
+
+
+def validate_tool_arguments(
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate tool arguments against Pydantic schema.
+
+    Args:
+        tool_name: Name of the tool being called.
+        arguments: Raw arguments from LLM output.
+
+    Returns:
+        Validated and normalized arguments.
+
+    Raises:
+        ToolArgumentValidationError: If validation fails.
+    """
+    schema_class = TOOL_ARGUMENT_SCHEMAS.get(tool_name)
+
+    if schema_class is None:
+        # Tool not in schema registry - log warning and allow (backward compatibility)
+        logger.warning(
+            "tool_argument_validation_no_schema",
+            tool_name=tool_name,
+            message="No Pydantic schema defined for tool, skipping validation",
+        )
+        return arguments
+
+    try:
+        validated = schema_class.model_validate(arguments)
+        logger.debug(
+            "tool_argument_validation_success",
+            tool_name=tool_name,
+        )
+        return validated.model_dump()
+    except ValidationError as e:
+        error_details = e.errors()
+        error_messages = []
+        for error in error_details:
+            loc = ".".join(str(x) for x in error["loc"])
+            msg = error["msg"]
+            error_messages.append(f"{loc}: {msg}")
+
+        full_message = f"Tool '{tool_name}' argument validation failed: {'; '.join(error_messages)}"
+        logger.error(
+            "tool_argument_validation_failed",
+            tool_name=tool_name,
+            errors=error_details,
+            message=full_message,
+        )
+        raise ToolArgumentValidationError(
+            message=full_message,
+            errors=[dict(e) for e in error_details],
+        )
 
 
 # =============================================================================
@@ -927,13 +1571,35 @@ class ToolRegistry:
         return [tool.to_definition() for tool in self._tools.values()]
 
     async def execute(self, name: str, arguments: dict[str, Any]) -> Any:
-        """Execute a tool by name with the given arguments."""
+        """Execute a tool by name with the given arguments.
+
+        Validates arguments against Pydantic schema before execution.
+        This prevents injection attacks and ensures type safety.
+
+        Args:
+            name: Name of the tool to execute.
+            arguments: Arguments from LLM output.
+
+        Returns:
+            Result of the tool execution.
+
+        Raises:
+            ValueError: If tool not found.
+            ToolArgumentValidationError: If arguments fail validation.
+        """
         tool = self._tools.get(name)
         if not tool:
             raise ValueError(f"Tool not found: {name}")
 
-        logger.debug("tool_execute", name=name, arguments=arguments)
-        return await tool.handler(**arguments)
+        # Validate arguments against Pydantic schema (Security Task 5.4)
+        # This prevents:
+        # - Unknown/extra arguments that could be injection vectors
+        # - Incorrect types that could cause unexpected behavior
+        # - Oversized inputs that could cause DoS
+        validated_arguments = validate_tool_arguments(name, arguments)
+
+        logger.debug("tool_execute", name=name, arguments=validated_arguments)
+        return await tool.handler(**validated_arguments)
 
 
 def create_triage_tools() -> ToolRegistry:

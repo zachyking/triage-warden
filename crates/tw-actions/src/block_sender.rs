@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{info, instrument};
 use tw_connectors::EmailGatewayConnector;
+use tw_core::validation::ValidatedEmail;
 
 /// Action to block an email sender.
 pub struct BlockSenderAction {
@@ -63,11 +64,20 @@ impl Action for BlockSenderAction {
     #[instrument(skip(self, context))]
     async fn execute(&self, context: ActionContext) -> Result<ActionResult, ActionError> {
         let started_at = Utc::now();
-        let sender_address = context.require_string("sender_address")?;
+        let sender_address_raw = context.require_string("sender_address")?;
         let reason = context
             .get_string("reason")
             .unwrap_or_else(|| "Automated block by Triage Warden".to_string());
         let duration = context.get_param("duration").and_then(|v| v.as_i64());
+
+        // Validate sender email address using RFC 5321-compliant validation
+        let validated_email = ValidatedEmail::new(&sender_address_raw).map_err(|e| {
+            ActionError::InvalidParameters(format!(
+                "Invalid sender address '{}': {}",
+                sender_address_raw, e
+            ))
+        })?;
+        let sender_address = validated_email.as_str().to_string();
 
         let duration_str = match duration {
             Some(hours) => format!("{} hours", hours),
@@ -258,5 +268,128 @@ mod tests {
 
         let result = action.execute(context).await;
         assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    // ==================== Email Validation Tests ====================
+
+    #[tokio::test]
+    async fn test_block_sender_invalid_email_no_at() {
+        let email_gateway = Arc::new(MockEmailGatewayConnector::with_sample_data("test"));
+        let action = BlockSenderAction::new(email_gateway);
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("sender_address", serde_json::json!("invalid-email"));
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+        if let Err(ActionError::InvalidParameters(msg)) = result {
+            assert!(msg.contains("Invalid sender address"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_block_sender_invalid_email_empty_local() {
+        let email_gateway = Arc::new(MockEmailGatewayConnector::with_sample_data("test"));
+        let action = BlockSenderAction::new(email_gateway);
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("sender_address", serde_json::json!("@evil.com"));
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_block_sender_invalid_email_empty_domain() {
+        let email_gateway = Arc::new(MockEmailGatewayConnector::with_sample_data("test"));
+        let action = BlockSenderAction::new(email_gateway);
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("sender_address", serde_json::json!("attacker@"));
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_block_sender_invalid_email_no_tld() {
+        let email_gateway = Arc::new(MockEmailGatewayConnector::with_sample_data("test"));
+        let action = BlockSenderAction::new(email_gateway);
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("sender_address", serde_json::json!("attacker@localhost"));
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_block_sender_invalid_email_multiple_at() {
+        let email_gateway = Arc::new(MockEmailGatewayConnector::with_sample_data("test"));
+        let action = BlockSenderAction::new(email_gateway);
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("sender_address", serde_json::json!("user@domain@evil.com"));
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_block_sender_invalid_email_space() {
+        let email_gateway = Arc::new(MockEmailGatewayConnector::with_sample_data("test"));
+        let action = BlockSenderAction::new(email_gateway);
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("sender_address", serde_json::json!("attacker @evil.com"));
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_block_sender_valid_email_with_subdomain() {
+        let email_gateway = Arc::new(MockEmailGatewayConnector::with_sample_data("test"));
+        let action = BlockSenderAction::new(email_gateway);
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param(
+                "sender_address",
+                serde_json::json!("attacker@mail.evil.com"),
+            )
+            .with_param("reason", serde_json::json!("Phishing"));
+
+        let result = action.execute(context).await.unwrap();
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_block_sender_valid_email_with_plus() {
+        let email_gateway = Arc::new(MockEmailGatewayConnector::with_sample_data("test"));
+        let action = BlockSenderAction::new(email_gateway);
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("sender_address", serde_json::json!("attacker+tag@evil.com"))
+            .with_param("reason", serde_json::json!("Phishing"));
+
+        let result = action.execute(context).await.unwrap();
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_block_sender_email_normalized_to_lowercase() {
+        let email_gateway = Arc::new(MockEmailGatewayConnector::with_sample_data("test"));
+        let action = BlockSenderAction::new(email_gateway);
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("sender_address", serde_json::json!("ATTACKER@EVIL.COM"));
+
+        let result = action.execute(context).await.unwrap();
+        assert!(result.success);
+        // The email should be normalized to lowercase
+        assert_eq!(
+            result.output["sender_address"].as_str().unwrap(),
+            "attacker@evil.com"
+        );
     }
 }

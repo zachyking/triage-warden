@@ -31,6 +31,9 @@ utoipa-swagger-ui.workspace = true
 # Validation
 validator.workspace = true
 
+# Regex for sensitive data masking
+regex = "1"
+
 # Rate limiting
 governor.workspace = true
 lru = "0.12"

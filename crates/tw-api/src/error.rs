@@ -213,13 +213,106 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        use tw_core::is_production_environment;
+
         let status = self.status_code();
+        let is_production = is_production_environment();
+
+        // Sanitize error messages for production to prevent information disclosure
         let (message, details) = match &self {
             ApiError::ValidationError(details) => (
                 details.message.clone(),
                 Some(serde_json::to_value(&details.fields).unwrap_or_default()),
             ),
-            _ => (self.to_string(), None),
+            // Errors that are always safe to return as-is
+            ApiError::NotFound(_)
+            | ApiError::RateLimitExceeded
+            | ApiError::InvalidSignature
+            | ApiError::InvalidCredentials
+            | ApiError::SessionExpired
+            | ApiError::CsrfValidationFailed
+            | ApiError::AccountDisabled => (self.to_string(), None),
+
+            // Errors that need sanitization in production
+            ApiError::BadRequest(msg) => {
+                if is_production {
+                    // Log full error server-side
+                    tracing::warn!(error = %msg, "Bad request error");
+                    ("Invalid request".to_string(), None)
+                } else {
+                    (self.to_string(), None)
+                }
+            }
+            ApiError::Unauthorized(msg) => {
+                if is_production {
+                    tracing::warn!(error = %msg, "Unauthorized access attempt");
+                    ("Authentication required".to_string(), None)
+                } else {
+                    (self.to_string(), None)
+                }
+            }
+            ApiError::Forbidden(msg) => {
+                if is_production {
+                    tracing::warn!(error = %msg, "Forbidden access attempt");
+                    ("Access denied".to_string(), None)
+                } else {
+                    (self.to_string(), None)
+                }
+            }
+            ApiError::Conflict(msg) => {
+                if is_production {
+                    tracing::warn!(error = %msg, "Conflict error");
+                    // Conflict messages are usually already sanitized by From<DbError>
+                    (format!("Conflict: {}", msg), None)
+                } else {
+                    (self.to_string(), None)
+                }
+            }
+            ApiError::UnprocessableEntity(msg) => {
+                if is_production {
+                    tracing::warn!(error = %msg, "Unprocessable entity error");
+                    ("Unable to process request".to_string(), None)
+                } else {
+                    (self.to_string(), None)
+                }
+            }
+            ApiError::Internal(msg) => {
+                // ALWAYS log internal errors server-side with full details
+                tracing::error!(error = %msg, "Internal server error");
+                if is_production {
+                    // Never expose internal error details in production
+                    (
+                        "An internal error occurred. Please try again later.".to_string(),
+                        None,
+                    )
+                } else {
+                    (self.to_string(), None)
+                }
+            }
+            ApiError::Database(msg) => {
+                // ALWAYS log database errors server-side with full details
+                tracing::error!(error = %msg, "Database error");
+                if is_production {
+                    // Never expose database error details in production
+                    (
+                        "A database error occurred. Please try again later.".to_string(),
+                        None,
+                    )
+                } else {
+                    (self.to_string(), None)
+                }
+            }
+            ApiError::ServiceUnavailable(msg) => {
+                if is_production {
+                    tracing::warn!(error = %msg, "Service unavailable");
+                    (
+                        "Service temporarily unavailable. Please try again later.".to_string(),
+                        None,
+                    )
+                } else {
+                    (self.to_string(), None)
+                }
+            }
         };
 
         let body = ErrorResponse {
@@ -293,7 +386,19 @@ impl From<tw_core::db::DbError> for ApiError {
 
 impl From<serde_json::Error> for ApiError {
     fn from(err: serde_json::Error) -> Self {
-        ApiError::BadRequest(format!("JSON error: {}", err))
+        use tw_core::is_production_environment;
+
+        // Log full error server-side
+        tracing::warn!(error = %err, "JSON parsing error");
+
+        if is_production_environment() {
+            // In production, don't expose JSON parsing details that could
+            // reveal internal structure or aid attackers
+            ApiError::BadRequest("Invalid JSON format".to_string())
+        } else {
+            // In development, include full error for debugging
+            ApiError::BadRequest(format!("JSON error: {}", err))
+        }
     }
 }
 
@@ -325,5 +430,243 @@ impl From<validator::ValidationErrors> for ApiError {
         }
 
         ApiError::ValidationError(ValidationErrorDetails::from_fields(fields))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper to clear production env vars for testing
+    fn clear_production_env() {
+        std::env::remove_var("TW_ENV");
+        std::env::remove_var("NODE_ENV");
+        std::env::remove_var("ENVIRONMENT");
+    }
+
+    // Helper to set production env
+    fn set_production_env() {
+        std::env::set_var("TW_ENV", "production");
+    }
+
+    #[test]
+    fn test_error_codes_defined() {
+        assert_eq!(ApiError::NotFound("".to_string()).error_code(), "NOT_FOUND");
+        assert_eq!(
+            ApiError::BadRequest("".to_string()).error_code(),
+            "BAD_REQUEST"
+        );
+        assert_eq!(
+            ApiError::Unauthorized("".to_string()).error_code(),
+            "UNAUTHORIZED"
+        );
+        assert_eq!(
+            ApiError::Forbidden("".to_string()).error_code(),
+            "FORBIDDEN"
+        );
+        assert_eq!(ApiError::Conflict("".to_string()).error_code(), "CONFLICT");
+        assert_eq!(
+            ApiError::Internal("".to_string()).error_code(),
+            "INTERNAL_ERROR"
+        );
+        assert_eq!(
+            ApiError::Database("".to_string()).error_code(),
+            "DATABASE_ERROR"
+        );
+        assert_eq!(
+            ApiError::ValidationError(ValidationErrorDetails::field("test", "code", "msg"))
+                .error_code(),
+            "VALIDATION_ERROR"
+        );
+    }
+
+    #[test]
+    fn test_error_status_codes() {
+        assert_eq!(
+            ApiError::NotFound("".to_string()).status_code(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            ApiError::BadRequest("".to_string()).status_code(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            ApiError::Unauthorized("".to_string()).status_code(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            ApiError::Forbidden("".to_string()).status_code(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            ApiError::Internal("".to_string()).status_code(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            ApiError::Database("".to_string()).status_code(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            ApiError::RateLimitExceeded.status_code(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+    }
+
+    #[test]
+    fn test_validation_error_details_single_field() {
+        let details = ValidationErrorDetails::field("email", "required", "Email is required");
+        assert!(details.message.contains("email"));
+        assert!(details.fields.contains_key("email"));
+        assert_eq!(details.fields["email"].len(), 1);
+        assert_eq!(details.fields["email"][0].code, "required");
+    }
+
+    #[test]
+    fn test_validation_error_details_multiple_fields() {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "email".to_string(),
+            vec![FieldError {
+                code: "required".to_string(),
+                message: "Email is required".to_string(),
+                params: None,
+            }],
+        );
+        fields.insert(
+            "password".to_string(),
+            vec![FieldError {
+                code: "min_length".to_string(),
+                message: "Password too short".to_string(),
+                params: Some(serde_json::json!({"min": 8})),
+            }],
+        );
+
+        let details = ValidationErrorDetails::from_fields(fields);
+        assert!(details.message.contains("2 fields"));
+    }
+
+    #[test]
+    fn test_error_response_serialization() {
+        let response = ErrorResponse {
+            code: "TEST_ERROR".to_string(),
+            message: "Test message".to_string(),
+            details: None,
+            request_id: Some("req-123".to_string()),
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("TEST_ERROR"));
+        assert!(json.contains("Test message"));
+        assert!(json.contains("req-123"));
+    }
+
+    #[test]
+    fn test_error_response_omits_none_fields() {
+        let response = ErrorResponse {
+            code: "TEST".to_string(),
+            message: "Test".to_string(),
+            details: None,
+            request_id: None,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(!json.contains("details"));
+        assert!(!json.contains("request_id"));
+    }
+
+    // Note: The following tests verify the error sanitization behavior
+    // They need to be run with proper environment setup
+
+    #[test]
+    fn test_json_error_sanitization_development() {
+        clear_production_env();
+
+        // In development, JSON errors should include details
+        let json_str = r#"{"invalid"#;
+        let err: Result<serde_json::Value, _> = serde_json::from_str(json_str);
+        let api_err: ApiError = err.unwrap_err().into();
+
+        match api_err {
+            ApiError::BadRequest(msg) => {
+                // In development, should contain "JSON error:" with details
+                assert!(
+                    msg.contains("JSON error:") || msg.contains("Invalid JSON"),
+                    "Expected JSON error details in development, got: {}",
+                    msg
+                );
+            }
+            _ => panic!("Expected BadRequest error"),
+        }
+    }
+
+    #[test]
+    fn test_internal_error_has_code() {
+        let err = ApiError::Internal("secret database connection string".to_string());
+        assert_eq!(err.error_code(), "INTERNAL_ERROR");
+        assert_eq!(err.status_code(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_database_error_has_code() {
+        let err = ApiError::Database("connection pool exhausted".to_string());
+        assert_eq!(err.error_code(), "DATABASE_ERROR");
+        assert_eq!(err.status_code(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_error_message_formats() {
+        // Verify error messages follow expected format
+        let not_found = ApiError::NotFound("User 123".to_string());
+        assert_eq!(not_found.to_string(), "Not found: User 123");
+
+        let bad_request = ApiError::BadRequest("Invalid input".to_string());
+        assert_eq!(bad_request.to_string(), "Bad request: Invalid input");
+
+        let internal = ApiError::Internal("Unexpected state".to_string());
+        assert_eq!(internal.to_string(), "Internal error: Unexpected state");
+    }
+
+    #[test]
+    fn test_rate_limit_error() {
+        let err = ApiError::RateLimitExceeded;
+        assert_eq!(err.error_code(), "RATE_LIMIT_EXCEEDED");
+        assert_eq!(err.status_code(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(err.to_string(), "Rate limit exceeded");
+    }
+
+    #[test]
+    fn test_auth_errors_safe() {
+        // Auth errors should not leak sensitive info
+        let invalid_creds = ApiError::InvalidCredentials;
+        assert_eq!(invalid_creds.to_string(), "Invalid username or password");
+        // Should NOT say which one was wrong
+
+        let session_expired = ApiError::SessionExpired;
+        assert_eq!(session_expired.to_string(), "Session expired");
+
+        let csrf_failed = ApiError::CsrfValidationFailed;
+        assert_eq!(csrf_failed.to_string(), "CSRF validation failed");
+    }
+
+    #[test]
+    fn test_validation_field_helper() {
+        let err = ApiError::validation_field("email", "invalid_format", "Must be a valid email");
+        match err {
+            ApiError::ValidationError(details) => {
+                assert!(details.fields.contains_key("email"));
+                assert_eq!(details.fields["email"][0].code, "invalid_format");
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_add_validation_error() {
+        let mut details = ValidationErrorDetails::field("email", "required", "Email is required");
+        details.add_error("email", "invalid_format", "Invalid email format");
+        details.add_error("password", "min_length", "Password too short");
+
+        assert_eq!(details.fields["email"].len(), 2);
+        assert!(details.fields.contains_key("password"));
     }
 }

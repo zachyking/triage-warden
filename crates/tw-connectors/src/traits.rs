@@ -26,6 +26,9 @@ pub enum ConnectorError {
     #[error("Request failed: {0}")]
     RequestFailed(String),
 
+    #[error("Invalid request: {0}")]
+    InvalidRequest(String),
+
     #[error("Rate limited: retry after {0} seconds")]
     RateLimited(u64),
 

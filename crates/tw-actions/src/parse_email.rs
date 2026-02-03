@@ -11,6 +11,27 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info, instrument};
 
+/// Maximum length for email body content in action output to prevent sensitive data exposure.
+const MAX_BODY_OUTPUT_LENGTH: usize = 200;
+
+/// Truncation suffix appended when content is truncated.
+const TRUNCATION_SUFFIX: &str = "...";
+
+/// Truncates a string to the specified maximum length, adding a suffix if truncated.
+/// Handles UTF-8 character boundaries safely to prevent invalid string slicing.
+fn truncate_body_for_output(content: &str) -> String {
+    if content.len() <= MAX_BODY_OUTPUT_LENGTH {
+        content.to_string()
+    } else {
+        // Find a safe truncation point that doesn't break UTF-8
+        let mut end = MAX_BODY_OUTPUT_LENGTH;
+        while !content.is_char_boundary(end) && end > 0 {
+            end -= 1;
+        }
+        format!("{}{}", &content[..end], TRUNCATION_SUFFIX)
+    }
+}
+
 /// Parsed email structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedEmail {
@@ -545,8 +566,50 @@ impl Action for ParseEmailAction {
             serde_json::json!(parsed.message_id),
         );
         output.insert("date".to_string(), serde_json::json!(parsed.date));
-        output.insert("body_text".to_string(), serde_json::json!(parsed.body_text));
-        output.insert("body_html".to_string(), serde_json::json!(parsed.body_html));
+        // Truncate body content to prevent sensitive data exposure in responses
+        let truncated_body_text = parsed
+            .body_text
+            .as_ref()
+            .map(|b| truncate_body_for_output(b));
+        let truncated_body_html = parsed
+            .body_html
+            .as_ref()
+            .map(|b| truncate_body_for_output(b));
+
+        output.insert(
+            "body_text".to_string(),
+            serde_json::json!(truncated_body_text),
+        );
+        output.insert(
+            "body_html".to_string(),
+            serde_json::json!(truncated_body_html),
+        );
+
+        // Include truncation metadata
+        output.insert(
+            "body_text_truncated".to_string(),
+            serde_json::json!(parsed
+                .body_text
+                .as_ref()
+                .map(|b| b.len() > MAX_BODY_OUTPUT_LENGTH)
+                .unwrap_or(false)),
+        );
+        output.insert(
+            "body_html_truncated".to_string(),
+            serde_json::json!(parsed
+                .body_html
+                .as_ref()
+                .map(|b| b.len() > MAX_BODY_OUTPUT_LENGTH)
+                .unwrap_or(false)),
+        );
+        output.insert(
+            "original_body_text_length".to_string(),
+            serde_json::json!(parsed.body_text.as_ref().map(|b| b.len())),
+        );
+        output.insert(
+            "original_body_html_length".to_string(),
+            serde_json::json!(parsed.body_html.as_ref().map(|b| b.len())),
+        );
         output.insert(
             "attachments".to_string(),
             serde_json::to_value(&parsed.attachments).unwrap_or_default(),

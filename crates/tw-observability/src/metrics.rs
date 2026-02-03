@@ -153,6 +153,28 @@ impl MetricsCollector {
             "tw_api_key_auth_total",
             "Total number of API key authentications"
         );
+
+        // Action audit metrics
+        describe_counter!(
+            "tw_action_audit_total",
+            "Total number of action audit entries by result"
+        );
+        describe_histogram!(
+            "tw_action_audit_duration_seconds",
+            "Duration of audited action executions"
+        );
+        describe_counter!(
+            "tw_action_authorization_denied_total",
+            "Total number of action authorization denials"
+        );
+        describe_counter!(
+            "tw_action_by_actor_total",
+            "Total number of actions by actor role"
+        );
+        describe_counter!(
+            "tw_action_dry_run_total",
+            "Total number of dry run action executions"
+        );
     }
 
     /// Records an alert received.
@@ -319,6 +341,56 @@ impl MetricsCollector {
     pub fn record_api_key_auth(&self, success: bool) {
         let status = if success { "success" } else { "failure" };
         counter!("tw_api_key_auth_total", "status" => status).increment(1);
+    }
+
+    // Action audit metrics
+
+    /// Records an action audit entry with its result.
+    pub fn record_action_audit(
+        &self,
+        action_name: &str,
+        result: &str,
+        actor_role: &str,
+        duration_secs: f64,
+        dry_run: bool,
+    ) {
+        counter!(
+            "tw_action_audit_total",
+            "action" => action_name.to_string(),
+            "result" => result.to_string()
+        )
+        .increment(1);
+
+        histogram!(
+            "tw_action_audit_duration_seconds",
+            "action" => action_name.to_string()
+        )
+        .record(duration_secs);
+
+        counter!(
+            "tw_action_by_actor_total",
+            "action" => action_name.to_string(),
+            "role" => actor_role.to_string()
+        )
+        .increment(1);
+
+        if dry_run {
+            counter!(
+                "tw_action_dry_run_total",
+                "action" => action_name.to_string()
+            )
+            .increment(1);
+        }
+    }
+
+    /// Records an action authorization denial.
+    pub fn record_action_authorization_denied(&self, action_name: &str, reason: &str) {
+        counter!(
+            "tw_action_authorization_denied_total",
+            "action" => action_name.to_string(),
+            "reason" => reason.to_string()
+        )
+        .increment(1);
     }
 
     /// Calculates current KPIs.

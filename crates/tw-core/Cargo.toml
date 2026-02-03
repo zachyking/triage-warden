@@ -9,6 +9,7 @@ description = "Core orchestrator and data models for Triage Warden"
 [features]
 default = []
 database = ["sqlx"]
+mx-validation = []  # Optional MX record validation for email addresses
 
 [dependencies]
 tokio.workspace = true

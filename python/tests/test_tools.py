@@ -1318,8 +1318,9 @@ class TestLookupHashTool:
         with patch.object(_tools, "_THREAT_INTEL_BRIDGE_AVAILABLE", False):
             with patch.object(_tools, "_threat_intel_bridge", None):
                 registry = create_triage_tools()
+                # Use a valid MD5 hash format that isn't in the known malicious list
                 result = await registry.execute(
-                    "lookup_hash", {"hash": "unknown_hash_value"}
+                    "lookup_hash", {"hash": "00000000000000000000000000000000"}
                 )
 
                 assert result.success is True
@@ -1329,9 +1330,11 @@ class TestLookupHashTool:
     @pytest.mark.asyncio
     async def test_lookup_hash_with_bridge(self):
         """Test lookup_hash uses bridge when available."""
+        # Use a valid SHA256 hash format
+        test_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         mock_bridge = MagicMock()
         mock_bridge.lookup_hash.return_value = {
-            "indicator": "abc123",
+            "indicator": test_hash,
             "indicator_type": "sha256",
             "verdict": "suspicious",
             "malicious_score": 50,
@@ -1347,10 +1350,10 @@ class TestLookupHashTool:
                 with patch.object(_tools, "get_threat_intel_bridge", return_value=mock_bridge):
                     registry = create_triage_tools()
                     result = await registry.execute(
-                        "lookup_hash", {"hash": "abc123"}
+                        "lookup_hash", {"hash": test_hash}
                     )
 
-                    mock_bridge.lookup_hash.assert_called_once_with("abc123")
+                    mock_bridge.lookup_hash.assert_called_once_with(test_hash)
                     assert result.success is True
                     assert result.data["verdict"] == "suspicious"
                     assert result.data["score"] == 50
@@ -1359,6 +1362,8 @@ class TestLookupHashTool:
     @pytest.mark.asyncio
     async def test_lookup_hash_bridge_error(self):
         """Test lookup_hash handles bridge errors gracefully."""
+        # Use a valid MD5 hash format
+        test_hash = "d41d8cd98f00b204e9800998ecf8427e"
         mock_bridge = MagicMock()
         mock_bridge.lookup_hash.side_effect = RuntimeError("Connection failed")
 
@@ -1367,7 +1372,7 @@ class TestLookupHashTool:
                 with patch.object(_tools, "get_threat_intel_bridge", return_value=mock_bridge):
                     registry = create_triage_tools()
                     result = await registry.execute(
-                        "lookup_hash", {"hash": "abc123"}
+                        "lookup_hash", {"hash": test_hash}
                     )
 
                     assert result.success is False
@@ -1569,8 +1574,9 @@ class TestToolExecutionTime:
         with patch.object(_tools, "_THREAT_INTEL_BRIDGE_AVAILABLE", False):
             with patch.object(_tools, "_threat_intel_bridge", None):
                 registry = create_triage_tools()
+                # Use a valid MD5 hash format
                 result = await registry.execute(
-                    "lookup_hash", {"hash": "test_hash"}
+                    "lookup_hash", {"hash": "d41d8cd98f00b204e9800998ecf8427e"}
                 )
 
                 assert hasattr(result, "execution_time_ms")
@@ -2622,14 +2628,11 @@ class TestExtractEmailUrlsTool:
 
     @pytest.mark.asyncio
     async def test_extract_email_urls_empty_text(self):
-        """Test extract_email_urls handles empty text."""
+        """Test extract_email_urls rejects empty text (validation enforced)."""
         registry = create_triage_tools()
-        result = await registry.execute("extract_email_urls", {"text": ""})
-
-        assert result.success is True
-        data = result.data
-        assert data["total_count"] == 0
-        assert data["urls"] == []
+        # Empty text is now rejected by schema validation (Security Task 5.4)
+        with pytest.raises(_tools.ToolArgumentValidationError):
+            await registry.execute("extract_email_urls", {"text": ""})
 
     @pytest.mark.asyncio
     async def test_extract_email_urls_result_structure(self):
@@ -3074,19 +3077,19 @@ class TestBlockSenderTool:
 
     @pytest.mark.asyncio
     async def test_block_sender_invalid_block_type(self):
-        """Test block_sender fails with invalid block_type."""
+        """Test block_sender fails with invalid block_type (validation enforced)."""
         registry = create_triage_tools()
-        result = await registry.execute(
-            "block_sender",
-            {
-                "sender": "test@test.com",
-                "block_type": "invalid_type",
-                "reason": "test"
-            }
-        )
-
-        assert result.success is False
-        assert "invalid" in result.error.lower() or "block_type" in result.error.lower()
+        # Invalid block_type is now rejected by schema validation (Security Task 5.4)
+        with pytest.raises(_tools.ToolArgumentValidationError) as exc_info:
+            await registry.execute(
+                "block_sender",
+                {
+                    "sender": "test@test.com",
+                    "block_type": "invalid_type",
+                    "reason": "test"
+                }
+            )
+        assert "block_type" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
     async def test_block_sender_includes_reason(self):
@@ -3173,20 +3176,20 @@ class TestNotifyUserTool:
 
     @pytest.mark.asyncio
     async def test_notify_user_invalid_notification_type(self):
-        """Test notify_user fails with invalid notification_type."""
+        """Test notify_user fails with invalid notification_type (validation enforced)."""
         registry = create_triage_tools()
-        result = await registry.execute(
-            "notify_user",
-            {
-                "recipient": "user@company.com",
-                "notification_type": "invalid_type",
-                "subject": "Test",
-                "body": "Test body"
-            }
-        )
-
-        assert result.success is False
-        assert "invalid" in result.error.lower() or "notification_type" in result.error.lower()
+        # Invalid notification_type is now rejected by schema validation (Security Task 5.4)
+        with pytest.raises(_tools.ToolArgumentValidationError) as exc_info:
+            await registry.execute(
+                "notify_user",
+                {
+                    "recipient": "user@company.com",
+                    "notification_type": "invalid_type",
+                    "subject": "Test",
+                    "body": "Test body"
+                }
+            )
+        assert "notification_type" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
     async def test_notify_user_includes_execution_time(self):
@@ -3258,20 +3261,20 @@ class TestCreateSecurityTicketTool:
 
     @pytest.mark.asyncio
     async def test_create_security_ticket_invalid_severity(self):
-        """Test create_security_ticket fails with invalid severity."""
+        """Test create_security_ticket fails with invalid severity (validation enforced)."""
         registry = create_triage_tools()
-        result = await registry.execute(
-            "create_security_ticket",
-            {
-                "title": "Test",
-                "description": "Test",
-                "severity": "ultra-critical",
-                "indicators": []
-            }
-        )
-
-        assert result.success is False
-        assert "invalid" in result.error.lower() or "severity" in result.error.lower()
+        # Invalid severity is now rejected by schema validation (Security Task 5.4)
+        with pytest.raises(_tools.ToolArgumentValidationError) as exc_info:
+            await registry.execute(
+                "create_security_ticket",
+                {
+                    "title": "Test",
+                    "description": "Test",
+                    "severity": "ultra-critical",
+                    "indicators": []
+                }
+            )
+        assert "severity" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
     async def test_create_security_ticket_empty_indicators(self):

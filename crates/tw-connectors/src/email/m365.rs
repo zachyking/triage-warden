@@ -71,31 +71,36 @@ impl M365Connector {
         }
     }
 
-    /// Builds an OData filter for email search.
-    fn build_email_filter(&self, query: &EmailSearchQuery) -> String {
+    /// Builds an OData filter for email search with input validation.
+    ///
+    /// # Security
+    /// This method validates all user-provided input before constructing OData filters
+    /// to prevent injection attacks.
+    fn build_email_filter(&self, query: &EmailSearchQuery) -> ConnectorResult<String> {
         let mut filters: Vec<String> = Vec::new();
 
-        // Time range filter
+        // Time range filter - using pre-formatted dates (no user input)
         filters.push(format!(
             "receivedDateTime ge {} and receivedDateTime le {}",
             query.timerange.start.format("%Y-%m-%dT%H:%M:%SZ"),
             query.timerange.end.format("%Y-%m-%dT%H:%M:%SZ")
         ));
 
-        // Sender filter
+        // Sender filter with validation
         if let Some(sender) = &query.sender {
-            filters.push(format!(
-                "from/emailAddress/address eq '{}'",
-                escape_odata(sender)
-            ));
+            validate_email_address(sender)?;
+            let escaped = escape_odata_validated(sender).map_err(|e| {
+                ConnectorError::InvalidRequest(format!("Invalid sender value: {}", e))
+            })?;
+            filters.push(format!("from/emailAddress/address eq '{}'", escaped));
         }
 
-        // Has attachments filter
+        // Has attachments filter - boolean, no escaping needed
         if let Some(has_attachments) = query.has_attachments {
             filters.push(format!("hasAttachments eq {}", has_attachments));
         }
 
-        filters.join(" and ")
+        Ok(filters.join(" and "))
     }
 
     /// Parses a Graph API message into EmailMessage.
@@ -170,7 +175,14 @@ impl M365Connector {
     }
 
     /// Gets email with full details including headers.
+    ///
+    /// # Security
+    /// Validates the message ID before constructing the API path to prevent
+    /// path traversal and injection attacks.
     async fn get_message_with_headers(&self, message_id: &str) -> ConnectorResult<GraphMessage> {
+        // Validate message ID to prevent path traversal/injection
+        validate_message_id(message_id)?;
+
         let path = format!(
             "{}/messages/{}?$expand=attachments&$select=id,subject,from,toRecipients,receivedDateTime,hasAttachments,body,internetMessageId,internetMessageHeaders",
             self.mailbox_path(),
@@ -249,7 +261,7 @@ impl crate::traits::Connector for M365Connector {
 impl EmailGatewayConnector for M365Connector {
     #[instrument(skip(self))]
     async fn search_emails(&self, query: EmailSearchQuery) -> ConnectorResult<Vec<EmailMessage>> {
-        let filter = self.build_email_filter(&query);
+        let filter = self.build_email_filter(&query)?;
 
         // Build search request
         let mut path = format!(
@@ -261,6 +273,17 @@ impl EmailGatewayConnector for M365Connector {
 
         // Add subject search if specified
         if let Some(subject) = &query.subject_contains {
+            // Validate subject search input
+            if subject.len() > MAX_ODATA_VALUE_LENGTH {
+                return Err(ConnectorError::InvalidRequest(
+                    "Subject search term exceeds maximum length".to_string(),
+                ));
+            }
+            if contains_suspicious_odata_pattern(subject) {
+                return Err(ConnectorError::InvalidRequest(
+                    "Subject search contains suspicious patterns".to_string(),
+                ));
+            }
             // Use $search for subject contains
             path = format!(
                 "{}/messages?$search=\"subject:{}\"&$top={}&$orderby=receivedDateTime desc&$select=id,subject,from,toRecipients,receivedDateTime,hasAttachments,internetMessageId",
@@ -299,6 +322,9 @@ impl EmailGatewayConnector for M365Connector {
 
     #[instrument(skip(self), fields(message_id = %message_id))]
     async fn quarantine_email(&self, message_id: &str) -> ConnectorResult<ActionResult> {
+        // Validate message ID to prevent path traversal/injection
+        validate_message_id(message_id)?;
+
         // Move message to Junk Email folder
         let path = format!("{}/messages/{}/move", self.mailbox_path(), message_id);
         let body = serde_json::json!({
@@ -327,6 +353,9 @@ impl EmailGatewayConnector for M365Connector {
 
     #[instrument(skip(self), fields(message_id = %message_id))]
     async fn release_email(&self, message_id: &str) -> ConnectorResult<ActionResult> {
+        // Validate message ID to prevent path traversal/injection
+        validate_message_id(message_id)?;
+
         // Move message back to Inbox
         let path = format!("{}/messages/{}/move", self.mailbox_path(), message_id);
         let body = serde_json::json!({
@@ -355,6 +384,9 @@ impl EmailGatewayConnector for M365Connector {
 
     #[instrument(skip(self), fields(sender = %sender))]
     async fn block_sender(&self, sender: &str) -> ConnectorResult<ActionResult> {
+        // Validate email address to prevent injection
+        validate_email_address(sender)?;
+
         if self.config.use_security_center {
             // Use Security & Compliance Center threat indicators API
             return self.block_sender_via_threat_indicator(sender).await;
@@ -366,6 +398,9 @@ impl EmailGatewayConnector for M365Connector {
 
     #[instrument(skip(self), fields(sender = %sender))]
     async fn unblock_sender(&self, sender: &str) -> ConnectorResult<ActionResult> {
+        // Validate email address to prevent injection
+        validate_email_address(sender)?;
+
         if self.config.use_security_center {
             // Use Security & Compliance Center threat indicators API
             return self.unblock_sender_via_threat_indicator(sender).await;
@@ -377,6 +412,9 @@ impl EmailGatewayConnector for M365Connector {
 
     #[instrument(skip(self), fields(message_id = %message_id))]
     async fn get_threat_data(&self, message_id: &str) -> ConnectorResult<EmailThreatData> {
+        // Validate message ID to prevent injection in API queries
+        validate_message_id(message_id)?;
+
         if !self.config.use_security_center {
             // Return basic threat data without Security Center
             return Ok(EmailThreatData {
@@ -479,7 +517,10 @@ impl M365Connector {
         sender: &str,
     ) -> ConnectorResult<ActionResult> {
         // First, find the threat indicator for this sender
-        let filter_str = format!("emailSenderAddress eq '{}'", sender);
+        // Use validated escape to prevent OData injection
+        let escaped_sender = escape_odata_validated(sender)
+            .map_err(|e| ConnectorError::InvalidRequest(format!("Invalid sender value: {}", e)))?;
+        let filter_str = format!("emailSenderAddress eq '{}'", escaped_sender);
         let filter = urlencoding::encode(&filter_str);
         let path = format!("/security/tiIndicators?$filter={}", filter);
 
@@ -676,12 +717,20 @@ impl M365Connector {
 
     /// Gets threat data from Defender for Office 365 using alerts_v2 API.
     /// Requires SecurityEvents.Read.All permission.
+    ///
+    /// # Security
+    /// The message ID is validated by the caller and escaped here to prevent
+    /// OData filter injection attacks.
     async fn get_defender_threat_data(&self, message_id: &str) -> ConnectorResult<EmailThreatData> {
         // Query alerts_v2 API for email-related alerts
         // Filter by service source to get Defender for Office 365 alerts
+        // Use validated escape for the message ID to prevent injection
+        let escaped_message_id = escape_odata_validated(message_id).map_err(|e| {
+            ConnectorError::InvalidRequest(format!("Invalid message ID for threat query: {}", e))
+        })?;
         let path = format!(
             "/security/alerts_v2?$filter=serviceSource eq 'microsoftDefenderForOffice365' and contains(description, '{}')",
-            escape_odata(message_id)
+            escaped_message_id
         );
 
         let response = self.client.get(&path).await;
@@ -1035,9 +1084,248 @@ struct AlertEvidence {
     url: Option<String>,
 }
 
-/// Escapes special characters for OData filter.
+/// OData special characters that need escaping in string literals.
+/// Reference: OData 4.0 specification Section 5.1.1.1.1
+/// Note: '@' and '.' are NOT escaped as they are common in email addresses
+/// and are safe when properly quoted in OData string literals.
+const ODATA_SPECIAL_CHARS: &[char] = &[
+    '\'', '"', '\\', '/', '?', '#', '&', '=', '+', '-', '*', '!', '$', '%', '^', '(', ')', '[',
+    ']', '{', '}', '|', ';', ':', '<', '>', ',',
+];
+
+/// Maximum length for OData filter values to prevent DoS.
+const MAX_ODATA_VALUE_LENGTH: usize = 1024;
+
+/// Validates and escapes a value for use in OData filter expressions.
+///
+/// This function performs comprehensive escaping of ALL OData special characters
+/// to prevent filter injection attacks. It also validates the input length and
+/// rejects suspicious patterns commonly used in injection attacks.
+///
+/// # Arguments
+/// * `value` - The raw string value to escape
+///
+/// # Returns
+/// The safely escaped string, or an empty string if validation fails
+/// (with a warning logged).
+///
+/// # Note
+/// For new code, prefer using `escape_odata_validated()` directly to handle
+/// validation errors explicitly rather than silently returning empty strings.
+#[cfg(test)] // Currently only used in tests; production code uses escape_odata_validated
 fn escape_odata(value: &str) -> String {
-    value.replace("'", "''")
+    escape_odata_validated(value).unwrap_or_else(|_| {
+        // For backwards compatibility, return a sanitized empty-ish value
+        // Log this as it indicates a potential attack attempt
+        tracing::warn!(
+            "OData escape rejected potentially malicious input (length: {})",
+            value.len()
+        );
+        String::new()
+    })
+}
+
+/// Validates and escapes a value for use in OData filter expressions.
+/// Returns an error for invalid or potentially malicious input.
+fn escape_odata_validated(value: &str) -> Result<String, String> {
+    // Check length to prevent DoS
+    if value.len() > MAX_ODATA_VALUE_LENGTH {
+        return Err(format!(
+            "Value exceeds maximum length of {} characters",
+            MAX_ODATA_VALUE_LENGTH
+        ));
+    }
+
+    // Reject suspicious patterns that indicate injection attempts
+    if contains_suspicious_odata_pattern(value) {
+        return Err("Value contains suspicious OData injection patterns".to_string());
+    }
+
+    // Escape all special characters
+    let mut escaped = String::with_capacity(value.len() * 2);
+    for c in value.chars() {
+        if c == '\'' {
+            // Single quotes are doubled in OData
+            escaped.push_str("''");
+        } else if c == '\\' {
+            // Backslash needs double escaping
+            escaped.push_str("\\\\");
+        } else if c == '"' {
+            // Double quotes
+            escaped.push_str("\\\"");
+        } else if ODATA_SPECIAL_CHARS.contains(&c) && c != '\'' && c != '\\' && c != '"' {
+            // URL-encode other special characters
+            escaped.push_str(&format!("%{:02X}", c as u32));
+        } else if c.is_control() {
+            // Escape control characters
+            escaped.push_str(&format!("%{:02X}", c as u32));
+        } else {
+            escaped.push(c);
+        }
+    }
+
+    Ok(escaped)
+}
+
+/// Checks for suspicious patterns that may indicate OData injection attempts.
+fn contains_suspicious_odata_pattern(value: &str) -> bool {
+    let lower = value.to_lowercase();
+
+    // Suspicious OData keywords and operators (with spaces to avoid false positives)
+    let suspicious_patterns = [
+        // Comparison operators (space-delimited to avoid matching normal words)
+        " eq ",
+        " ne ",
+        " gt ",
+        " lt ",
+        " ge ",
+        " le ",
+        // Logical operators (space-delimited)
+        " and ",
+        " or ",
+        // String functions
+        "contains(",
+        "startswith(",
+        "endswith(",
+        "substringof(",
+        "indexof(",
+        "concat(",
+        "substring(",
+        "tolower(",
+        "toupper(",
+        "trim(",
+        "length(",
+        // Date functions
+        "year(",
+        "month(",
+        "day(",
+        "hour(",
+        "minute(",
+        "second(",
+        // Math functions
+        "round(",
+        "floor(",
+        "ceiling(",
+        // Query options (starting with $)
+        "$filter",
+        "$select",
+        "$expand",
+        "$orderby",
+        "$top",
+        "$skip",
+        "$count",
+        "$search",
+        "$format",
+        // Path traversal patterns
+        ")/",
+        "('",
+        "')",
+        "../",
+        "..\\", // Directory traversal
+        // Comment injection
+        "--",
+        "/*",
+        "*/",
+        // Type injection
+        "odata.type",
+        "@odata",
+        "#microsoft.graph", // Graph API type prefix
+    ];
+
+    for pattern in suspicious_patterns {
+        if lower.contains(pattern) {
+            return true;
+        }
+    }
+
+    // Check for multiple consecutive special characters (potential obfuscation)
+    let special_count: usize = value
+        .chars()
+        .filter(|c| ODATA_SPECIAL_CHARS.contains(c))
+        .count();
+    if special_count > 5 && special_count as f64 / value.len() as f64 > 0.3 {
+        return true;
+    }
+
+    false
+}
+
+/// Validates a message ID for use in OData queries.
+/// Message IDs should only contain alphanumeric characters, hyphens, and underscores.
+///
+/// # Arguments
+/// * `message_id` - The message ID to validate
+///
+/// # Returns
+/// * `Ok(())` - If the message ID is valid
+/// * `Err(ConnectorError)` - If the message ID contains invalid characters
+fn validate_message_id(message_id: &str) -> ConnectorResult<()> {
+    // Empty message IDs are invalid
+    if message_id.is_empty() {
+        return Err(ConnectorError::InvalidRequest(
+            "Message ID cannot be empty".to_string(),
+        ));
+    }
+
+    // Check length (Graph API message IDs are typically 100-200 chars)
+    if message_id.len() > 500 {
+        return Err(ConnectorError::InvalidRequest(
+            "Message ID exceeds maximum length".to_string(),
+        ));
+    }
+
+    // Validate characters: alphanumeric, hyphens, underscores, plus signs, equals, and periods
+    // Graph API message IDs can contain: AAMkAGI2TG93AAA= (base64-like format)
+    let valid = message_id.chars().all(|c| {
+        c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '+' || c == '=' || c == '.'
+    });
+
+    if !valid {
+        return Err(ConnectorError::InvalidRequest(
+            "Message ID contains invalid characters: only alphanumeric, -, _, +, =, . are allowed"
+                .to_string(),
+        ));
+    }
+
+    // Reject obvious injection attempts
+    if message_id.contains("..") || message_id.starts_with('.') || message_id.ends_with('.') {
+        return Err(ConnectorError::InvalidRequest(
+            "Message ID contains suspicious path patterns".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Validates an email address format for use in OData queries.
+fn validate_email_address(email: &str) -> ConnectorResult<()> {
+    if email.is_empty() {
+        return Err(ConnectorError::InvalidRequest(
+            "Email address cannot be empty".to_string(),
+        ));
+    }
+
+    if email.len() > 320 {
+        return Err(ConnectorError::InvalidRequest(
+            "Email address exceeds maximum length".to_string(),
+        ));
+    }
+
+    // Basic email format validation
+    if !email.contains('@') || email.starts_with('@') || email.ends_with('@') {
+        return Err(ConnectorError::InvalidRequest(
+            "Invalid email address format".to_string(),
+        ));
+    }
+
+    // Check for injection patterns in email
+    if contains_suspicious_odata_pattern(email) {
+        return Err(ConnectorError::InvalidRequest(
+            "Email address contains suspicious patterns".to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Extracts URLs from email body content.
@@ -1103,10 +1391,403 @@ mod tests {
     }
 
     #[test]
-    fn test_escape_odata() {
+    fn test_escape_odata_basic() {
+        // Simple strings pass through unchanged
         assert_eq!(escape_odata("test"), "test");
+        // Email addresses should be preserved (@ and . are safe in OData strings)
+        assert_eq!(escape_odata("simple@email.com"), "simple@email.com");
+        assert_eq!(escape_odata("user.name@domain.org"), "user.name@domain.org");
+    }
+
+    #[test]
+    fn test_escape_odata_single_quotes() {
+        // Single quotes are doubled per OData spec
         assert_eq!(escape_odata("it's"), "it''s");
         assert_eq!(escape_odata("test'value'here"), "test''value''here");
+    }
+
+    #[test]
+    fn test_escape_odata_special_chars() {
+        // Special characters should be URL-encoded
+        assert_eq!(
+            escape_odata_validated("test+value").unwrap(),
+            "test%2Bvalue"
+        );
+        assert_eq!(
+            escape_odata_validated("test&value").unwrap(),
+            "test%26value"
+        );
+        assert_eq!(
+            escape_odata_validated("test=value").unwrap(),
+            "test%3Dvalue"
+        );
+        assert_eq!(
+            escape_odata_validated("test?value").unwrap(),
+            "test%3Fvalue"
+        );
+        assert_eq!(
+            escape_odata_validated("test#value").unwrap(),
+            "test%23value"
+        );
+    }
+
+    #[test]
+    fn test_escape_odata_backslash() {
+        // Backslashes should be escaped
+        assert_eq!(
+            escape_odata_validated("test\\value").unwrap(),
+            "test\\\\value"
+        );
+    }
+
+    #[test]
+    fn test_escape_odata_double_quotes() {
+        // Double quotes should be escaped
+        assert_eq!(
+            escape_odata_validated("test\"value").unwrap(),
+            "test\\\"value"
+        );
+    }
+
+    // ========================================
+    // OData Injection Prevention Tests
+    // ========================================
+
+    #[test]
+    fn test_escape_odata_rejects_filter_injection() {
+        // Classic OData filter injection attempts
+        let injection_attempts = [
+            "test' or '1'='1",
+            "value' and '1'='1",
+            "test') or ('1'='1",
+            "' or 1 eq 1--",
+        ];
+
+        for attempt in injection_attempts {
+            let result = escape_odata_validated(attempt);
+            assert!(
+                result.is_err(),
+                "Should reject filter injection: {}",
+                attempt
+            );
+        }
+    }
+
+    #[test]
+    fn test_escape_odata_rejects_operator_injection() {
+        // OData operator injection attempts
+        let injection_attempts = [
+            "test eq 'value'",
+            "value ne 'other'",
+            "num gt 0",
+            "num lt 100",
+            "date ge 2024-01-01",
+            "date le 2024-12-31",
+        ];
+
+        for attempt in injection_attempts {
+            let result = escape_odata_validated(attempt);
+            assert!(
+                result.is_err(),
+                "Should reject operator injection: {}",
+                attempt
+            );
+        }
+    }
+
+    #[test]
+    fn test_escape_odata_rejects_function_injection() {
+        // OData function injection attempts
+        let injection_attempts = [
+            "contains(name,'test')",
+            "startswith(email,'admin')",
+            "endswith(domain,'.com')",
+            "substringof('admin',name)",
+            "tolower(name)",
+            "toupper(name)",
+            "concat(first,last)",
+            "year(date)",
+        ];
+
+        for attempt in injection_attempts {
+            let result = escape_odata_validated(attempt);
+            assert!(
+                result.is_err(),
+                "Should reject function injection: {}",
+                attempt
+            );
+        }
+    }
+
+    #[test]
+    fn test_escape_odata_rejects_query_option_injection() {
+        // OData query option injection attempts
+        let injection_attempts = [
+            "$filter=deleted eq true",
+            "$select=password",
+            "$expand=secrets",
+            "$orderby=createdAt desc",
+            "$top=1000000",
+            "$skip=0&$top=all",
+            "$count=true",
+            "$search=*",
+        ];
+
+        for attempt in injection_attempts {
+            let result = escape_odata_validated(attempt);
+            assert!(
+                result.is_err(),
+                "Should reject query option injection: {}",
+                attempt
+            );
+        }
+    }
+
+    #[test]
+    fn test_escape_odata_rejects_path_traversal() {
+        // Path traversal attempts
+        let injection_attempts = [
+            "../../../etc/passwd",
+            "..\\..\\windows",
+            ")/messages/",
+            "('admin')/",
+        ];
+
+        for attempt in injection_attempts {
+            let result = escape_odata_validated(attempt);
+            assert!(result.is_err(), "Should reject path traversal: {}", attempt);
+        }
+    }
+
+    #[test]
+    fn test_escape_odata_rejects_comment_injection() {
+        // Comment injection attempts (SQL-style, common in injection attacks)
+        let injection_attempts = ["test--comment", "value/*comment*/", "/* bypass */"];
+
+        for attempt in injection_attempts {
+            let result = escape_odata_validated(attempt);
+            assert!(
+                result.is_err(),
+                "Should reject comment injection: {}",
+                attempt
+            );
+        }
+    }
+
+    #[test]
+    fn test_escape_odata_rejects_type_injection() {
+        // OData type injection attempts
+        let injection_attempts = [
+            "@odata.type",
+            "odata.type=",
+            "#microsoft.graph.user",
+            "@odata.context",
+        ];
+
+        for attempt in injection_attempts {
+            let result = escape_odata_validated(attempt);
+            assert!(result.is_err(), "Should reject type injection: {}", attempt);
+        }
+    }
+
+    #[test]
+    fn test_escape_odata_rejects_excessive_length() {
+        // Create a string exceeding MAX_ODATA_VALUE_LENGTH
+        let long_string = "a".repeat(2000);
+        let result = escape_odata_validated(&long_string);
+        assert!(result.is_err(), "Should reject excessively long values");
+        assert!(result.unwrap_err().contains("maximum length"));
+    }
+
+    #[test]
+    fn test_escape_odata_rejects_excessive_special_chars() {
+        // String with too many special characters (potential obfuscation)
+        let special_heavy = "!@#$%^&*()[]{}|;:<>,";
+        let result = escape_odata_validated(special_heavy);
+        assert!(
+            result.is_err(),
+            "Should reject excessive special characters"
+        );
+    }
+
+    // ========================================
+    // Message ID Validation Tests
+    // ========================================
+
+    #[test]
+    fn test_validate_message_id_valid() {
+        // Valid Graph API message IDs
+        assert!(validate_message_id("AAMkAGI2TG93AAA").is_ok());
+        assert!(validate_message_id("AAMkAGI2TG93AAA=").is_ok());
+        assert!(validate_message_id("msg-12345-abc").is_ok());
+        assert!(validate_message_id("MSG_TEST_123").is_ok());
+        assert!(validate_message_id("a1b2c3d4e5f6").is_ok());
+    }
+
+    #[test]
+    fn test_validate_message_id_rejects_empty() {
+        let result = validate_message_id("");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ConnectorError::InvalidRequest(_)
+        ));
+    }
+
+    #[test]
+    fn test_validate_message_id_rejects_path_traversal() {
+        // Path traversal attempts
+        let invalid_ids = [
+            "../../../etc/passwd",
+            "..%2F..%2F",
+            "msg/../other",
+            "/users/admin/messages",
+            "msg?$filter=all",
+        ];
+
+        for id in invalid_ids {
+            let result = validate_message_id(id);
+            assert!(result.is_err(), "Should reject path traversal: {}", id);
+        }
+    }
+
+    #[test]
+    fn test_validate_message_id_rejects_special_chars() {
+        // Special characters not allowed in message IDs
+        let invalid_ids = [
+            "msg'injection",
+            "msg\"injection",
+            "msg<script>",
+            "msg&param=value",
+            "msg$filter",
+            "msg;drop",
+            "msg|pipe",
+            "msg`backtick",
+        ];
+
+        for id in invalid_ids {
+            let result = validate_message_id(id);
+            assert!(result.is_err(), "Should reject special chars: {}", id);
+        }
+    }
+
+    #[test]
+    fn test_validate_message_id_rejects_excessive_length() {
+        let long_id = "a".repeat(600);
+        let result = validate_message_id(&long_id);
+        assert!(result.is_err(), "Should reject excessively long message ID");
+    }
+
+    #[test]
+    fn test_validate_message_id_rejects_dot_patterns() {
+        // Suspicious dot patterns
+        let invalid_ids = [".hidden", "test.", "path..traversal"];
+
+        for id in invalid_ids {
+            let result = validate_message_id(id);
+            assert!(result.is_err(), "Should reject dot pattern: {}", id);
+        }
+    }
+
+    // ========================================
+    // Email Address Validation Tests
+    // ========================================
+
+    #[test]
+    fn test_validate_email_valid() {
+        assert!(validate_email_address("user@example.com").is_ok());
+        assert!(validate_email_address("admin@company.org").is_ok());
+        assert!(validate_email_address("test.user@subdomain.example.com").is_ok());
+    }
+
+    #[test]
+    fn test_validate_email_rejects_empty() {
+        let result = validate_email_address("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_email_rejects_missing_at() {
+        let result = validate_email_address("userexample.com");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_email_rejects_invalid_format() {
+        let invalid_emails = ["@example.com", "user@", "@@"];
+
+        for email in invalid_emails {
+            let result = validate_email_address(email);
+            assert!(result.is_err(), "Should reject invalid email: {}", email);
+        }
+    }
+
+    #[test]
+    fn test_validate_email_rejects_injection() {
+        // Email addresses with injection patterns
+        let invalid_emails = [
+            "user' or '1'='1@evil.com",
+            "test@evil.com$filter=all",
+            "admin@test.com and 1 eq 1",
+        ];
+
+        for email in invalid_emails {
+            let result = validate_email_address(email);
+            assert!(
+                result.is_err(),
+                "Should reject injection in email: {}",
+                email
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_email_rejects_excessive_length() {
+        let long_email = format!("{}@example.com", "a".repeat(400));
+        let result = validate_email_address(&long_email);
+        assert!(result.is_err(), "Should reject excessively long email");
+    }
+
+    // ========================================
+    // Suspicious Pattern Detection Tests
+    // ========================================
+
+    #[test]
+    fn test_contains_suspicious_pattern_operators() {
+        // Operators with required spaces on both sides
+        assert!(contains_suspicious_odata_pattern("test eq value"));
+        assert!(contains_suspicious_odata_pattern("x ne y"));
+        assert!(contains_suspicious_odata_pattern("a gt b"));
+        assert!(contains_suspicious_odata_pattern("test and other"));
+        assert!(contains_suspicious_odata_pattern("this or that"));
+        // Note: " not " is NOT checked because it has too many false positives
+        // (e.g., "cannot", "notification", etc.)
+    }
+
+    #[test]
+    fn test_contains_suspicious_pattern_functions() {
+        assert!(contains_suspicious_odata_pattern("contains(x)"));
+        assert!(contains_suspicious_odata_pattern("startswith(x)"));
+        assert!(contains_suspicious_odata_pattern("endswith(x)"));
+        assert!(contains_suspicious_odata_pattern("tolower(x)"));
+        assert!(contains_suspicious_odata_pattern("toupper(x)"));
+    }
+
+    #[test]
+    fn test_contains_suspicious_pattern_query_options() {
+        assert!(contains_suspicious_odata_pattern("$filter"));
+        assert!(contains_suspicious_odata_pattern("$select"));
+        assert!(contains_suspicious_odata_pattern("$expand"));
+        assert!(contains_suspicious_odata_pattern("$orderby"));
+    }
+
+    #[test]
+    fn test_contains_suspicious_pattern_safe_values() {
+        // Normal email addresses and names should not trigger
+        assert!(!contains_suspicious_odata_pattern("user@example.com"));
+        assert!(!contains_suspicious_odata_pattern("John Smith"));
+        assert!(!contains_suspicious_odata_pattern("regular text"));
+        assert!(!contains_suspicious_odata_pattern("AAMkAGI2TG93AAA"));
     }
 
     #[test]
@@ -1148,11 +1829,55 @@ mod tests {
             limit: 100,
         };
 
-        let filter = connector.build_email_filter(&query);
+        let filter = connector.build_email_filter(&query).unwrap();
         assert!(filter.contains("receivedDateTime ge"));
         assert!(filter.contains("receivedDateTime le"));
         assert!(filter.contains("from/emailAddress/address eq 'attacker@evil.com'"));
         assert!(filter.contains("hasAttachments eq true"));
+    }
+
+    #[test]
+    fn test_build_email_filter_rejects_injection() {
+        use crate::traits::TimeRange;
+
+        let config = create_test_config();
+        let connector = M365Connector::new(config).unwrap();
+
+        // Attempt OData injection via sender field
+        let query = EmailSearchQuery {
+            sender: Some("test' or '1'='1".to_string()),
+            recipient: None,
+            subject_contains: None,
+            timerange: TimeRange::last_hours(24),
+            has_attachments: None,
+            threat_type: None,
+            limit: 100,
+        };
+
+        let result = connector.build_email_filter(&query);
+        assert!(result.is_err(), "Should reject OData injection in sender");
+    }
+
+    #[test]
+    fn test_build_email_filter_rejects_invalid_email() {
+        use crate::traits::TimeRange;
+
+        let config = create_test_config();
+        let connector = M365Connector::new(config).unwrap();
+
+        // Invalid email format
+        let query = EmailSearchQuery {
+            sender: Some("not-an-email".to_string()),
+            recipient: None,
+            subject_contains: None,
+            timerange: TimeRange::last_hours(24),
+            has_attachments: None,
+            threat_type: None,
+            limit: 100,
+        };
+
+        let result = connector.build_email_filter(&query);
+        assert!(result.is_err(), "Should reject invalid email format");
     }
 
     // Security API response parsing tests

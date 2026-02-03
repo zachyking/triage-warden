@@ -22,7 +22,10 @@ pub use approval_manager::{
     ApprovalRequest as ManagedApprovalRequest, ApprovalStatus as ManagedApprovalStatus,
 };
 pub use config::{load_guardrails, ConfigError, GuardrailsConfig};
-pub use engine::{PolicyDecision, PolicyEngine};
+pub use engine::{
+    validate_regex_safe, CompiledPattern, PolicyDecision, PolicyEngine, RegexValidationError,
+    ValidatedDenyList,
+};
 pub use escalation::{
     EscalationAction, EscalationCondition, EscalationManager, EscalationRule, FalsePositiveStats,
     IncidentContext,

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
 from typing import Any
 
@@ -10,22 +12,98 @@ from pydantic import ValidationError
 
 from tw_ai.agents.models import TriageAnalysis
 
+logger = logging.getLogger(__name__)
+
+
+# Error codes for client-side handling
+class ErrorCode:
+    """Error codes for ParseError to enable client-side handling."""
+
+    EMPTY_RESPONSE = "PARSE_EMPTY_RESPONSE"
+    NO_JSON_FOUND = "PARSE_NO_JSON_FOUND"
+    INVALID_JSON = "PARSE_INVALID_JSON"
+    VALIDATION_FAILED = "PARSE_VALIDATION_FAILED"
+    INTERNAL_ERROR = "PARSE_INTERNAL_ERROR"
+
+
+def _is_production() -> bool:
+    """Check if running in production environment."""
+    for var in ("TW_ENV", "NODE_ENV", "ENVIRONMENT"):
+        value = os.environ.get(var, "").lower()
+        if value in ("production", "prod"):
+            return True
+    return False
+
+
+def _sanitize_error_message(
+    code: str,
+    detailed_message: str,
+    generic_message: str,
+) -> str:
+    """
+    Return appropriate error message based on environment.
+
+    In production, returns a generic message to prevent information disclosure.
+    In development, returns the detailed message for debugging.
+
+    Args:
+        code: Error code for client-side handling.
+        detailed_message: Detailed error message for logging/development.
+        generic_message: Generic message safe for production.
+
+    Returns:
+        Appropriate error message for the environment.
+    """
+    if _is_production():
+        return f"[{code}] {generic_message}"
+    return f"[{code}] {detailed_message}"
+
 
 class ParseError(Exception):
-    """Raised when parsing LLM output fails."""
+    """Raised when parsing LLM output fails.
 
-    def __init__(self, message: str, raw_text: str | None = None, cause: Exception | None = None):
+    In production environments, this error will not include sensitive details
+    like raw LLM output or stack traces. Use the error_code attribute for
+    programmatic error handling.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        raw_text: str | None = None,
+        cause: Exception | None = None,
+        error_code: str = ErrorCode.INTERNAL_ERROR,
+    ):
         """
         Initialize ParseError with context.
 
         Args:
             message: Human-readable error message.
-            raw_text: The raw text that failed to parse.
+            raw_text: The raw text that failed to parse (only stored in non-production).
             cause: The underlying exception that caused the error.
+            error_code: Machine-readable error code for client handling.
         """
         super().__init__(message)
-        self.raw_text = raw_text
-        self.cause = cause
+        self.error_code = error_code
+
+        # Only store raw_text and detailed cause in non-production environments
+        # to prevent information leakage in production
+        if _is_production():
+            # Log detailed info server-side only
+            if raw_text:
+                logger.error(
+                    "Parse error occurred",
+                    extra={
+                        "error_code": error_code,
+                        "raw_text_preview": raw_text[:500] if raw_text else None,
+                        "cause": str(cause) if cause else None,
+                    },
+                )
+            self.raw_text = None
+            self.cause = None
+        else:
+            self.raw_text = raw_text
+            self.cause = cause
 
 
 def _fix_json_common_issues(text: str) -> str:
@@ -164,7 +242,15 @@ def parse_json_from_response(text: str) -> dict[str, Any]:
         ParseError: If no valid JSON can be extracted.
     """
     if not text or not text.strip():
-        raise ParseError("Empty response text", raw_text=text)
+        raise ParseError(
+            _sanitize_error_message(
+                ErrorCode.EMPTY_RESPONSE,
+                "Empty response text",
+                "No response received",
+            ),
+            raw_text=text,
+            error_code=ErrorCode.EMPTY_RESPONSE,
+        )
 
     # Strategy 1: Try to extract from code block
     json_str = _extract_json_block(text)
@@ -178,7 +264,15 @@ def parse_json_from_response(text: str) -> dict[str, Any]:
         json_str = text.strip()
 
     if not json_str:
-        raise ParseError("No JSON content found in response", raw_text=text)
+        raise ParseError(
+            _sanitize_error_message(
+                ErrorCode.NO_JSON_FOUND,
+                "No JSON content found in response",
+                "Unable to parse response format",
+            ),
+            raw_text=text,
+            error_code=ErrorCode.NO_JSON_FOUND,
+        )
 
     # Try to parse as-is first
     try:
@@ -193,10 +287,24 @@ def parse_json_from_response(text: str) -> dict[str, Any]:
         fixed_result: dict[str, Any] = json.loads(fixed_json)
         return fixed_result
     except json.JSONDecodeError as e:
+        # Log detailed error server-side
+        logger.error(
+            "JSON parse error",
+            extra={
+                "error_msg": e.msg,
+                "error_pos": e.pos,
+                "json_preview": json_str[:200] if json_str else None,
+            },
+        )
         raise ParseError(
-            f"Failed to parse JSON: {e.msg} at position {e.pos}",
+            _sanitize_error_message(
+                ErrorCode.INVALID_JSON,
+                f"Failed to parse JSON: {e.msg} at position {e.pos}",
+                "Invalid response format - unable to parse",
+            ),
             raw_text=text,
             cause=e,
+            error_code=ErrorCode.INVALID_JSON,
         ) from e
 
 
@@ -235,15 +343,31 @@ def parse_triage_analysis(text: str) -> TriageAnalysis:
     try:
         return TriageAnalysis.model_validate(data)
     except ValidationError as e:
-        # Build a helpful error message
+        # Build a helpful error message for development
         error_messages = []
         for error in e.errors():
             loc = " -> ".join(str(x) for x in error["loc"])
             msg = error["msg"]
             error_messages.append(f"  - {loc}: {msg}")
 
+        detailed_message = "Validation failed:\n" + "\n".join(error_messages)
+
+        # Log detailed validation errors server-side
+        logger.error(
+            "Triage analysis validation failed",
+            extra={
+                "validation_errors": e.errors(),
+                "error_count": len(e.errors()),
+            },
+        )
+
         raise ParseError(
-            "Validation failed:\n" + "\n".join(error_messages),
+            _sanitize_error_message(
+                ErrorCode.VALIDATION_FAILED,
+                detailed_message,
+                "Response validation failed - invalid data format",
+            ),
             raw_text=text,
             cause=e,
+            error_code=ErrorCode.VALIDATION_FAILED,
         ) from e

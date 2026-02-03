@@ -34,6 +34,7 @@ pub mod block_sender;
 pub mod check_email_authentication;
 pub mod create_ticket;
 pub mod disable_user;
+pub mod email_sanitizer;
 pub mod escalate;
 pub mod isolate_host;
 pub mod log_false_positive;
@@ -51,6 +52,9 @@ pub use block_sender::BlockSenderAction;
 pub use check_email_authentication::CheckEmailAuthenticationAction;
 pub use create_ticket::CreateTicketAction;
 pub use disable_user::DisableUserAction;
+pub use email_sanitizer::{
+    sanitize_body, sanitize_email, sanitize_subject, EmailSanitizationError, SanitizedEmail,
+};
 pub use escalate::{EscalateAction, EscalationLevel, EscalationRecord};
 pub use isolate_host::IsolateHostAction;
 pub use log_false_positive::{FalsePositiveRecord, LogFalsePositiveAction};

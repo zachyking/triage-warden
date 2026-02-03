@@ -20,6 +20,15 @@ regex = "1"
 
 tw-connectors = { path = "../tw-connectors" }
 tw-core = { path = "../tw-core" }
+tw-observability = { path = "../tw-observability" }
+
+# HMAC for rollback data signing
+hmac.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+# Key derivation
+hkdf = "0.12"
 
 [dev-dependencies]
 mockall.workspace = true

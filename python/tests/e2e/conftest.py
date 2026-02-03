@@ -371,6 +371,7 @@ sys.modules["tw_ai.agents.tools"] = _MockTools
 import importlib.util
 
 _base_path = Path(__file__).parent.parent.parent / "tw_ai" / "agents"
+_base_path_sanitization = Path(__file__).parent.parent.parent / "tw_ai"
 
 
 def _load_module(name: str, file_path: Path):
@@ -381,6 +382,12 @@ def _load_module(name: str, file_path: Path):
     spec.loader.exec_module(module)
     return module
 
+
+# Load sanitization module first (it has no dependencies on react.py)
+_sanitization = _load_module("tw_ai.sanitization", _base_path_sanitization / "sanitization.py")
+
+# Mock the tw_ai package to prevent circular imports
+sys.modules["tw_ai"] = MagicMock()
 
 _react = _load_module("tw_ai.agents.react", _base_path / "react.py")
 ReActAgent = _react.ReActAgent

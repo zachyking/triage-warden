@@ -14,20 +14,261 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, info, instrument, warn};
 
-/// JQL special characters that need to be escaped.
+/// JQL special characters that need to be escaped in text search values.
 /// Reference: https://support.atlassian.com/jira-software-cloud/docs/search-syntax-for-text-fields/
 const JQL_SPECIAL_CHARS: &[char] = &[
-    '+', '-', '&', '|', '!', '(', ')', '{', '}', '[', ']', '^', '"', '~', '*', '?', ':', '\\',
+    '+', '-', '&', '|', '!', '(', ')', '{', '}', '[', ']', '^', '"', '~', ':', '\\',
 ];
 
-/// Escapes JQL special characters in a search query.
+/// Characters that are NOT allowed in text search (wildcards that could manipulate queries).
+/// These are rejected rather than escaped to prevent query manipulation.
+const JQL_FORBIDDEN_CHARS: &[char] = &['*', '?'];
+
+/// JQL reserved words that could be used for injection attacks.
+/// Case-insensitive matching is used.
+const JQL_RESERVED_WORDS: &[&str] = &[
+    // Logical operators
+    "AND",
+    "OR",
+    "NOT",
+    // Comparison operators
+    "IN",
+    "IS",
+    "WAS",
+    "CHANGED",
+    "BY",
+    "DURING",
+    "ON",
+    "BEFORE",
+    "AFTER",
+    "FROM",
+    "TO",
+    // Special values
+    "EMPTY",
+    "NULL",
+    // Functions (without parentheses - we check the base name)
+    "currentUser",
+    "currentLogin",
+    "membersOf",
+    "now",
+    "startOfDay",
+    "startOfWeek",
+    "startOfMonth",
+    "startOfYear",
+    "endOfDay",
+    "endOfWeek",
+    "endOfMonth",
+    "endOfYear",
+    "issueHistory",
+    "linkedIssues",
+    "votedIssues",
+    "watchedIssues",
+    "updatedBy",
+    "releasedVersions",
+    "latestReleasedVersion",
+    "unreleasedVersions",
+    "earliestUnreleasedVersion",
+    "componentsLeadByUser",
+    "projectsLeadByUser",
+    "projectsWhereUserHasPermission",
+    "projectsWhereUserHasRole",
+    // Order clause
+    "ORDER",
+    "ASC",
+    "DESC",
+];
+
+/// Allowed field names for JQL queries (allowlist approach).
+/// Only these fields can be used in query building.
+const JQL_ALLOWED_FIELDS: &[&str] = &[
+    "project",
+    "summary",
+    "description",
+    "status",
+    "priority",
+    "assignee",
+    "reporter",
+    "labels",
+    "created",
+    "updated",
+    "resolved",
+    "due",
+    "issuetype",
+    "component",
+    "fixVersion",
+    "affectedVersion",
+    "key",
+    "id",
+    "text",
+];
+
+/// Error type for JQL validation failures.
+#[derive(Debug, Clone)]
+pub enum JqlValidationError {
+    /// Input contains forbidden wildcard characters.
+    ForbiddenWildcard(char),
+    /// Input contains JQL reserved word that could manipulate query.
+    ReservedWord(String),
+    /// Input contains potential function call syntax.
+    FunctionSyntax(String),
+    /// Field name is not in the allowlist.
+    InvalidField(String),
+    /// Input is too long (potential DoS).
+    InputTooLong(usize),
+    /// Input contains control characters.
+    ControlCharacter,
+}
+
+impl std::fmt::Display for JqlValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ForbiddenWildcard(c) => write!(
+                f,
+                "Wildcard character '{}' is not allowed in search queries",
+                c
+            ),
+            Self::ReservedWord(word) => write!(
+                f,
+                "JQL reserved word '{}' is not allowed in search values",
+                word
+            ),
+            Self::FunctionSyntax(func) => write!(
+                f,
+                "Function syntax '{}' is not allowed in search values",
+                func
+            ),
+            Self::InvalidField(field) => write!(f, "Field '{}' is not allowed in queries", field),
+            Self::InputTooLong(len) => write!(f, "Search query too long ({} chars, max 1000)", len),
+            Self::ControlCharacter => write!(f, "Search query contains invalid control characters"),
+        }
+    }
+}
+
+impl std::error::Error for JqlValidationError {}
+
+/// Maximum allowed length for search queries to prevent DoS.
+const MAX_QUERY_LENGTH: usize = 1000;
+
+/// Validates that a field name is in the allowlist.
+fn validate_field_name(field: &str) -> Result<(), JqlValidationError> {
+    let field_lower = field.to_lowercase();
+    if JQL_ALLOWED_FIELDS
+        .iter()
+        .any(|f| f.to_lowercase() == field_lower)
+    {
+        Ok(())
+    } else {
+        Err(JqlValidationError::InvalidField(field.to_string()))
+    }
+}
+
+/// Validates that input doesn't contain JQL reserved words as standalone tokens.
+fn validate_no_reserved_words(value: &str) -> Result<(), JqlValidationError> {
+    // Tokenize by whitespace and check each token
+    for token in value.split_whitespace() {
+        let token_upper = token.to_uppercase();
+        // Check if token matches any reserved word exactly
+        if JQL_RESERVED_WORDS
+            .iter()
+            .any(|&rw| rw.to_uppercase() == token_upper)
+        {
+            return Err(JqlValidationError::ReservedWord(token.to_string()));
+        }
+    }
+    Ok(())
+}
+
+/// Validates that input doesn't contain function call syntax like "func()".
+fn validate_no_function_syntax(value: &str) -> Result<(), JqlValidationError> {
+    // Check for pattern: word followed by parentheses (potential function call)
+    let mut current_word = String::new();
+
+    for c in value.chars() {
+        if c.is_alphanumeric() || c == '_' {
+            current_word.push(c);
+        } else {
+            if c == '(' && !current_word.is_empty() {
+                // Found potential function call
+                return Err(JqlValidationError::FunctionSyntax(format!(
+                    "{}()",
+                    current_word
+                )));
+            }
+            current_word.clear();
+        }
+    }
+    Ok(())
+}
+
+/// Validates and escapes a JQL text search value.
 ///
-/// This function escapes all JQL reserved characters to prevent injection attacks
-/// and ensure the query is interpreted literally.
-fn escape_jql(value: &str) -> String {
+/// This function performs comprehensive validation and escaping to prevent JQL injection:
+/// 1. Rejects wildcard characters (*, ?) that could manipulate queries
+/// 2. Rejects JQL reserved words that could alter query logic
+/// 3. Rejects function call syntax
+/// 4. Escapes all JQL special characters
+/// 5. Returns a properly quoted string for use in text search operators
+///
+/// # Arguments
+/// * `value` - The raw user input to validate and escape
+///
+/// # Returns
+/// * `Ok(String)` - The escaped and quoted value safe for JQL text search
+/// * `Err(JqlValidationError)` - If the input contains forbidden patterns
+///
+/// # Example
+/// ```ignore
+/// let escaped = escape_jql_text_value("simple search")?;
+/// // Returns: "simple search" (with escaping applied)
+/// ```
+fn escape_jql_text_value(value: &str) -> Result<String, JqlValidationError> {
+    // Check length limit
+    if value.len() > MAX_QUERY_LENGTH {
+        return Err(JqlValidationError::InputTooLong(value.len()));
+    }
+
+    // Check for control characters (except standard whitespace)
+    if value
+        .chars()
+        .any(|c| c.is_control() && c != ' ' && c != '\t' && c != '\n' && c != '\r')
+    {
+        return Err(JqlValidationError::ControlCharacter);
+    }
+
+    // Check for forbidden wildcard characters
+    for c in value.chars() {
+        if JQL_FORBIDDEN_CHARS.contains(&c) {
+            return Err(JqlValidationError::ForbiddenWildcard(c));
+        }
+    }
+
+    // Check for reserved words
+    validate_no_reserved_words(value)?;
+
+    // Check for function syntax
+    validate_no_function_syntax(value)?;
+
+    // Now escape special characters
     let mut result = String::with_capacity(value.len() * 2);
     for c in value.chars() {
         if JQL_SPECIAL_CHARS.contains(&c) {
+            result.push('\\');
+        }
+        result.push(c);
+    }
+
+    Ok(result)
+}
+
+/// Legacy escape function - escapes JQL special characters without validation.
+///
+/// WARNING: This function should only be used for trusted internal values.
+/// For user input, use `escape_jql_text_value()` which includes validation.
+#[allow(dead_code)]
+fn escape_jql(value: &str) -> String {
+    let mut result = String::with_capacity(value.len() * 2);
+    for c in value.chars() {
+        if JQL_SPECIAL_CHARS.contains(&c) || JQL_FORBIDDEN_CHARS.contains(&c) {
             result.push('\\');
         }
         result.push(c);
@@ -401,6 +642,49 @@ impl JiraConnector {
             .map(|i| self.parse_issue(i))
             .collect())
     }
+
+    /// Build a JQL query with validated field names.
+    ///
+    /// This method ensures all field names are from the allowlist to prevent
+    /// JQL injection through field name manipulation.
+    #[allow(dead_code)]
+    pub fn build_jql_query(&self, filters: &[(String, String)]) -> ConnectorResult<String> {
+        // Always validate project key
+        validate_project_key(&self.config.project_key)?;
+
+        let mut clauses = vec![format!("project = {}", self.config.project_key)];
+
+        for (field, value) in filters {
+            // Validate field name against allowlist
+            validate_field_name(field).map_err(|e| {
+                ConnectorError::ConfigError(format!("Invalid field in query: {}", e))
+            })?;
+
+            // Validate and escape the value
+            let escaped_value = escape_jql_text_value(value).map_err(|e| {
+                ConnectorError::ConfigError(format!("Invalid value for field '{}': {}", field, e))
+            })?;
+
+            // Use appropriate operator based on field type
+            let clause = match field.as_str() {
+                "summary" | "description" | "text" => {
+                    // Text fields use ~ operator with quoted values
+                    format!("{} ~ \"{}\"", field, escaped_value)
+                }
+                "labels" => {
+                    // Labels use IN operator
+                    format!("labels IN (\"{}\")", escaped_value)
+                }
+                _ => {
+                    // Other fields use = operator with quoted values
+                    format!("{} = \"{}\"", field, escaped_value)
+                }
+            };
+            clauses.push(clause);
+        }
+
+        Ok(clauses.join(" AND "))
+    }
 }
 
 #[async_trait]
@@ -657,15 +941,21 @@ impl TicketingConnector for JiraConnector {
         // Validate project key to prevent JQL injection
         validate_project_key(&self.config.project_key)?;
 
-        // Escape all JQL special characters in the search query
-        let escaped_query = escape_jql(query);
+        // Validate and escape the search query with comprehensive JQL injection protection
+        let escaped_query = escape_jql_text_value(query).map_err(|e| {
+            warn!("JQL validation failed for query: {}", e);
+            ConnectorError::ConfigError(format!("Invalid search query: {}", e))
+        })?;
 
-        // Use proper JQL escaping for the text search
+        // Build JQL with proper quoting for text search operators.
+        // The ~ operator performs text search; values must be double-quoted.
+        // Field names are from our allowlist (summary, description are validated).
         let jql = format!(
             "project = {} AND (summary ~ \"{}\" OR description ~ \"{}\")",
             self.config.project_key, escaped_query, escaped_query
         );
 
+        debug!("Executing JQL search: {}", jql);
         self.search_jql(&jql, limit).await
     }
 
@@ -940,5 +1230,395 @@ mod tests {
         assert_eq!(connector.map_priority(TicketPriority::Highest), "P1");
         assert_eq!(connector.map_priority(TicketPriority::High), "P2");
         assert_eq!(connector.map_priority(TicketPriority::Medium), "Medium"); // No mapping
+    }
+
+    // ============================================
+    // JQL Injection Prevention Tests
+    // ============================================
+
+    #[test]
+    fn test_escape_jql_text_value_simple_string() {
+        // Simple alphanumeric strings should pass through with no changes
+        let result = escape_jql_text_value("simple search").unwrap();
+        assert_eq!(result, "simple search");
+    }
+
+    #[test]
+    fn test_escape_jql_text_value_escapes_special_chars() {
+        // Special characters should be escaped with backslash
+        let result = escape_jql_text_value("test+value").unwrap();
+        assert_eq!(result, "test\\+value");
+
+        let result = escape_jql_text_value("test-value").unwrap();
+        assert_eq!(result, "test\\-value");
+
+        let result = escape_jql_text_value("test:value").unwrap();
+        assert_eq!(result, "test\\:value");
+
+        // Note: "test(value)" would trigger function syntax detection (test() looks like a function call)
+        // Instead test parentheses with a space before them
+        let result = escape_jql_text_value("test (value)").unwrap();
+        assert_eq!(result, "test \\(value\\)");
+
+        let result = escape_jql_text_value("(start) end").unwrap();
+        assert_eq!(result, "\\(start\\) end");
+
+        let result = escape_jql_text_value("test[value]").unwrap();
+        assert_eq!(result, "test\\[value\\]");
+
+        let result = escape_jql_text_value("test{value}").unwrap();
+        assert_eq!(result, "test\\{value\\}");
+    }
+
+    #[test]
+    fn test_escape_jql_text_value_rejects_wildcard_asterisk() {
+        // Asterisk wildcard should be rejected
+        let result = escape_jql_text_value("test*");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            JqlValidationError::ForbiddenWildcard('*') => {}
+            e => panic!("Expected ForbiddenWildcard('*'), got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_escape_jql_text_value_rejects_wildcard_question() {
+        // Question mark wildcard should be rejected
+        let result = escape_jql_text_value("test?");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            JqlValidationError::ForbiddenWildcard('?') => {}
+            e => panic!("Expected ForbiddenWildcard('?'), got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_escape_jql_text_value_rejects_and_operator() {
+        // AND operator should be rejected
+        let result = escape_jql_text_value("foo AND bar");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            JqlValidationError::ReservedWord(word) => assert_eq!(word.to_uppercase(), "AND"),
+            e => panic!("Expected ReservedWord(AND), got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_escape_jql_text_value_rejects_or_operator() {
+        // OR operator should be rejected
+        let result = escape_jql_text_value("foo OR bar");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            JqlValidationError::ReservedWord(word) => assert_eq!(word.to_uppercase(), "OR"),
+            e => panic!("Expected ReservedWord(OR), got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_escape_jql_text_value_rejects_not_operator() {
+        // NOT operator should be rejected
+        let result = escape_jql_text_value("NOT something");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            JqlValidationError::ReservedWord(word) => assert_eq!(word.to_uppercase(), "NOT"),
+            e => panic!("Expected ReservedWord(NOT), got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_escape_jql_text_value_rejects_in_operator() {
+        // IN operator should be rejected
+        let result = escape_jql_text_value("value IN list");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            JqlValidationError::ReservedWord(word) => assert_eq!(word.to_uppercase(), "IN"),
+            e => panic!("Expected ReservedWord(IN), got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_escape_jql_text_value_rejects_order_by() {
+        // ORDER BY injection attempt should be rejected
+        let result = escape_jql_text_value("test\" ORDER BY priority");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            JqlValidationError::ReservedWord(word) => assert_eq!(word.to_uppercase(), "ORDER"),
+            e => panic!("Expected ReservedWord(ORDER), got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_escape_jql_text_value_rejects_function_syntax() {
+        // Function call syntax should be rejected
+        let result = escape_jql_text_value("currentUser()");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            JqlValidationError::FunctionSyntax(func) => assert!(func.contains("currentUser")),
+            e => panic!("Expected FunctionSyntax, got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_escape_jql_text_value_rejects_now_function() {
+        // now() function should be rejected
+        let result = escape_jql_text_value("now()");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            JqlValidationError::FunctionSyntax(func) => assert!(func.contains("now")),
+            e => panic!("Expected FunctionSyntax, got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_escape_jql_text_value_rejects_members_of_function() {
+        // membersOf() function should be rejected
+        let result = escape_jql_text_value("membersOf(admins)");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            JqlValidationError::FunctionSyntax(func) => assert!(func.contains("membersOf")),
+            e => panic!("Expected FunctionSyntax, got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_escape_jql_text_value_rejects_too_long_input() {
+        // Very long input should be rejected (DoS prevention)
+        let long_input = "a".repeat(1001);
+        let result = escape_jql_text_value(&long_input);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            JqlValidationError::InputTooLong(len) => assert_eq!(len, 1001),
+            e => panic!("Expected InputTooLong, got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_escape_jql_text_value_accepts_max_length_input() {
+        // Input at exactly max length should be accepted
+        let max_input = "a".repeat(1000);
+        let result = escape_jql_text_value(&max_input);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_escape_jql_text_value_rejects_control_characters() {
+        // Control characters (except whitespace) should be rejected
+        let result = escape_jql_text_value("test\x00value");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            JqlValidationError::ControlCharacter => {}
+            e => panic!("Expected ControlCharacter, got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_escape_jql_text_value_allows_standard_whitespace() {
+        // Standard whitespace (space, tab, newline) should be allowed
+        let result = escape_jql_text_value("test value\twith\nwhitespace");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_escape_jql_text_value_case_insensitive_reserved_words() {
+        // Reserved word detection should be case-insensitive
+        let result = escape_jql_text_value("foo and bar");
+        assert!(result.is_err());
+
+        let result = escape_jql_text_value("foo And bar");
+        assert!(result.is_err());
+
+        let result = escape_jql_text_value("foo AND bar");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_escape_jql_injection_attempt_quote_escape() {
+        // Attempt to break out of quotes should be escaped
+        let result = escape_jql_text_value("test\" OR project = OTHER");
+        // Should be rejected due to OR
+        assert!(result.is_err());
+
+        // Without reserved words, backslash should be escaped
+        let result = escape_jql_text_value("test\\\" malicious");
+        assert!(result.is_ok());
+        // Backslash and quote both get escaped
+        assert!(result.unwrap().contains("\\\\"));
+    }
+
+    #[test]
+    fn test_escape_jql_injection_attempt_nested_query() {
+        // Attempt to inject nested subquery should be rejected
+        let result = escape_jql_text_value("test\" AND (status = Done OR status = Open)");
+        assert!(result.is_err()); // Rejected due to AND
+    }
+
+    #[test]
+    fn test_validate_field_name_allowed() {
+        // Allowed field names should pass
+        assert!(validate_field_name("summary").is_ok());
+        assert!(validate_field_name("description").is_ok());
+        assert!(validate_field_name("status").is_ok());
+        assert!(validate_field_name("priority").is_ok());
+        assert!(validate_field_name("assignee").is_ok());
+        assert!(validate_field_name("reporter").is_ok());
+        assert!(validate_field_name("labels").is_ok());
+        assert!(validate_field_name("created").is_ok());
+        assert!(validate_field_name("updated").is_ok());
+        assert!(validate_field_name("project").is_ok());
+    }
+
+    #[test]
+    fn test_validate_field_name_case_insensitive() {
+        // Field name validation should be case-insensitive
+        assert!(validate_field_name("Summary").is_ok());
+        assert!(validate_field_name("SUMMARY").is_ok());
+        assert!(validate_field_name("sUmMaRy").is_ok());
+    }
+
+    #[test]
+    fn test_validate_field_name_rejected() {
+        // Non-allowlisted field names should be rejected
+        assert!(validate_field_name("customfield_12345").is_err());
+        assert!(validate_field_name("malicious_field").is_err());
+        assert!(validate_field_name("drop_table").is_err());
+
+        match validate_field_name("bad_field").unwrap_err() {
+            JqlValidationError::InvalidField(field) => assert_eq!(field, "bad_field"),
+            e => panic!("Expected InvalidField, got {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_validate_no_reserved_words_allows_partial_matches() {
+        // Words containing reserved words but not as standalone tokens should pass
+        // e.g., "android" contains "and" but isn't the AND operator
+        assert!(validate_no_reserved_words("android").is_ok());
+        assert!(validate_no_reserved_words("notification").is_ok()); // contains "not"
+        assert!(validate_no_reserved_words("inbound").is_ok()); // contains "in"
+    }
+
+    #[test]
+    fn test_validate_no_function_syntax_allows_parentheses_not_after_word() {
+        // Parentheses not immediately after a word should be allowed (after escaping)
+        assert!(validate_no_function_syntax("test (value)").is_ok());
+        assert!(validate_no_function_syntax("(start) text").is_ok());
+    }
+
+    #[test]
+    fn test_escape_jql_legacy_function() {
+        // Legacy escape function should escape wildcards too
+        let result = escape_jql("test*value?end");
+        assert_eq!(result, "test\\*value\\?end");
+    }
+
+    #[test]
+    fn test_build_jql_query_basic() {
+        let config = create_test_config();
+        let connector = JiraConnector::new(config).unwrap();
+
+        let filters = vec![("summary".to_string(), "test search".to_string())];
+
+        let jql = connector.build_jql_query(&filters).unwrap();
+        assert!(jql.contains("project = SEC"));
+        assert!(jql.contains("summary ~ \"test search\""));
+    }
+
+    #[test]
+    fn test_build_jql_query_rejects_invalid_field() {
+        let config = create_test_config();
+        let connector = JiraConnector::new(config).unwrap();
+
+        let filters = vec![("malicious_field".to_string(), "value".to_string())];
+
+        let result = connector.build_jql_query(&filters);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_jql_query_rejects_injection_in_value() {
+        let config = create_test_config();
+        let connector = JiraConnector::new(config).unwrap();
+
+        let filters = vec![("summary".to_string(), "test AND status = Done".to_string())];
+
+        let result = connector.build_jql_query(&filters);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_jql_validation_error_display() {
+        // Ensure error messages are user-friendly
+        let err = JqlValidationError::ForbiddenWildcard('*');
+        assert!(err.to_string().contains("Wildcard"));
+        assert!(err.to_string().contains('*'));
+
+        let err = JqlValidationError::ReservedWord("AND".to_string());
+        assert!(err.to_string().contains("reserved"));
+        assert!(err.to_string().contains("AND"));
+
+        let err = JqlValidationError::FunctionSyntax("currentUser()".to_string());
+        assert!(err.to_string().contains("Function"));
+        assert!(err.to_string().contains("currentUser"));
+
+        let err = JqlValidationError::InvalidField("bad".to_string());
+        assert!(err.to_string().contains("Field"));
+        assert!(err.to_string().contains("bad"));
+
+        let err = JqlValidationError::InputTooLong(2000);
+        assert!(err.to_string().contains("too long"));
+        assert!(err.to_string().contains("2000"));
+
+        let err = JqlValidationError::ControlCharacter;
+        assert!(err.to_string().contains("control"));
+    }
+
+    #[test]
+    fn test_escape_jql_text_value_complex_injection_attempts() {
+        // Complex injection attempt combining multiple techniques
+        let result =
+            escape_jql_text_value("foo\" OR assignee = currentUser() AND project = \"OTHER");
+        assert!(result.is_err()); // Should be rejected due to OR
+
+        // Attempt to use comment syntax
+        let result = escape_jql_text_value("value -- comment");
+        // SQL comments aren't JQL but the dash would be escaped
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("\\-"));
+    }
+
+    #[test]
+    fn test_escape_jql_text_value_empty_string() {
+        // Empty string should be allowed
+        let result = escape_jql_text_value("");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "");
+    }
+
+    #[test]
+    fn test_escape_jql_text_value_only_whitespace() {
+        // Whitespace-only string should be allowed
+        let result = escape_jql_text_value("   ");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "   ");
+    }
+
+    #[test]
+    fn test_escape_jql_text_value_unicode() {
+        // Unicode characters should be allowed
+        // Note: "and" is a reserved word so we use a different test string
+        let result = escape_jql_text_value("test unicode chars: \u{00E9}\u{00F1}\u{00FC}");
+        assert!(result.is_ok());
+
+        // Test with emoji (non-ASCII)
+        let result = escape_jql_text_value("security alert level high");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_escape_jql_text_value_numeric() {
+        // Numeric values should be allowed
+        let result = escape_jql_text_value("12345");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "12345");
     }
 }

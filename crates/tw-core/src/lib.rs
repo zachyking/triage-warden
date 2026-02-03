@@ -14,6 +14,7 @@ pub mod notification;
 pub mod orchestrator;
 pub mod playbook;
 pub mod policy;
+pub mod validation;
 pub mod workflow;
 
 #[cfg(feature = "database")]
@@ -31,7 +32,10 @@ pub use notification::{
 pub use orchestrator::Orchestrator;
 pub use playbook::{Playbook, PlaybookStage, PlaybookStep};
 pub use policy::{ApprovalLevel, Policy, PolicyAction};
-pub use workflow::{WorkflowEngine, WorkflowState, WorkflowTransition};
+pub use workflow::{
+    ManualApprovalRequest, ManualApprovalStatus, WorkflowEngine, WorkflowState, WorkflowTransition,
+    DEFAULT_APPROVAL_TIMEOUT_HOURS,
+};
 
 // Auth exports
 pub use auth::password::{
@@ -47,4 +51,10 @@ pub use crypto::{
     create_encryptor, create_encryptor_or_panic, generate_encryption_key,
     is_production_environment, Aes256GcmEncryptor, CredentialEncryptor, CryptoError,
     PlaintextEncryptor, SecureString,
+};
+
+// Validation exports
+pub use validation::{
+    validate_email, validate_email_with_options, EmailValidationError, EmailValidationOptions,
+    HostnameValidationError, ValidatedEmail, ValidatedHostname,
 };

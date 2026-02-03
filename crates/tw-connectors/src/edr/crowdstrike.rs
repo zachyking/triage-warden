@@ -111,23 +111,72 @@ impl CrowdStrikeConnector {
         result
     }
 
-    /// Validates that a hostname only contains safe characters.
-    fn validate_hostname(hostname: &str) -> ConnectorResult<()> {
-        // Hostnames should be alphanumeric with hyphens, underscores, and dots
-        if hostname.is_empty() || hostname.len() > 253 {
+    /// Validates that a hostname only contains safe ASCII characters.
+    ///
+    /// This function enforces strict hostname validation to prevent:
+    /// - Unicode lookalike character attacks (e.g., Cyrillic 'а' vs ASCII 'a')
+    /// - FQL injection via specially crafted hostnames
+    /// - Overly long hostnames that could cause issues
+    ///
+    /// Returns the normalized (lowercase) hostname on success.
+    fn validate_hostname(hostname: &str) -> ConnectorResult<String> {
+        // Check for empty hostname first
+        if hostname.is_empty() {
             return Err(ConnectorError::ConfigError(
-                "Hostname must be 1-253 characters".to_string(),
+                "Hostname cannot be empty".to_string(),
             ));
         }
-        for c in hostname.chars() {
-            if !c.is_alphanumeric() && c != '-' && c != '_' && c != '.' {
+
+        // Enforce maximum hostname length per RFC 1035
+        if hostname.len() > 253 {
+            return Err(ConnectorError::ConfigError(
+                "Hostname must not exceed 253 characters".to_string(),
+            ));
+        }
+
+        // Normalize to lowercase for consistent validation and querying
+        let normalized = hostname.to_lowercase();
+
+        // Validate each character is ASCII and allowed in hostnames
+        // Only allow: a-z, 0-9, hyphen, underscore, and dot
+        for c in normalized.chars() {
+            // First, reject ANY non-ASCII character to prevent Unicode lookalike attacks
+            if !c.is_ascii() {
+                return Err(ConnectorError::ConfigError(format!(
+                    "Non-ASCII character in hostname (possible Unicode lookalike attack): '{}'",
+                    c
+                )));
+            }
+
+            // Then validate against allowed ASCII characters
+            if !c.is_ascii_alphanumeric() && c != '-' && c != '_' && c != '.' {
                 return Err(ConnectorError::ConfigError(format!(
                     "Invalid character '{}' in hostname",
                     c
                 )));
             }
         }
-        Ok(())
+
+        // Additional hostname format validation
+        // Cannot start or end with hyphen or dot
+        if normalized.starts_with('-')
+            || normalized.ends_with('-')
+            || normalized.starts_with('.')
+            || normalized.ends_with('.')
+        {
+            return Err(ConnectorError::ConfigError(
+                "Hostname cannot start or end with hyphen or dot".to_string(),
+            ));
+        }
+
+        // Cannot have consecutive dots
+        if normalized.contains("..") {
+            return Err(ConnectorError::ConfigError(
+                "Hostname cannot contain consecutive dots".to_string(),
+            ));
+        }
+
+        Ok(normalized)
     }
 
     /// Builds a FQL filter for host search.
@@ -145,9 +194,11 @@ impl CrowdStrikeConnector {
     /// Looks up hosts by hostname pattern.
     #[instrument(skip(self))]
     async fn find_host_id(&self, hostname: &str) -> ConnectorResult<String> {
-        // Validate hostname to prevent injection
-        Self::validate_hostname(hostname)?;
-        let filter = format!("hostname:'{}'", Self::escape_fql(hostname));
+        // Validate hostname and get normalized (lowercase) version
+        // This prevents Unicode lookalike attacks before FQL escaping
+        let normalized_hostname = Self::validate_hostname(hostname)?;
+        // Apply FQL escaping AFTER validation to ensure safe query construction
+        let filter = format!("hostname:'{}'", Self::escape_fql(&normalized_hostname));
         let path = format!(
             "/devices/queries/devices/v1?filter={}",
             urlencoding::encode(&filter)
@@ -1305,5 +1356,228 @@ TCP short"#;
         let json = r#"{"resources": []}"#;
         let response: RTRSessionResponse = serde_json::from_str(json).unwrap();
         assert!(response.resources.is_empty());
+    }
+
+    // ========================================================================
+    // Hostname Validation Tests - Unicode Bypass Prevention
+    // ========================================================================
+
+    #[test]
+    fn test_validate_hostname_valid() {
+        // Valid hostnames should pass and be normalized to lowercase
+        let result = CrowdStrikeConnector::validate_hostname("workstation-001");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "workstation-001");
+
+        let result = CrowdStrikeConnector::validate_hostname("SERVER.DOMAIN.COM");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "server.domain.com");
+
+        let result = CrowdStrikeConnector::validate_hostname("host_name_123");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "host_name_123");
+    }
+
+    #[test]
+    fn test_validate_hostname_lowercase_normalization() {
+        // Verify uppercase is normalized to lowercase
+        let result = CrowdStrikeConnector::validate_hostname("WORKSTATION-001");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "workstation-001");
+
+        let result = CrowdStrikeConnector::validate_hostname("MixedCase.Host");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "mixedcase.host");
+    }
+
+    #[test]
+    fn test_validate_hostname_empty() {
+        let result = CrowdStrikeConnector::validate_hostname("");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ConnectorError::ConfigError(_)));
+    }
+
+    #[test]
+    fn test_validate_hostname_too_long() {
+        // 254 characters should fail
+        let long_hostname = "a".repeat(254);
+        let result = CrowdStrikeConnector::validate_hostname(&long_hostname);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ConnectorError::ConfigError(_)));
+
+        // 253 characters should pass
+        let max_hostname = "a".repeat(253);
+        let result = CrowdStrikeConnector::validate_hostname(&max_hostname);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_hostname_unicode_cyrillic_lookalike() {
+        // Cyrillic 'а' (U+0430) looks like ASCII 'a'
+        // This is a common homoglyph attack
+        let hostname_with_cyrillic_a = "workst\u{0430}tion"; // Contains Cyrillic 'а'
+        let result = CrowdStrikeConnector::validate_hostname(hostname_with_cyrillic_a);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ConnectorError::ConfigError(_)));
+        if let ConnectorError::ConfigError(msg) = err {
+            assert!(msg.contains("Non-ASCII") || msg.contains("Unicode lookalike"));
+        }
+    }
+
+    #[test]
+    fn test_validate_hostname_unicode_greek_lookalike() {
+        // Greek 'ο' (U+03BF) looks like ASCII 'o'
+        let hostname_with_greek_o = "workstati\u{03BF}n"; // Contains Greek 'ο'
+        let result = CrowdStrikeConnector::validate_hostname(hostname_with_greek_o);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_hostname_unicode_fullwidth_chars() {
+        // Fullwidth Latin 'A' (U+FF21) could bypass filters
+        let hostname_with_fullwidth = "\u{FF21}dmin-workstation"; // Fullwidth 'A'
+        let result = CrowdStrikeConnector::validate_hostname(hostname_with_fullwidth);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_hostname_unicode_invisible_chars() {
+        // Zero-width space (U+200B) is invisible
+        let hostname_with_zwsp = "work\u{200B}station"; // Contains zero-width space
+        let result = CrowdStrikeConnector::validate_hostname(hostname_with_zwsp);
+        assert!(result.is_err());
+
+        // Zero-width joiner (U+200D)
+        let hostname_with_zwj = "work\u{200D}station";
+        let result = CrowdStrikeConnector::validate_hostname(hostname_with_zwj);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_hostname_unicode_combining_chars() {
+        // Combining acute accent (U+0301) could alter appearance
+        let hostname_with_combining = "workstation\u{0301}";
+        let result = CrowdStrikeConnector::validate_hostname(hostname_with_combining);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_hostname_unicode_rtl_override() {
+        // Right-to-left override (U+202E) could confuse display
+        let hostname_with_rtl = "work\u{202E}station";
+        let result = CrowdStrikeConnector::validate_hostname(hostname_with_rtl);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_hostname_unicode_mathematical_lookalikes() {
+        // Mathematical italic 'h' (U+210E) looks similar to ASCII 'h'
+        let hostname_with_math = "\u{210E}ostname";
+        let result = CrowdStrikeConnector::validate_hostname(hostname_with_math);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_hostname_fql_injection_attempts() {
+        // FQL special characters should be rejected even though they'd be escaped
+        // These test that the character validation happens
+        let injection_attempts = vec![
+            "host'name",        // Single quote
+            "host\"name",       // Double quote
+            "host\\name",       // Backslash
+            "host*name",        // Asterisk
+            "host?name",        // Question mark
+            "host[0]",          // Square brackets
+            "host+name",        // Plus
+            "host:name",        // Colon
+            "host/name",        // Slash
+            "host(name)",       // Parentheses
+            "hostname'+OR+1=1", // SQL/FQL injection pattern
+        ];
+
+        for hostname in injection_attempts {
+            let result = CrowdStrikeConnector::validate_hostname(hostname);
+            assert!(
+                result.is_err(),
+                "Should reject hostname with FQL chars: {}",
+                hostname
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_hostname_format_invalid_start_end() {
+        // Cannot start with hyphen
+        let result = CrowdStrikeConnector::validate_hostname("-hostname");
+        assert!(result.is_err());
+
+        // Cannot end with hyphen
+        let result = CrowdStrikeConnector::validate_hostname("hostname-");
+        assert!(result.is_err());
+
+        // Cannot start with dot
+        let result = CrowdStrikeConnector::validate_hostname(".hostname");
+        assert!(result.is_err());
+
+        // Cannot end with dot
+        let result = CrowdStrikeConnector::validate_hostname("hostname.");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_hostname_consecutive_dots() {
+        let result = CrowdStrikeConnector::validate_hostname("host..name");
+        assert!(result.is_err());
+
+        let result = CrowdStrikeConnector::validate_hostname("sub...domain.com");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_hostname_all_unicode_categories() {
+        // Test various Unicode categories that could be used for bypasses
+        let unicode_tests = vec![
+            ("\u{00E0}", "Latin small letter a with grave"),
+            ("\u{0101}", "Latin small letter a with macron"),
+            ("\u{0430}", "Cyrillic small letter a"),
+            ("\u{0435}", "Cyrillic small letter ie"),
+            ("\u{043E}", "Cyrillic small letter o"),
+            ("\u{0440}", "Cyrillic small letter er"),
+            ("\u{0441}", "Cyrillic small letter es"),
+            ("\u{0445}", "Cyrillic small letter ha"),
+            ("\u{03B1}", "Greek small letter alpha"),
+            ("\u{03BF}", "Greek small letter omicron"),
+            ("\u{2010}", "Hyphen"),
+            ("\u{2011}", "Non-breaking hyphen"),
+            ("\u{2012}", "Figure dash"),
+            ("\u{2013}", "En dash"),
+            ("\u{2014}", "Em dash"),
+            ("\u{FF0D}", "Fullwidth hyphen-minus"),
+            ("\u{2024}", "One dot leader"),
+            ("\u{2027}", "Hyphenation point"),
+            ("\u{FF0E}", "Fullwidth full stop"),
+        ];
+
+        for (char_str, description) in unicode_tests {
+            let hostname = format!("host{}name", char_str);
+            let result = CrowdStrikeConnector::validate_hostname(&hostname);
+            assert!(
+                result.is_err(),
+                "Should reject hostname containing {} ({})",
+                description,
+                char_str
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_hostname_preserves_valid_after_lowercase() {
+        // Ensure valid characters are preserved after lowercase conversion
+        let result = CrowdStrikeConnector::validate_hostname("ABC123-DEF_GHI.JKL");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "abc123-def_ghi.jkl");
     }
 }

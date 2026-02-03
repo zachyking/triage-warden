@@ -672,3 +672,219 @@ class TestEdgeCases:
 
         result = parse_triage_analysis(text)
         assert result.verdict == "false_positive"
+
+
+# ============================================================================
+# Error Sanitization Tests (Security - Task 6.3)
+# ============================================================================
+
+
+# Load error codes
+ErrorCode = _parser.ErrorCode
+_is_production = _parser._is_production
+_sanitize_error_message = _parser._sanitize_error_message
+
+
+class TestErrorSanitization:
+    """Tests for error message sanitization in production environments."""
+
+    def test_error_code_constants_defined(self):
+        """Test that all error codes are defined."""
+        assert ErrorCode.EMPTY_RESPONSE == "PARSE_EMPTY_RESPONSE"
+        assert ErrorCode.NO_JSON_FOUND == "PARSE_NO_JSON_FOUND"
+        assert ErrorCode.INVALID_JSON == "PARSE_INVALID_JSON"
+        assert ErrorCode.VALIDATION_FAILED == "PARSE_VALIDATION_FAILED"
+        assert ErrorCode.INTERNAL_ERROR == "PARSE_INTERNAL_ERROR"
+
+    def test_parse_error_has_error_code(self):
+        """Test that ParseError includes error_code attribute."""
+        with pytest.raises(ParseError) as exc_info:
+            parse_json_from_response("")
+
+        assert hasattr(exc_info.value, "error_code")
+        assert exc_info.value.error_code == ErrorCode.EMPTY_RESPONSE
+
+    def test_invalid_json_error_has_code(self):
+        """Test that invalid JSON errors have proper error code."""
+        with pytest.raises(ParseError) as exc_info:
+            parse_json_from_response("{invalid json}")
+
+        assert exc_info.value.error_code == ErrorCode.INVALID_JSON
+
+    def test_validation_error_has_code(self):
+        """Test that validation errors have proper error code."""
+        invalid_json = """{
+            "verdict": "invalid_verdict",
+            "confidence": 50,
+            "severity": "medium",
+            "summary": "Test"
+        }"""
+
+        with pytest.raises(ParseError) as exc_info:
+            parse_triage_analysis(invalid_json)
+
+        assert exc_info.value.error_code == ErrorCode.VALIDATION_FAILED
+
+    def test_is_production_false_by_default(self):
+        """Test that _is_production returns False when no env vars set."""
+        import os
+        # Save original values
+        orig_tw = os.environ.pop("TW_ENV", None)
+        orig_node = os.environ.pop("NODE_ENV", None)
+        orig_env = os.environ.pop("ENVIRONMENT", None)
+
+        try:
+            assert _is_production() is False
+        finally:
+            # Restore original values
+            if orig_tw:
+                os.environ["TW_ENV"] = orig_tw
+            if orig_node:
+                os.environ["NODE_ENV"] = orig_node
+            if orig_env:
+                os.environ["ENVIRONMENT"] = orig_env
+
+    def test_is_production_true_with_tw_env(self):
+        """Test that _is_production returns True with TW_ENV=production."""
+        import os
+        orig = os.environ.get("TW_ENV")
+        try:
+            os.environ["TW_ENV"] = "production"
+            assert _is_production() is True
+
+            os.environ["TW_ENV"] = "prod"
+            assert _is_production() is True
+
+            os.environ["TW_ENV"] = "PRODUCTION"  # Case insensitive
+            assert _is_production() is True
+        finally:
+            if orig:
+                os.environ["TW_ENV"] = orig
+            else:
+                os.environ.pop("TW_ENV", None)
+
+    def test_sanitize_error_message_development(self):
+        """Test that detailed messages are shown in development."""
+        import os
+        orig = os.environ.pop("TW_ENV", None)
+        os.environ.pop("NODE_ENV", None)
+        os.environ.pop("ENVIRONMENT", None)
+
+        try:
+            result = _sanitize_error_message(
+                "TEST_CODE",
+                "Detailed error at line 42",
+                "Generic error message",
+            )
+            assert "Detailed error" in result
+            assert "line 42" in result
+            assert "TEST_CODE" in result
+        finally:
+            if orig:
+                os.environ["TW_ENV"] = orig
+
+    def test_sanitize_error_message_production(self):
+        """Test that generic messages are shown in production."""
+        import os
+        orig = os.environ.get("TW_ENV")
+        try:
+            os.environ["TW_ENV"] = "production"
+
+            result = _sanitize_error_message(
+                "TEST_CODE",
+                "Detailed internal error with stack trace",
+                "An error occurred",
+            )
+            assert "Detailed internal error" not in result
+            assert "stack trace" not in result
+            assert "An error occurred" in result
+            assert "TEST_CODE" in result
+        finally:
+            if orig:
+                os.environ["TW_ENV"] = orig
+            else:
+                os.environ.pop("TW_ENV", None)
+
+    def test_parse_error_no_raw_text_in_production(self):
+        """Test that raw_text is not stored in production."""
+        import os
+        orig = os.environ.get("TW_ENV")
+        try:
+            os.environ["TW_ENV"] = "production"
+
+            # Force reload the module to pick up production environment
+            # Note: In real tests, we'd use mock.patch instead
+            raw_text = "sensitive LLM output with internal details"
+            error = ParseError(
+                "Test error",
+                raw_text=raw_text,
+                error_code=ErrorCode.INTERNAL_ERROR,
+            )
+
+            # In production, raw_text should be None to prevent leakage
+            assert error.raw_text is None
+        finally:
+            if orig:
+                os.environ["TW_ENV"] = orig
+            else:
+                os.environ.pop("TW_ENV", None)
+
+    def test_parse_error_raw_text_available_in_development(self):
+        """Test that raw_text is available in development."""
+        import os
+        # Ensure not in production
+        os.environ.pop("TW_ENV", None)
+        os.environ.pop("NODE_ENV", None)
+        os.environ.pop("ENVIRONMENT", None)
+
+        raw_text = "LLM output for debugging"
+        error = ParseError(
+            "Test error",
+            raw_text=raw_text,
+            error_code=ErrorCode.INTERNAL_ERROR,
+        )
+
+        # In development, raw_text should be preserved for debugging
+        assert error.raw_text == raw_text
+
+    def test_error_message_never_contains_stack_trace_format(self):
+        """Test that error messages don't contain stack trace patterns."""
+        # Stack trace patterns that should never appear in error messages
+        stack_trace_patterns = [
+            "Traceback (most recent call last)",
+            "File \"",
+            ".py\", line ",
+            "at 0x",  # Memory addresses
+        ]
+
+        with pytest.raises(ParseError) as exc_info:
+            parse_json_from_response("{invalid}")
+
+        error_str = str(exc_info.value)
+        for pattern in stack_trace_patterns:
+            assert pattern not in error_str, f"Error message contains stack trace pattern: {pattern}"
+
+    def test_error_codes_usable_for_client_handling(self):
+        """Test that error codes can be used for programmatic handling."""
+        error_codes_seen = set()
+
+        # Trigger different error types
+        try:
+            parse_json_from_response("")
+        except ParseError as e:
+            error_codes_seen.add(e.error_code)
+
+        try:
+            parse_json_from_response("{invalid}")
+        except ParseError as e:
+            error_codes_seen.add(e.error_code)
+
+        try:
+            parse_triage_analysis('{"verdict": "bad"}')
+        except ParseError as e:
+            error_codes_seen.add(e.error_code)
+
+        # All error codes should be unique and follow naming convention
+        for code in error_codes_seen:
+            assert code.startswith("PARSE_"), f"Error code {code} doesn't follow PARSE_ convention"
+            assert code.isupper(), f"Error code {code} is not uppercase"

@@ -2,6 +2,7 @@
 //!
 //! This action sends a status update to the original incident reporter.
 
+use crate::email_sanitizer::{sanitize_email, EmailSanitizationError};
 use crate::registry::{
     Action, ActionContext, ActionError, ActionResult, ParameterDef, ParameterType,
 };
@@ -9,7 +10,8 @@ use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
+use tw_core::validation::ValidatedEmail;
 
 /// Status of an incident that can be communicated to the reporter.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -143,13 +145,14 @@ impl Action for NotifyReporterAction {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        // Validate email format (basic check)
-        if !reporter_email.contains('@') {
-            return Err(ActionError::InvalidParameters(format!(
-                "Invalid email address: {}",
-                reporter_email
-            )));
-        }
+        // Validate email format using RFC 5321-compliant validation
+        let validated_email = ValidatedEmail::new(&reporter_email).map_err(|e| {
+            ActionError::InvalidParameters(format!(
+                "Invalid reporter email address '{}': {}",
+                reporter_email, e
+            ))
+        })?;
+        let reporter_email = validated_email.as_str().to_string();
 
         // Generate notification ID
         let notification_id = format!("notif-reporter-{}", uuid::Uuid::new_v4());
@@ -161,6 +164,44 @@ impl Action for NotifyReporterAction {
 
         // Format the notification message
         let formatted_message = Self::format_notification(&status, &message, &incident_id);
+
+        // Generate a subject line for the notification
+        let subject = format!("Incident {} Status Update: {}", incident_id, status);
+
+        // Sanitize email content to prevent header injection attacks
+        let sanitized = sanitize_email(&subject, &formatted_message).map_err(|e| {
+            warn!("Email header injection attempt detected: {}", e);
+            match e {
+                EmailSanitizationError::SubjectInjectionDetected(msg) => {
+                    ActionError::InvalidParameters(format!(
+                        "Invalid content - potential header injection in subject: {}",
+                        msg
+                    ))
+                }
+                EmailSanitizationError::BodyInjectionDetected(msg) => {
+                    ActionError::InvalidParameters(format!(
+                        "Invalid message - potential header injection: {}",
+                        msg
+                    ))
+                }
+                EmailSanitizationError::XHeaderInjectionDetected(msg) => {
+                    ActionError::InvalidParameters(format!(
+                        "Invalid content - X-header injection detected: {}",
+                        msg
+                    ))
+                }
+            }
+        })?;
+
+        if sanitized.was_sanitized {
+            info!(
+                "Email content was sanitized: {:?}",
+                sanitized.sanitization_details
+            );
+        }
+
+        let final_subject = sanitized.subject;
+        let final_body = sanitized.body;
 
         // In a real implementation, this would:
         // 1. Validate the reporter email against known reporters
@@ -180,6 +221,7 @@ impl Action for NotifyReporterAction {
             serde_json::json!(reporter_email),
         );
         output.insert("status".to_string(), serde_json::json!(status));
+        output.insert("subject".to_string(), serde_json::json!(final_subject));
         output.insert("success".to_string(), serde_json::json!(true));
         output.insert(
             "sent_at".to_string(),
@@ -187,8 +229,18 @@ impl Action for NotifyReporterAction {
         );
         output.insert(
             "formatted_message".to_string(),
-            serde_json::json!(formatted_message),
+            serde_json::json!(final_body),
         );
+        output.insert(
+            "content_sanitized".to_string(),
+            serde_json::json!(sanitized.was_sanitized),
+        );
+        if sanitized.was_sanitized {
+            output.insert(
+                "sanitization_details".to_string(),
+                serde_json::json!(sanitized.sanitization_details),
+            );
+        }
 
         info!(
             "Reporter notification {} sent successfully to {}",
@@ -367,5 +419,311 @@ mod tests {
 
         let deserialized: IncidentStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, IncidentStatus::Investigating);
+    }
+
+    // ==================== Header Injection Prevention Tests ====================
+
+    #[tokio::test]
+    async fn test_message_x_header_injection_blocked() {
+        let action = NotifyReporterAction::new();
+
+        // Attempt X-header injection in message
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("incident_id", serde_json::json!("INC-2024-007"))
+            .with_param("reporter_email", serde_json::json!("user@company.com"))
+            .with_param("status", serde_json::json!("investigating"))
+            .with_param(
+                "message",
+                serde_json::json!("X-Spam-Status: No\nMalicious message content"),
+            );
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+        if let Err(ActionError::InvalidParameters(msg)) = result {
+            assert!(msg.contains("X-header injection"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_message_x_priority_injection_blocked() {
+        let action = NotifyReporterAction::new();
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("incident_id", serde_json::json!("INC-2024-008"))
+            .with_param("reporter_email", serde_json::json!("user@company.com"))
+            .with_param("status", serde_json::json!("resolved"))
+            .with_param(
+                "message",
+                serde_json::json!("X-Priority: 1\nUrgent fake message"),
+            );
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_message_from_header_injection_blocked() {
+        let action = NotifyReporterAction::new();
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("incident_id", serde_json::json!("INC-2024-009"))
+            .with_param("reporter_email", serde_json::json!("user@company.com"))
+            .with_param("status", serde_json::json!("escalated"))
+            .with_param(
+                "message",
+                serde_json::json!("From: spoofed@attacker.com\nFake escalation"),
+            );
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_message_bcc_header_injection_blocked() {
+        let action = NotifyReporterAction::new();
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("incident_id", serde_json::json!("INC-2024-010"))
+            .with_param("reporter_email", serde_json::json!("user@company.com"))
+            .with_param("status", serde_json::json!("closed"))
+            .with_param(
+                "message",
+                serde_json::json!("Bcc: hidden@attacker.com\nClosed message"),
+            );
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_message_content_type_injection_blocked() {
+        let action = NotifyReporterAction::new();
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("incident_id", serde_json::json!("INC-2024-011"))
+            .with_param("reporter_email", serde_json::json!("user@company.com"))
+            .with_param("status", serde_json::json!("investigating"))
+            .with_param(
+                "message",
+                serde_json::json!("Content-Type: text/html\n<script>alert('xss')</script>"),
+            );
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_message_crlf_boundary_injection_blocked() {
+        let action = NotifyReporterAction::new();
+
+        // Attempt to inject headers after CRLF boundary
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("incident_id", serde_json::json!("INC-2024-012"))
+            .with_param("reporter_email", serde_json::json!("user@company.com"))
+            .with_param("status", serde_json::json!("investigating"))
+            .with_param(
+                "message",
+                serde_json::json!("Normal text\r\n\r\nX-Mailer: EvilBot\r\nMore text"),
+            );
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_clean_message_not_sanitized() {
+        let action = NotifyReporterAction::new();
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("incident_id", serde_json::json!("INC-2024-013"))
+            .with_param("reporter_email", serde_json::json!("user@company.com"))
+            .with_param("status", serde_json::json!("resolved"))
+            .with_param(
+                "message",
+                serde_json::json!("This is a normal status update message."),
+            );
+
+        let result = action.execute(context).await.unwrap();
+        assert!(result.success);
+        assert!(!result.output["content_sanitized"].as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_status_with_special_chars_safe() {
+        let action = NotifyReporterAction::new();
+
+        // Status value should not cause injection
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("incident_id", serde_json::json!("INC-2024-014"))
+            .with_param("reporter_email", serde_json::json!("user@company.com"))
+            .with_param("status", serde_json::json!("investigating"))
+            .with_param("message", serde_json::json!("Normal investigation update."));
+
+        let result = action.execute(context).await.unwrap();
+        assert!(result.success);
+        assert!(result.output.contains_key("subject"));
+    }
+
+    #[tokio::test]
+    async fn test_incident_id_with_special_chars_safe() {
+        let action = NotifyReporterAction::new();
+
+        // Even with unusual incident ID, the output should be safe
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("incident_id", serde_json::json!("INC-2024-015"))
+            .with_param("reporter_email", serde_json::json!("user@company.com"))
+            .with_param("status", serde_json::json!("closed"))
+            .with_param("message", serde_json::json!("Incident has been closed."));
+
+        let result = action.execute(context).await.unwrap();
+        assert!(result.success);
+
+        // Verify the subject was generated correctly
+        let subject = result.output["subject"].as_str().unwrap();
+        assert!(subject.contains("INC-2024-015"));
+        assert!(subject.contains("closed"));
+    }
+
+    #[tokio::test]
+    async fn test_multiline_message_with_legitimate_content() {
+        let action = NotifyReporterAction::new();
+
+        // Legitimate multiline content should work
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("incident_id", serde_json::json!("INC-2024-016"))
+            .with_param("reporter_email", serde_json::json!("user@company.com"))
+            .with_param("status", serde_json::json!("investigating"))
+            .with_param(
+                "message",
+                serde_json::json!("Investigation update:\n\n- Analyzed email headers\n- Checked sender reputation\n- Scanning attachments"),
+            );
+
+        let result = action.execute(context).await.unwrap();
+        assert!(result.success);
+    }
+
+    // ==================== Email Address Validation Tests ====================
+
+    #[tokio::test]
+    async fn test_invalid_email_empty_local_part() {
+        let action = NotifyReporterAction::new();
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("incident_id", serde_json::json!("INC-2024-017"))
+            .with_param("reporter_email", serde_json::json!("@company.com"))
+            .with_param("status", serde_json::json!("received"))
+            .with_param("message", serde_json::json!("Test message"));
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_invalid_email_empty_domain() {
+        let action = NotifyReporterAction::new();
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("incident_id", serde_json::json!("INC-2024-018"))
+            .with_param("reporter_email", serde_json::json!("user@"))
+            .with_param("status", serde_json::json!("received"))
+            .with_param("message", serde_json::json!("Test message"));
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_invalid_email_no_tld() {
+        let action = NotifyReporterAction::new();
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("incident_id", serde_json::json!("INC-2024-019"))
+            .with_param("reporter_email", serde_json::json!("user@localhost"))
+            .with_param("status", serde_json::json!("received"))
+            .with_param("message", serde_json::json!("Test message"));
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_invalid_email_multiple_at_symbols() {
+        let action = NotifyReporterAction::new();
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("incident_id", serde_json::json!("INC-2024-020"))
+            .with_param(
+                "reporter_email",
+                serde_json::json!("user@domain@company.com"),
+            )
+            .with_param("status", serde_json::json!("received"))
+            .with_param("message", serde_json::json!("Test message"));
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_invalid_email_space_in_local_part() {
+        let action = NotifyReporterAction::new();
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("incident_id", serde_json::json!("INC-2024-021"))
+            .with_param("reporter_email", serde_json::json!("user name@company.com"))
+            .with_param("status", serde_json::json!("received"))
+            .with_param("message", serde_json::json!("Test message"));
+
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::InvalidParameters(_))));
+    }
+
+    #[tokio::test]
+    async fn test_valid_email_with_plus_tag() {
+        let action = NotifyReporterAction::new();
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("incident_id", serde_json::json!("INC-2024-022"))
+            .with_param(
+                "reporter_email",
+                serde_json::json!("user+reports@company.com"),
+            )
+            .with_param("status", serde_json::json!("received"))
+            .with_param("message", serde_json::json!("Test message"));
+
+        let result = action.execute(context).await.unwrap();
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_valid_email_with_subdomain() {
+        let action = NotifyReporterAction::new();
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("incident_id", serde_json::json!("INC-2024-023"))
+            .with_param("reporter_email", serde_json::json!("user@mail.company.com"))
+            .with_param("status", serde_json::json!("received"))
+            .with_param("message", serde_json::json!("Test message"));
+
+        let result = action.execute(context).await.unwrap();
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_email_normalized_to_lowercase() {
+        let action = NotifyReporterAction::new();
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("incident_id", serde_json::json!("INC-2024-024"))
+            .with_param("reporter_email", serde_json::json!("USER@COMPANY.COM"))
+            .with_param("status", serde_json::json!("received"))
+            .with_param("message", serde_json::json!("Test message"));
+
+        let result = action.execute(context).await.unwrap();
+        assert!(result.success);
+        // Email should be normalized to lowercase
+        assert_eq!(
+            result.output["reporter_email"].as_str().unwrap(),
+            "user@company.com"
+        );
     }
 }

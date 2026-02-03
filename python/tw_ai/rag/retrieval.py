@@ -2,6 +2,9 @@
 
 Provides high-level query interface with collection-specific methods,
 metadata filtering, and score-based ranking.
+
+Security: All queries are validated before execution to prevent injection
+attacks against ChromaDB. See tw_ai.rag.validation for details.
 """
 
 from __future__ import annotations
@@ -12,6 +15,11 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from tw_ai.rag.models import QueryResponse, QueryResult
+from tw_ai.rag.validation import (
+    RAGQueryValidator,
+    RAGValidationError,
+    get_default_validator,
+)
 
 if TYPE_CHECKING:
     from tw_ai.rag.config import RAGConfig
@@ -25,23 +33,66 @@ class RetrievalService:
 
     Provides specialized methods for each collection type with
     appropriate metadata filtering and result formatting.
+
+    Security: All queries are validated before execution to prevent
+    injection attacks. Collection names are validated against a whitelist,
+    queries are length-limited, and metadata filters are validated
+    against a schema.
     """
 
     def __init__(
         self,
         vector_store: VectorStore,
         config: RAGConfig | None = None,
+        validator: RAGQueryValidator | None = None,
     ) -> None:
         """Initialize retrieval service.
 
         Args:
             vector_store: Vector store for document queries.
             config: RAG configuration.
+            validator: Query validator for security checks. If None, uses default.
         """
         from tw_ai.rag.config import RAGConfig
 
         self._vector_store = vector_store
         self._config = config or RAGConfig()
+        self._validator = validator or get_default_validator()
+
+        # Ensure config collections are registered with validator
+        self._register_config_collections()
+
+    def _register_config_collections(self) -> None:
+        """Register collection names from config with the validator.
+
+        This ensures that custom collection names defined in config
+        are allowed by the validator's whitelist.
+        """
+        from tw_ai.rag.validation import DEFAULT_COLLECTION_SCHEMAS, CollectionSchema
+
+        # Map config collection names to their schema templates
+        collection_mappings = {
+            self._config.incidents_collection: "triage_incidents",
+            self._config.playbooks_collection: "security_playbooks",
+            self._config.mitre_collection: "mitre_attack",
+            self._config.threat_intel_collection: "threat_intelligence",
+        }
+
+        for config_name, template_name in collection_mappings.items():
+            # Skip if already registered or same as template
+            if config_name in self._validator.allowed_collections:
+                continue
+
+            # Get template schema if available
+            template = DEFAULT_COLLECTION_SCHEMAS.get(template_name)
+            if template:
+                # Create new schema with config collection name
+                new_schema = CollectionSchema(
+                    name=config_name,
+                    allowed_filter_keys=template.allowed_filter_keys,
+                    key_types=template.key_types,
+                )
+                self._validator.add_collection_schema(new_schema)
 
     def _distance_to_similarity(self, distance: float) -> float:
         """Convert ChromaDB distance to similarity score.
@@ -69,6 +120,9 @@ class RetrievalService:
     ) -> QueryResponse:
         """Execute a general search query.
 
+        All inputs are validated before query execution to prevent
+        injection attacks against the vector store.
+
         Args:
             query: Natural language query text.
             collection: Collection to search.
@@ -78,19 +132,31 @@ class RetrievalService:
 
         Returns:
             Query response with matching documents.
+
+        Raises:
+            RAGValidationError: If any input validation fails.
         """
         start_time = time.perf_counter()
 
-        top_k = top_k or self._config.default_top_k
+        # Validate and sanitize all inputs before query execution
+        validated_query, validated_collection, validated_top_k, validated_filters = (
+            self._validator.validate_search_request(
+                query=query,
+                collection=collection,
+                top_k=top_k or self._config.default_top_k,
+                filters=filters,
+            )
+        )
+
         min_similarity = min_similarity or self._config.min_similarity_threshold
 
         try:
-            # Execute query
+            # Execute query with validated inputs
             raw_results = self._vector_store.query(
-                collection_name=collection,
-                query_text=query,
-                n_results=top_k,
-                where=filters,
+                collection_name=validated_collection,
+                query_text=validated_query,
+                n_results=validated_top_k,
+                where=validated_filters,
             )
 
             # Process results
@@ -126,25 +192,28 @@ class RetrievalService:
 
             logger.debug(
                 "search_executed",
-                collection=collection,
-                query_length=len(query),
+                collection=validated_collection,
+                query_length=len(validated_query),
                 total_results=total_results,
                 filtered_results=len(results),
                 execution_time_ms=execution_time_ms,
             )
 
             return QueryResponse(
-                query=query,
-                collection=collection,
+                query=validated_query,
+                collection=validated_collection,
                 results=results,
                 total_results=total_results,
                 execution_time_ms=execution_time_ms,
             )
+        except RAGValidationError:
+            # Re-raise validation errors without wrapping
+            raise
         except Exception as e:
             logger.error(
                 "search_failed",
-                collection=collection,
-                query_length=len(query),
+                collection=validated_collection,
+                query_length=len(validated_query),
                 error=str(e),
             )
             raise

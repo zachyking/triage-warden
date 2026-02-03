@@ -302,9 +302,29 @@ class _MockTools:
 sys.modules["tw_ai.agents.tools"] = _MockTools
 
 
-# Now import the react module
+# Mock sanitization module - load it directly to avoid circular import via tw_ai.__init__
 import importlib.util
 
+_base_path_sanitization = Path(__file__).parent.parent / "tw_ai"
+
+
+def _load_module_early(name: str, file_path: Path):
+    """Load a module directly from file path."""
+    spec = importlib.util.spec_from_file_location(name, file_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+# Load sanitization module first (it has no dependencies on react.py)
+_sanitization = _load_module_early("tw_ai.sanitization", _base_path_sanitization / "sanitization.py")
+
+# Mock the tw_ai package to prevent circular imports
+sys.modules["tw_ai"] = MagicMock()
+
+
+# Now import the react module
 _base_path = Path(__file__).parent.parent / "tw_ai" / "agents"
 
 
