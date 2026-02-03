@@ -295,6 +295,19 @@ impl EventBus {
     pub async fn subscriber_count(&self) -> usize {
         self.subscribers.read().await.len() + self.broadcast_tx.receiver_count()
     }
+
+    /// Publishes an event with fallback logging and metrics on failure.
+    ///
+    /// This method is intended for fire-and-forget scenarios where event
+    /// delivery failures should be logged but not propagate as errors.
+    /// It logs any failures at ERROR level and increments a failure counter.
+    #[instrument(skip(self), fields(event_type = ?std::mem::discriminant(&event)))]
+    pub async fn publish_with_fallback(&self, event: TriageEvent) {
+        if let Err(e) = self.publish(event).await {
+            tracing::error!(error = %e, "Event publish failed");
+            metrics::counter!("event_bus_publish_failures").increment(1);
+        }
+    }
 }
 
 impl TriageEvent {

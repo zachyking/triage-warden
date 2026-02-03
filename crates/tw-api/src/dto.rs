@@ -118,6 +118,8 @@ pub struct ListIncidentsQuery {
     pub since: Option<DateTime<Utc>>,
     /// Filter by created before this timestamp.
     pub until: Option<DateTime<Utc>>,
+    /// Full-text search query (searches alert_data, ticket_id, tags).
+    pub q: Option<String>,
     /// Page number (1-indexed).
     #[validate(range(min = 1))]
     pub page: Option<u32>,

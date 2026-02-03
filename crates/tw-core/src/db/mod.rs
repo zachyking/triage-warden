@@ -13,6 +13,7 @@ pub mod api_key_repo;
 pub mod audit_repo;
 pub mod connector_repo;
 pub mod incident_repo;
+pub mod metrics_repo;
 pub mod notification_repo;
 pub mod playbook_repo;
 pub mod policy_repo;
@@ -33,6 +34,9 @@ pub use api_key_repo::{ApiKeyFilter, ApiKeyRepository};
 pub use audit_repo::AuditRepository;
 pub use connector_repo::{ConnectorRepository, ConnectorUpdate};
 pub use incident_repo::{IncidentFilter, IncidentRepository, IncidentUpdate, Pagination};
+pub use metrics_repo::{
+    ActionMetricsData, IncidentMetricsData, MetricsRepository, PerformanceMetricsData,
+};
 pub use notification_repo::NotificationChannelRepository;
 pub use playbook_repo::{PlaybookFilter, PlaybookRepository, PlaybookUpdate};
 pub use policy_repo::{PolicyRepository, PolicyUpdate};
@@ -44,6 +48,7 @@ pub use api_key_repo::create_api_key_repository;
 pub use audit_repo::create_audit_repository;
 pub use connector_repo::create_connector_repository;
 pub use incident_repo::create_incident_repository;
+pub use metrics_repo::create_metrics_repository;
 pub use notification_repo::create_notification_repository;
 pub use playbook_repo::create_playbook_repository;
 pub use policy_repo::create_policy_repository;

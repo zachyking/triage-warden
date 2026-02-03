@@ -57,14 +57,14 @@ async fn receive_alert(
     let incident = tw_core::Incident::from_alert(alert.clone());
     let incident_id = incident.id;
 
-    // Publish event (async processing)
-    let _ = state
+    // Publish events (async processing) with fallback logging
+    state
         .event_bus
-        .publish(tw_core::TriageEvent::AlertReceived(alert))
+        .publish_with_fallback(tw_core::TriageEvent::AlertReceived(alert))
         .await;
-    let _ = state
+    state
         .event_bus
-        .publish(tw_core::TriageEvent::IncidentCreated {
+        .publish_with_fallback(tw_core::TriageEvent::IncidentCreated {
             incident_id,
             alert_id: alert_id.clone(),
         })
@@ -127,14 +127,14 @@ async fn receive_alert_from_source(
     let incident = tw_core::Incident::from_alert(alert.clone());
     let incident_id = incident.id;
 
-    // Publish event (async processing)
-    let _ = state
+    // Publish events (async processing) with fallback logging
+    state
         .event_bus
-        .publish(tw_core::TriageEvent::AlertReceived(alert))
+        .publish_with_fallback(tw_core::TriageEvent::AlertReceived(alert))
         .await;
-    let _ = state
+    state
         .event_bus
-        .publish(tw_core::TriageEvent::IncidentCreated {
+        .publish_with_fallback(tw_core::TriageEvent::IncidentCreated {
             incident_id,
             alert_id: alert_id.clone(),
         })

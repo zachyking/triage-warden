@@ -21,6 +21,7 @@ async-trait.workspace = true
 futures.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+metrics.workspace = true
 
 tw-policy = { path = "../tw-policy" }
 tw-connectors = { path = "../tw-connectors" }

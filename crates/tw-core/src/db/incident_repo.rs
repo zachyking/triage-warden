@@ -21,6 +21,8 @@ pub struct IncidentFilter {
     pub tags: Option<Vec<String>>,
     /// Filter by ticket ID existence.
     pub has_ticket: Option<bool>,
+    /// Full-text search query (searches alert_data, ticket_id, tags).
+    pub query: Option<String>,
 }
 
 /// Pagination options.
@@ -173,6 +175,8 @@ impl IncidentRepository for SqliteIncidentRepository {
         filter: &IncidentFilter,
         pagination: &Pagination,
     ) -> Result<Vec<Incident>, DbError> {
+        use super::make_like_pattern;
+
         // Build dynamic query with filters
         let mut query = String::from(
             "SELECT id, source, severity, status, alert_data, enrichments, analysis, proposed_actions, ticket_id, tags, metadata, created_at, updated_at FROM incidents WHERE 1=1",
@@ -192,6 +196,12 @@ impl IncidentRepository for SqliteIncidentRepository {
 
         if filter.until.is_some() {
             query.push_str(" AND created_at <= ?");
+        }
+
+        if filter.query.is_some() {
+            query.push_str(
+                " AND (alert_data LIKE ? ESCAPE '\\' OR ticket_id LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\')",
+            );
         }
 
         query.push_str(" ORDER BY created_at DESC LIMIT ? OFFSET ?");
@@ -218,6 +228,14 @@ impl IncidentRepository for SqliteIncidentRepository {
             query_builder = query_builder.bind(until.to_rfc3339());
         }
 
+        if let Some(search) = &filter.query {
+            let pattern = make_like_pattern(search);
+            query_builder = query_builder
+                .bind(pattern.clone())
+                .bind(pattern.clone())
+                .bind(pattern);
+        }
+
         query_builder = query_builder
             .bind(pagination.limit() as i64)
             .bind(pagination.offset() as i64);
@@ -228,6 +246,8 @@ impl IncidentRepository for SqliteIncidentRepository {
     }
 
     async fn count(&self, filter: &IncidentFilter) -> Result<u64, DbError> {
+        use super::make_like_pattern;
+
         let mut query = String::from("SELECT COUNT(*) as count FROM incidents WHERE 1=1");
 
         if filter.status.is_some() {
@@ -244,6 +264,12 @@ impl IncidentRepository for SqliteIncidentRepository {
 
         if filter.until.is_some() {
             query.push_str(" AND created_at <= ?");
+        }
+
+        if filter.query.is_some() {
+            query.push_str(
+                " AND (alert_data LIKE ? ESCAPE '\\' OR ticket_id LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\')",
+            );
         }
 
         let mut query_builder = sqlx::query_scalar::<_, i64>(&query);
@@ -266,6 +292,14 @@ impl IncidentRepository for SqliteIncidentRepository {
 
         if let Some(until) = &filter.until {
             query_builder = query_builder.bind(until.to_rfc3339());
+        }
+
+        if let Some(search) = &filter.query {
+            let pattern = make_like_pattern(search);
+            query_builder = query_builder
+                .bind(pattern.clone())
+                .bind(pattern.clone())
+                .bind(pattern);
         }
 
         let count: i64 = query_builder.fetch_one(&self.pool).await?;
@@ -448,6 +482,10 @@ impl IncidentRepository for PgIncidentRepository {
         filter: &IncidentFilter,
         pagination: &Pagination,
     ) -> Result<Vec<Incident>, DbError> {
+        use super::make_like_pattern;
+
+        let search_pattern = filter.query.as_ref().map(|q| make_like_pattern(q));
+
         let rows: Vec<PgIncidentRow> = sqlx::query_as(
             r#"
             SELECT id, source, severity::text, status::text, alert_data, enrichments, analysis, proposed_actions, ticket_id, tags, metadata, created_at, updated_at
@@ -456,8 +494,9 @@ impl IncidentRepository for PgIncidentRepository {
               AND ($2::text[] IS NULL OR severity::text = ANY($2))
               AND ($3::timestamptz IS NULL OR created_at >= $3)
               AND ($4::timestamptz IS NULL OR created_at <= $4)
+              AND ($5::text IS NULL OR alert_data::text ILIKE $5 OR ticket_id ILIKE $5 OR tags::text ILIKE $5)
             ORDER BY created_at DESC
-            LIMIT $5 OFFSET $6
+            LIMIT $6 OFFSET $7
             "#,
         )
         .bind(filter.status.as_ref().map(|s| {
@@ -472,6 +511,7 @@ impl IncidentRepository for PgIncidentRepository {
         }))
         .bind(filter.since)
         .bind(filter.until)
+        .bind(&search_pattern)
         .bind(pagination.limit() as i64)
         .bind(pagination.offset() as i64)
         .fetch_all(&self.pool)
@@ -481,6 +521,10 @@ impl IncidentRepository for PgIncidentRepository {
     }
 
     async fn count(&self, filter: &IncidentFilter) -> Result<u64, DbError> {
+        use super::make_like_pattern;
+
+        let search_pattern = filter.query.as_ref().map(|q| make_like_pattern(q));
+
         let count: i64 = sqlx::query_scalar(
             r#"
             SELECT COUNT(*)
@@ -489,6 +533,7 @@ impl IncidentRepository for PgIncidentRepository {
               AND ($2::text[] IS NULL OR severity::text = ANY($2))
               AND ($3::timestamptz IS NULL OR created_at >= $3)
               AND ($4::timestamptz IS NULL OR created_at <= $4)
+              AND ($5::text IS NULL OR alert_data::text ILIKE $5 OR ticket_id ILIKE $5 OR tags::text ILIKE $5)
             "#,
         )
         .bind(filter.status.as_ref().map(|s| {
@@ -503,6 +548,7 @@ impl IncidentRepository for PgIncidentRepository {
         }))
         .bind(filter.since)
         .bind(filter.until)
+        .bind(&search_pattern)
         .fetch_one(&self.pool)
         .await?;
 

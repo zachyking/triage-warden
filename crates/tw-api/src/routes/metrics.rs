@@ -8,7 +8,6 @@ use axum::{
     Json, Router,
 };
 use metrics::{counter, describe_counter, describe_histogram, histogram};
-use std::collections::HashMap;
 
 use crate::dto::{ActionMetrics, IncidentMetrics, MetricsResponse, PerformanceMetrics};
 use crate::error::ApiError;
@@ -64,48 +63,89 @@ pub async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoRespo
     ),
     tag = "Metrics"
 )]
-async fn json_metrics(State(_state): State<AppState>) -> Result<Json<MetricsResponse>, ApiError> {
-    // TODO: Query actual metrics from database
+async fn json_metrics(State(state): State<AppState>) -> Result<Json<MetricsResponse>, ApiError> {
+    use tw_core::db::create_metrics_repository;
 
-    let by_status: HashMap<String, u64> = [
-        ("new".to_string(), 0),
-        ("enriching".to_string(), 0),
-        ("analyzing".to_string(), 0),
-        ("pending_review".to_string(), 0),
-        ("pending_approval".to_string(), 0),
-        ("resolved".to_string(), 0),
-        ("false_positive".to_string(), 0),
-    ]
-    .into_iter()
-    .collect();
+    let metrics_repo = create_metrics_repository(&state.db);
 
-    let by_severity: HashMap<String, u64> = [
-        ("critical".to_string(), 0),
-        ("high".to_string(), 0),
-        ("medium".to_string(), 0),
-        ("low".to_string(), 0),
-        ("info".to_string(), 0),
-    ]
-    .into_iter()
-    .collect();
+    // Run all metrics queries in parallel for efficiency
+    let (incident_result, action_result, perf_result) = tokio::join!(
+        metrics_repo.get_incident_metrics(),
+        metrics_repo.get_action_metrics(),
+        metrics_repo.get_performance_metrics(),
+    );
+
+    let incident_metrics = incident_result.map_err(|e| {
+        tracing::error!(error = %e, "Failed to fetch incident metrics");
+        ApiError::Internal("Failed to fetch incident metrics".into())
+    })?;
+
+    let action_metrics = action_result.map_err(|e| {
+        tracing::error!(error = %e, "Failed to fetch action metrics");
+        ApiError::Internal("Failed to fetch action metrics".into())
+    })?;
+
+    let perf_metrics = perf_result.map_err(|e| {
+        tracing::error!(error = %e, "Failed to fetch performance metrics");
+        ApiError::Internal("Failed to fetch performance metrics".into())
+    })?;
+
+    // Calculate success rate
+    let success_rate = if action_metrics.total_executed > 0 {
+        (action_metrics.success_count as f64 / action_metrics.total_executed as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    // Calculate auto-resolution rate
+    let auto_resolution_rate = if perf_metrics.total_resolved_count > 0 {
+        Some(
+            (perf_metrics.auto_resolved_count as f64 / perf_metrics.total_resolved_count as f64)
+                * 100.0,
+        )
+    } else {
+        None
+    };
+
+    // Ensure all statuses and severities have entries (even if zero)
+    let mut by_status = incident_metrics.by_status;
+    for status in [
+        "new",
+        "enriching",
+        "analyzing",
+        "pending_review",
+        "pending_approval",
+        "executing",
+        "resolved",
+        "false_positive",
+        "escalated",
+        "closed",
+    ] {
+        by_status.entry(status.to_string()).or_insert(0);
+    }
+
+    let mut by_severity = incident_metrics.by_severity;
+    for severity in ["info", "low", "medium", "high", "critical"] {
+        by_severity.entry(severity.to_string()).or_insert(0);
+    }
 
     Ok(Json(MetricsResponse {
         incidents: IncidentMetrics {
-            total: 0,
+            total: incident_metrics.total,
             by_status,
             by_severity,
-            created_last_hour: 0,
-            resolved_last_hour: 0,
+            created_last_hour: incident_metrics.created_last_hour,
+            resolved_last_hour: incident_metrics.resolved_last_hour,
         },
         actions: ActionMetrics {
-            total_executed: 0,
-            success_rate: 0.0,
-            pending_approvals: 0,
+            total_executed: action_metrics.total_executed,
+            success_rate,
+            pending_approvals: action_metrics.pending_approvals,
         },
         performance: PerformanceMetrics {
-            mean_time_to_triage_seconds: None,
-            mean_time_to_respond_seconds: None,
-            auto_resolution_rate: None,
+            mean_time_to_triage_seconds: perf_metrics.mean_time_to_triage_seconds,
+            mean_time_to_respond_seconds: perf_metrics.mean_time_to_respond_seconds,
+            auto_resolution_rate,
         },
     }))
 }

@@ -77,6 +77,7 @@ async fn list_incidents(
         until: query.until,
         tags: None,
         has_ticket: None,
+        query: query.q,
     };
 
     let pagination = Pagination {
@@ -273,10 +274,10 @@ async fn execute_action(
         executed_at: Utc::now(),
     };
 
-    // Publish event
-    let _ = state
+    // Publish event with fallback logging
+    state
         .event_bus
-        .publish(tw_core::TriageEvent::ActionsProposed {
+        .publish_with_fallback(tw_core::TriageEvent::ActionsProposed {
             incident_id: id,
             actions: vec![ProposedAction::new(
                 action_type,
@@ -366,20 +367,20 @@ async fn approve_action(
     // Save to database
     incident_repo.save(&incident).await?;
 
-    // Publish approval event
+    // Publish approval event with fallback logging
     if request.approved {
-        let _ = state
+        state
             .event_bus
-            .publish(tw_core::TriageEvent::ActionApproved {
+            .publish_with_fallback(tw_core::TriageEvent::ActionApproved {
                 incident_id,
                 action_id: request.action_id,
                 approved_by: user.username.clone(),
             })
             .await;
     } else {
-        let _ = state
+        state
             .event_bus
-            .publish(tw_core::TriageEvent::ActionDenied {
+            .publish_with_fallback(tw_core::TriageEvent::ActionDenied {
                 incident_id,
                 action_id: request.action_id,
                 denied_by: user.username.clone(),
@@ -472,10 +473,10 @@ async fn dismiss_incident(
     );
     audit_repo.log(incident_id, &audit_entry).await?;
 
-    // Publish status change event
-    let _ = state
+    // Publish status change event with fallback logging
+    state
         .event_bus
-        .publish(tw_core::TriageEvent::StatusChanged {
+        .publish_with_fallback(tw_core::TriageEvent::StatusChanged {
             incident_id,
             old_status: incident.status.clone(),
             new_status: IncidentStatus::Dismissed,
@@ -554,10 +555,10 @@ async fn resolve_incident(
     );
     audit_repo.log(incident_id, &audit_entry).await?;
 
-    // Publish status change event
-    let _ = state
+    // Publish status change event with fallback logging
+    state
         .event_bus
-        .publish(tw_core::TriageEvent::StatusChanged {
+        .publish_with_fallback(tw_core::TriageEvent::StatusChanged {
             incident_id,
             old_status,
             new_status: IncidentStatus::Resolved,
@@ -629,16 +630,15 @@ async fn enrich_incident(
     );
     audit_repo.log(incident_id, &audit_entry).await?;
 
-    // Publish enrichment requested event
-    let _ = state
+    // Publish events with fallback logging
+    state
         .event_bus
-        .publish(tw_core::TriageEvent::EnrichmentRequested { incident_id })
+        .publish_with_fallback(tw_core::TriageEvent::EnrichmentRequested { incident_id })
         .await;
 
-    // Also publish status change event
-    let _ = state
+    state
         .event_bus
-        .publish(tw_core::TriageEvent::StatusChanged {
+        .publish_with_fallback(tw_core::TriageEvent::StatusChanged {
             incident_id,
             old_status,
             new_status: IncidentStatus::Enriching,
