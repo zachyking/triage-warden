@@ -68,10 +68,14 @@
 
 mod error;
 mod mock;
+#[cfg(feature = "database")]
+mod postgres;
 mod types;
 
 pub use error::LeaderElectionError;
 pub use mock::MockLeaderElector;
+#[cfg(feature = "database")]
+pub use postgres::PostgresLeaderElector;
 pub use types::{default_instance_id, LeaderElectorConfig, LeaderInfo, LeaderLease};
 
 use async_trait::async_trait;

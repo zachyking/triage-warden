@@ -76,14 +76,19 @@
 //! # Implementations
 //!
 //! - [`MockMessageQueue`]: In-memory implementation for testing
-//! - Future: `RedisMessageQueue`, `RabbitMQMessageQueue`, `KafkaMessageQueue`
+//! - [`RedisMessageQueue`]: Redis Streams implementation (requires `redis-streams` feature)
+//! - Future: `RabbitMQMessageQueue`, `KafkaMessageQueue`
 
 pub mod error;
 pub mod mock;
+#[cfg(feature = "redis-streams")]
+pub mod redis_streams;
 pub mod types;
 
 pub use error::{MessageQueueError, MessageQueueResult};
 pub use mock::MockMessageQueue;
+#[cfg(feature = "redis-streams")]
+pub use redis_streams::{RedisMessageQueue, RedisMessageQueueConfig};
 pub use types::{Message, MessageId, QueueHealth, SubscribeOptions, Subscription};
 
 use async_trait::async_trait;

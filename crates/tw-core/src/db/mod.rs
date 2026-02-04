@@ -12,6 +12,7 @@ mod schema;
 pub mod api_key_repo;
 pub mod audit_repo;
 pub mod connector_repo;
+pub mod feature_flag_repo;
 pub mod incident_repo;
 pub mod metrics_repo;
 pub mod notification_repo;
@@ -54,5 +55,7 @@ pub use playbook_repo::create_playbook_repository;
 pub use policy_repo::create_policy_repository;
 pub use settings_repo::create_settings_repository;
 pub use user_repo::create_user_repository;
+
+pub use feature_flag_repo::create_feature_flag_store;
 
 pub use seed::ensure_admin_user;

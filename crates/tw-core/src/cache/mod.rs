@@ -29,10 +29,14 @@
 
 mod error;
 mod mock;
+#[cfg(feature = "redis-cache")]
+pub mod redis;
 mod types;
 
 pub use error::{CacheError, CacheResult};
 pub use mock::MockCache;
+#[cfg(feature = "redis-cache")]
+pub use redis::{RedisCache, RedisCacheConfig};
 pub use types::{CacheEntry, CacheStats};
 
 use async_trait::async_trait;

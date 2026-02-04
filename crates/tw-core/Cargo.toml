@@ -9,6 +9,9 @@ description = "Core orchestrator and data models for Triage Warden"
 [features]
 default = []
 database = ["sqlx"]
+redis-cache = ["dep:redis", "dep:deadpool-redis"]  # Redis cache support
+redis-streams = ["dep:redis", "dep:deadpool-redis"]  # Redis Streams message queue support
+redis-full = ["redis-cache", "redis-streams"]  # Enable all Redis features
 mx-validation = []  # Optional MX record validation for email addresses
 
 [dependencies]
@@ -46,6 +49,10 @@ zeroize = { version = "1.8", features = ["derive"] }
 # Leader election
 hostname = "0.4"
 humantime-serde = "1.1"
+
+# Redis (optional)
+redis = { workspace = true, optional = true }
+deadpool-redis = { workspace = true, optional = true }
 
 [dev-dependencies]
 mockall.workspace = true
