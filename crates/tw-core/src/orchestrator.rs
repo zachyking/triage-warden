@@ -48,7 +48,8 @@ pub enum OrchestratorError {
 }
 
 /// Operation mode for the orchestrator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum OperationMode {
     /// AI observes and suggests only - no automated actions.
     Assisted,

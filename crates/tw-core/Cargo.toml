@@ -43,6 +43,10 @@ aes-gcm = "0.10"
 base64 = "0.22"
 zeroize = { version = "1.8", features = ["derive"] }
 
+# Leader election
+hostname = "0.4"
+humantime-serde = "1.1"
+
 [dev-dependencies]
 mockall.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

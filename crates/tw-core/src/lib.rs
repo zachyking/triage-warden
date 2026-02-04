@@ -6,14 +6,19 @@
 //! workflow state machine, and event bus for the Triage Warden system.
 
 pub mod auth;
+pub mod cache;
 pub mod connector;
 pub mod crypto;
 pub mod events;
+pub mod features;
 pub mod incident;
+pub mod leadership;
+pub mod messaging;
 pub mod notification;
 pub mod orchestrator;
 pub mod playbook;
 pub mod policy;
+pub mod tenant;
 pub mod validation;
 pub mod workflow;
 
@@ -57,4 +62,27 @@ pub use crypto::{
 pub use validation::{
     validate_email, validate_email_with_options, EmailValidationError, EmailValidationOptions,
     HostnameValidationError, ValidatedEmail, ValidatedHostname,
+};
+
+// Cache exports
+pub use cache::{Cache, CacheEntry, CacheError, CacheResult, CacheStats, MockCache};
+
+// Leadership exports
+pub use leadership::{
+    default_instance_id, LeaderElectionError, LeaderElector, LeaderElectorConfig, LeaderInfo,
+    LeaderLease, MockLeaderElector,
+};
+
+// Messaging exports
+pub use messaging::{
+    Message, MessageId, MessageQueue, MessageQueueError, MessageQueueResult, MockMessageQueue,
+    QueueHealth, SubscribeOptions, Subscription,
+};
+
+// Tenant exports
+pub use tenant::{Tenant, TenantContext, TenantError, TenantSettings, TenantStatus};
+
+// Feature flag exports
+pub use features::{
+    FeatureFlag, FeatureFlagError, FeatureFlagStore, FeatureFlags, InMemoryFeatureFlagStore,
 };
