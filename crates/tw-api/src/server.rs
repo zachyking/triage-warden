@@ -1,6 +1,6 @@
 //! API server implementation.
 
-use axum::{middleware, Router};
+use axum::{extract::Request, middleware, response::Response, Router};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -22,8 +22,8 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::dto::*;
 use crate::error::ErrorResponse;
 use crate::middleware::{
-    cors_layer_with_origins, request_body_limit_layer, request_id, request_logging,
-    security_headers,
+    cors_layer_with_origins, create_tenant_resolver, request_body_limit_layer, request_id,
+    request_logging, security_headers, tenant_resolution_middleware, TenantResolver,
 };
 use crate::rate_limit::{global_rate_limit_middleware, register_rate_limit_metrics};
 use crate::routes;
@@ -156,6 +156,7 @@ pub struct ApiServer {
     config: ApiServerConfig,
     state: AppState,
     session_store: Option<SqliteStore>,
+    tenant_resolver: Option<TenantResolver>,
 }
 
 impl ApiServer {
@@ -165,6 +166,7 @@ impl ApiServer {
             config,
             state,
             session_store: None,
+            tenant_resolver: None,
         }
     }
 
@@ -218,6 +220,27 @@ impl ApiServer {
         Ok(self)
     }
 
+    /// Sets up the tenant resolver for multi-tenant support.
+    ///
+    /// This enables tenant resolution from:
+    /// - Subdomain extraction (requires TW_BASE_DOMAIN env var)
+    /// - X-Tenant-ID header
+    /// - JWT tenant_id claim
+    /// - Default tenant fallback (requires TW_DEFAULT_TENANT env var)
+    pub fn with_tenant_resolution(mut self) -> Self {
+        let resolver = create_tenant_resolver(self.state.db.clone());
+        self.tenant_resolver = Some(resolver);
+        info!("Tenant resolution middleware enabled");
+        self
+    }
+
+    /// Sets up the tenant resolver with a custom resolver.
+    pub fn with_custom_tenant_resolver(mut self, resolver: TenantResolver) -> Self {
+        self.tenant_resolver = Some(resolver);
+        info!("Custom tenant resolver configured");
+        self
+    }
+
     /// Builds the router.
     pub fn router(&self) -> Router {
         // Initialize start time for uptime calculation
@@ -268,6 +291,20 @@ impl ApiServer {
             )))
             // Catch panics and return 500
             .layer(CatchPanicLayer::new());
+
+        // Add tenant resolution middleware if configured
+        if let Some(resolver) = &self.tenant_resolver {
+            let resolver_clone = resolver.clone();
+            app = app.layer(middleware::from_fn(
+                move |request: Request, next: axum::middleware::Next| {
+                    let resolver = resolver_clone.clone();
+                    async move {
+                        let request = tenant_resolution_middleware(resolver, request).await?;
+                        Ok::<_, Response>(next.run(request).await)
+                    }
+                },
+            ));
+        }
 
         // Add session layer if session store is configured
         if let Some(session_store) = &self.session_store {
@@ -367,15 +404,18 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use tw_core::db::create_pool;
-    use tw_core::EventBus;
+    use tw_core::{EventBus, FeatureFlagStore, FeatureFlags, InMemoryFeatureFlagStore};
 
     #[tokio::test]
     async fn test_router_creation() {
         // Create in-memory SQLite for testing
         let pool = create_pool("sqlite::memory:").await.unwrap();
         let event_bus = EventBus::new(100);
-        let state = AppState::new(pool, event_bus);
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        let state = AppState::new(pool, event_bus, feature_flags);
 
         let server = ApiServer::with_state(state);
         let _router = server.router();

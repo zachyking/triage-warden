@@ -3,11 +3,12 @@
 use anyhow::{Context, Result};
 use colored::Colorize;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use tw_api::{ApiServer, ApiServerConfig, AppState};
 use tw_core::db::{create_pool, run_migrations, seed::ensure_admin_user};
-use tw_core::EventBus;
+use tw_core::{EventBus, FeatureFlagStore, FeatureFlags, InMemoryFeatureFlagStore};
 
 use crate::config::AppConfig;
 
@@ -79,8 +80,17 @@ pub async fn run_server(config: ServeConfig, _app_config: AppConfig) -> Result<(
     // Create event bus
     let event_bus = EventBus::new(1024);
 
+    // Create feature flags service with in-memory store
+    // In production, this could be backed by the database or a remote service
+    let feature_store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+    let feature_flags = FeatureFlags::new(feature_store);
+
     // Create application state
-    let state = AppState::new(db_pool, event_bus);
+    // Note: In a full distributed deployment, you would also configure:
+    // - message_queue: Redis Streams or similar
+    // - cache: Redis cache
+    // - leader_elector: PostgreSQL or Redis-based leader election
+    let state = AppState::new(db_pool, event_bus, feature_flags);
 
     // Build server config
     let bind_address: SocketAddr = format!("{}:{}", config.host, config.port)

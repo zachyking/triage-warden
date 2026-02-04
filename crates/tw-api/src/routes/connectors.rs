@@ -1015,9 +1015,10 @@ mod api_tests {
         http::{Request, StatusCode},
         Extension,
     };
+    use std::sync::Arc;
     use tower::ServiceExt;
     use tw_core::db::DbPool;
-    use tw_core::EventBus;
+    use tw_core::{EventBus, FeatureFlagStore, FeatureFlags, InMemoryFeatureFlagStore};
 
     /// SQL to create the tenants and connectors tables for testing.
     const CREATE_CONNECTORS_TABLE: &str = r#"
@@ -1074,7 +1075,9 @@ mod api_tests {
 
         let db = DbPool::Sqlite(pool);
         let event_bus = EventBus::new(100);
-        let state = AppState::new(db, event_bus);
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        let state = AppState::new(db, event_bus, feature_flags);
 
         axum::Router::new()
             .nest("/api/connectors", routes())

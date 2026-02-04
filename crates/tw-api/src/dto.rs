@@ -588,6 +588,15 @@ pub struct ComponentsHealth {
     pub llm: LlmHealth,
     /// Event bus status
     pub event_bus: EventBusHealth,
+    /// Message queue status (optional, for distributed deployments)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_queue: Option<MessageQueueHealth>,
+    /// Cache status (optional, for distributed deployments)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache: Option<CacheHealth>,
+    /// Leader elector status (optional, for distributed deployments)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leader_elector: Option<LeaderElectorHealth>,
 }
 
 /// Kill switch health status.
@@ -638,6 +647,46 @@ pub struct EventBusHealth {
     pub subscriber_count: usize,
     /// Whether the event bus is operational
     pub operational: bool,
+}
+
+/// Message queue health status for distributed processing.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct MessageQueueHealth {
+    /// Whether the queue is enabled in configuration
+    pub enabled: bool,
+    /// Whether the queue connection is active
+    pub connected: bool,
+    /// Number of pending messages in the queue
+    pub pending_messages: u64,
+    /// Number of active consumers
+    pub consumer_count: u32,
+}
+
+/// Cache health status for distributed caching.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct CacheHealth {
+    /// Whether the cache is enabled in configuration
+    pub enabled: bool,
+    /// Number of cache hits
+    pub hits: u64,
+    /// Number of cache misses
+    pub misses: u64,
+    /// Current cache hit rate (0.0 to 1.0)
+    pub hit_rate: f64,
+    /// Number of entries currently in cache
+    pub size: u64,
+}
+
+/// Leader elector health status for distributed coordination.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct LeaderElectorHealth {
+    /// Whether leader election is enabled in configuration
+    pub enabled: bool,
+    /// Whether this instance is currently leader for any resource
+    pub is_leader: bool,
+    /// Resources for which this instance is the leader
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub leader_resources: Vec<String>,
 }
 
 // ============================================================================

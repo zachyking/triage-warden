@@ -19,6 +19,7 @@
 
 use chrono::Utc;
 use sqlx::SqlitePool;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use tw_core::auth::DEFAULT_TENANT_ID;
@@ -28,7 +29,7 @@ use tw_core::db::{
 };
 use tw_core::incident::{Alert, AlertSource, Incident, Severity};
 use tw_core::playbook::Playbook;
-use tw_core::EventBus;
+use tw_core::{EventBus, FeatureFlagStore, FeatureFlags, InMemoryFeatureFlagStore};
 
 use crate::state::AppState;
 
@@ -160,6 +161,14 @@ async fn run_migrations(pool: &SqlitePool) {
     .await
     .expect("Failed to run settings migration");
 
+    // Feature flags table
+    sqlx::query(include_str!(
+        "../../tw-core/src/db/migrations/sqlite/20240210_000001_create_feature_flags.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("Failed to run feature flags migration");
+
     // Create tenants table for multi-tenancy
     sqlx::query(
         r#"
@@ -226,6 +235,15 @@ async fn run_migrations(pool: &SqlitePool) {
 // State Creation
 // ============================================================================
 
+/// Creates default feature flags for testing.
+///
+/// This creates an in-memory feature flag store with no flags defined.
+/// Tests that need specific flags should use `create_test_feature_flags_with`.
+fn create_test_feature_flags() -> FeatureFlags {
+    let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+    FeatureFlags::new(store)
+}
+
 /// Creates an `AppState` instance with a test database and EventBus.
 ///
 /// This is the primary entry point for most tests. It sets up a complete
@@ -247,7 +265,8 @@ pub async fn create_test_state() -> AppState {
     let pool = setup_test_db().await;
     let db = DbPool::Sqlite(pool);
     let event_bus = EventBus::new(100);
-    AppState::new(db, event_bus)
+    let feature_flags = create_test_feature_flags();
+    AppState::new(db, event_bus, feature_flags)
 }
 
 /// Creates an `AppState` from an existing SQLite pool.
@@ -265,7 +284,8 @@ pub async fn create_test_state() -> AppState {
 pub fn create_test_state_from_pool(pool: SqlitePool) -> AppState {
     let db = DbPool::Sqlite(pool);
     let event_bus = EventBus::new(100);
-    AppState::new(db, event_bus)
+    let feature_flags = create_test_feature_flags();
+    AppState::new(db, event_bus, feature_flags)
 }
 
 /// Creates an `AppState` and returns both the state and the underlying pool.
@@ -280,7 +300,8 @@ pub async fn create_test_state_with_pool() -> (AppState, SqlitePool) {
     let pool = setup_test_db().await;
     let db = DbPool::Sqlite(pool.clone());
     let event_bus = EventBus::new(100);
-    let state = AppState::new(db, event_bus);
+    let feature_flags = create_test_feature_flags();
+    let state = AppState::new(db, event_bus, feature_flags);
     (state, pool)
 }
 

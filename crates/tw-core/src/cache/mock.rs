@@ -1,6 +1,6 @@
 //! Mock cache implementation for testing.
 
-use super::{Cache, CacheEntry, CacheError, CacheStats};
+use super::{Cache, CacheEntry, CacheError, CacheStats, DynCache};
 use async_trait::async_trait;
 use chrono::{Duration as ChronoDuration, Utc};
 use std::collections::HashMap;
@@ -114,7 +114,7 @@ impl Default for MockCache {
 }
 
 #[async_trait]
-impl Cache for MockCache {
+impl DynCache for MockCache {
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, CacheError> {
         let full_key = self.full_key(key);
         let data = self.data.read().await;
@@ -207,6 +207,22 @@ impl Cache for MockCache {
         Ok(())
     }
 
+    async fn stats(&self) -> CacheStats {
+        let hits = self.hits.load(Ordering::SeqCst);
+        let misses = self.misses.load(Ordering::SeqCst);
+
+        // Get size - we're in async context so we can await
+        let size = {
+            let data = self.data.read().await;
+            data.len() as u64
+        };
+
+        CacheStats::new(hits, misses, size)
+    }
+}
+
+#[async_trait]
+impl Cache for MockCache {
     async fn get_or_set<F, Fut>(
         &self,
         key: &str,
@@ -218,7 +234,7 @@ impl Cache for MockCache {
         Fut: Future<Output = Result<Vec<u8>, CacheError>> + Send,
     {
         // First, try a quick read without locking
-        if let Some(value) = self.get(key).await? {
+        if let Some(value) = DynCache::get(self, key).await? {
             return Ok(value);
         }
 
@@ -229,7 +245,7 @@ impl Cache for MockCache {
         let _guard = key_lock.lock().await;
 
         // Double-check after acquiring lock (another thread may have set it)
-        if let Some(value) = self.get(key).await? {
+        if let Some(value) = DynCache::get(self, key).await? {
             return Ok(value);
         }
 
@@ -237,27 +253,9 @@ impl Cache for MockCache {
         let value = f().await?;
 
         // Store it in the cache
-        self.set(key, &value, ttl).await?;
+        DynCache::set(self, key, &value, ttl).await?;
 
         Ok(value)
-    }
-
-    fn stats(&self) -> CacheStats {
-        let hits = self.hits.load(Ordering::SeqCst);
-        let misses = self.misses.load(Ordering::SeqCst);
-
-        // Get size synchronously - this is a best-effort count
-        // In a real implementation, this might be tracked atomically
-        let size = {
-            // We can't await in a non-async fn, so we use try_read
-            // If we can't get the lock, return 0 as a reasonable default
-            match self.data.try_read() {
-                Ok(data) => data.len() as u64,
-                Err(_) => 0,
-            }
-        };
-
-        CacheStats::new(hits, misses, size)
     }
 }
 
@@ -488,7 +486,7 @@ mod tests {
         let cache = MockCache::new();
 
         // Initial stats should be zero
-        let stats = cache.stats();
+        let stats = cache.stats().await;
         assert_eq!(stats.hits, 0);
         assert_eq!(stats.misses, 0);
         assert_eq!(stats.hit_rate, 0.0);
@@ -496,7 +494,7 @@ mod tests {
         // Miss
         cache.get("nonexistent").await.unwrap();
 
-        let stats = cache.stats();
+        let stats = cache.stats().await;
         assert_eq!(stats.misses, 1);
 
         // Set and hit
@@ -506,7 +504,7 @@ mod tests {
             .unwrap();
         cache.get("key1").await.unwrap();
 
-        let stats = cache.stats();
+        let stats = cache.stats().await;
         assert_eq!(stats.hits, 1);
         assert_eq!(stats.misses, 1);
         assert!((stats.hit_rate - 0.5).abs() < f64::EPSILON);
@@ -569,7 +567,7 @@ mod tests {
 
         cache.cleanup_expired().await;
 
-        let stats = cache.stats();
+        let stats = cache.stats().await;
         assert_eq!(stats.size, 1); // Only "long" key should remain
     }
 
@@ -580,12 +578,12 @@ mod tests {
         cache.get("miss1").await.unwrap();
         cache.get("miss2").await.unwrap();
 
-        let stats = cache.stats();
+        let stats = cache.stats().await;
         assert_eq!(stats.misses, 2);
 
         cache.reset_stats();
 
-        let stats = cache.stats();
+        let stats = cache.stats().await;
         assert_eq!(stats.hits, 0);
         assert_eq!(stats.misses, 0);
     }

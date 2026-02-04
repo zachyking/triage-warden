@@ -835,8 +835,9 @@ mod tests {
         http::{header, Request, StatusCode},
         Extension,
     };
+    use std::sync::Arc;
     use tower::ServiceExt;
-    use tw_core::{db::DbPool, EventBus};
+    use tw_core::{db::DbPool, EventBus, FeatureFlagStore, FeatureFlags, InMemoryFeatureFlagStore};
 
     use crate::auth::test_helpers::TestUser;
     use crate::state::AppState;
@@ -897,7 +898,9 @@ mod tests {
 
         let db = DbPool::Sqlite(pool.clone());
         let event_bus = EventBus::new(100);
-        let state = AppState::new(db, event_bus);
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        let state = AppState::new(db, event_bus, feature_flags);
 
         // Create router with playbooks routes and admin authentication
         let router = axum::Router::new()

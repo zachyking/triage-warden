@@ -7,6 +7,9 @@
 //! - CORS configuration
 //! - Request body size limits
 //! - Rate limiting (via rate_limit module)
+//! - Tenant resolution (multi-tenancy support)
+
+pub mod tenant;
 
 use axum::{
     extract::Request,
@@ -20,6 +23,13 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tracing::{info, warn, Span};
 use tw_core::is_production_environment;
 use uuid::Uuid;
+
+// Re-export tenant middleware components
+pub use tenant::{
+    create_tenant_resolver, create_tenant_resolver_with_config, tenant_resolution_middleware,
+    OptionalTenant, RequireTenant, TenantCache, TenantResolutionConfig, TenantResolutionError,
+    TenantResolver, TenantSource, TENANT_ID_HEADER,
+};
 
 /// Request ID header name.
 pub const REQUEST_ID_HEADER: &str = "X-Request-Id";
@@ -216,6 +226,7 @@ pub fn cors_layer_with_origins(allowed_origins: Option<&[String]>) -> CorsLayer 
             header::ACCEPT,
             HeaderName::from_static("x-request-id"),
             HeaderName::from_static("x-api-key"),
+            HeaderName::from_static("x-tenant-id"),
         ])
         .expose_headers([HeaderName::from_static("x-request-id")])
         .max_age(std::time::Duration::from_secs(3600))

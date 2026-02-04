@@ -403,6 +403,7 @@ async fn reset_password(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tw_core::auth::DEFAULT_TENANT_ID;
 
     #[test]
     fn test_user_response_from_user() {

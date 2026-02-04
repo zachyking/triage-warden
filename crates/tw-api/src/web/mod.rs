@@ -1411,10 +1411,11 @@ mod tests {
         http::{Request, StatusCode},
         middleware,
     };
+    use std::sync::Arc;
     use tower::ServiceExt;
     use tw_core::db::{create_playbook_repository, DbPool};
     use tw_core::playbook::{Playbook, PlaybookStage, PlaybookStep};
-    use tw_core::EventBus;
+    use tw_core::{EventBus, FeatureFlagStore, FeatureFlags, InMemoryFeatureFlagStore};
 
     /// Sets up a test app with an in-memory SQLite database.
     async fn setup_test_app() -> Router {
@@ -1534,7 +1535,9 @@ mod tests {
 
         let db = DbPool::Sqlite(pool);
         let event_bus = EventBus::new(100);
-        let state = AppState::new(db, event_bus);
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        let state = AppState::new(db, event_bus, feature_flags);
 
         // Add test user middleware to bypass authentication
         create_web_router(state).layer(middleware::from_fn(move |req, next| {
@@ -1659,7 +1662,9 @@ mod tests {
 
         let db = DbPool::Sqlite(pool);
         let event_bus = EventBus::new(100);
-        let state = AppState::new(db, event_bus);
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        let state = AppState::new(db, event_bus, feature_flags);
         // Add test user middleware to bypass authentication
         let router =
             create_web_router(state.clone()).layer(middleware::from_fn(move |req, next| {

@@ -65,7 +65,7 @@ pub use validation::{
 };
 
 // Cache exports
-pub use cache::{Cache, CacheEntry, CacheError, CacheResult, CacheStats, MockCache};
+pub use cache::{Cache, CacheEntry, CacheError, CacheResult, CacheStats, DynCache, MockCache};
 
 // Leadership exports
 pub use leadership::{

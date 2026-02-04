@@ -932,12 +932,13 @@ mod tests {
         http::{Request, StatusCode},
         Extension, Router,
     };
+    use std::sync::Arc;
     use tower::ServiceExt;
     use tw_core::db::DbPool;
     use tw_core::incident::{
         Alert, AlertSource, ApprovalStatus, Incident, IncidentStatus, Severity,
     };
-    use tw_core::EventBus;
+    use tw_core::{EventBus, FeatureFlagStore, FeatureFlags, InMemoryFeatureFlagStore};
 
     use crate::auth::test_helpers::TestUser;
 
@@ -1065,7 +1066,9 @@ mod tests {
         let pool = create_test_pool().await;
         let db = DbPool::Sqlite(pool);
         let event_bus = EventBus::new(100);
-        AppState::new(db, event_bus)
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        AppState::new(db, event_bus, feature_flags)
     }
 
     /// Creates a test router with the incidents routes and analyst authentication.

@@ -40,7 +40,7 @@
 //! }
 //! ```
 
-use super::{Cache, CacheError, CacheStats};
+use super::{Cache, CacheError, CacheStats, DynCache};
 use async_trait::async_trait;
 use deadpool_redis::{Config as PoolConfig, Pool, Runtime};
 use redis::AsyncCommands;
@@ -320,7 +320,7 @@ impl std::fmt::Debug for RedisCache {
 }
 
 #[async_trait]
-impl Cache for RedisCache {
+impl DynCache for RedisCache {
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, CacheError> {
         let full_key = self.full_key(key);
         let mut conn = self.get_conn().await?;
@@ -441,6 +441,38 @@ impl Cache for RedisCache {
         Ok(())
     }
 
+    async fn stats(&self) -> CacheStats {
+        let hits = self.stats.hits();
+        let misses = self.stats.misses();
+
+        // Fetch the current size from Redis
+        let size = if let Ok(mut conn) = self.get_conn().await {
+            let pattern = format!("{}:{}:*", self.config.key_prefix, self.config.namespace);
+            if let Ok(keys) = redis::cmd("KEYS")
+                .arg(&pattern)
+                .query_async::<Vec<String>>(&mut *conn)
+                .await
+            {
+                // Update cached size
+                if let Ok(mut cached) = self.cached_size.try_write() {
+                    *cached = keys.len() as u64;
+                }
+                keys.len() as u64
+            } else {
+                // Fall back to cached size
+                self.cached_size.try_read().map(|s| *s).unwrap_or(0)
+            }
+        } else {
+            // Fall back to cached size
+            self.cached_size.try_read().map(|s| *s).unwrap_or(0)
+        };
+
+        CacheStats::new(hits, misses, size)
+    }
+}
+
+#[async_trait]
+impl Cache for RedisCache {
     async fn get_or_set<F, Fut>(
         &self,
         key: &str,
@@ -518,40 +550,6 @@ impl Cache for RedisCache {
                 Err(e)
             }
         }
-    }
-
-    fn stats(&self) -> CacheStats {
-        let hits = self.stats.hits();
-        let misses = self.stats.misses();
-
-        // Get cached size (we can't await in a sync fn)
-        let size = match self.cached_size.try_read() {
-            Ok(s) => *s,
-            Err(_) => 0,
-        };
-
-        // Trigger an async size update in the background
-        let cache = self.cached_size.clone();
-        let pool = self.pool.clone();
-        let prefix = self.config.key_prefix.clone();
-        let namespace = self.config.namespace.clone();
-
-        tokio::spawn(async move {
-            if let Ok(mut conn) = pool.get().await {
-                let pattern = format!("{}:{}:*", prefix, namespace);
-                if let Ok(keys) = redis::cmd("KEYS")
-                    .arg(&pattern)
-                    .query_async::<Vec<String>>(&mut *conn)
-                    .await
-                {
-                    if let Ok(mut size) = cache.try_write() {
-                        *size = keys.len() as u64;
-                    }
-                }
-            }
-        });
-
-        CacheStats::new(hits, misses, size)
     }
 }
 
@@ -851,7 +849,7 @@ mod tests {
             .unwrap();
         cache.get("stats_test").await.unwrap();
 
-        let stats = cache.stats();
+        let stats = cache.stats().await;
         assert_eq!(stats.hits, 1);
         assert_eq!(stats.misses, 2);
 

@@ -272,9 +272,10 @@ mod tests {
         http::{Request, StatusCode},
         Extension,
     };
+    use std::sync::Arc;
     use tower::ServiceExt;
     use tw_core::db::DbPool;
-    use tw_core::EventBus;
+    use tw_core::{EventBus, FeatureFlagStore, FeatureFlags, InMemoryFeatureFlagStore};
 
     use crate::auth::test_helpers::TestUser;
 
@@ -426,7 +427,9 @@ mod tests {
     async fn create_test_state() -> AppState {
         let db = create_test_db().await;
         let event_bus = EventBus::new(100);
-        AppState::new(db, event_bus)
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        AppState::new(db, event_bus, feature_flags)
     }
 
     /// Creates a test router with the settings routes and admin authentication.

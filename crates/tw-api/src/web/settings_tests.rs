@@ -9,10 +9,11 @@ use axum::{
     http::{Request, StatusCode},
     middleware,
 };
+use std::sync::Arc;
 use tower::ServiceExt;
 use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::db::DbPool;
-use tw_core::EventBus;
+use tw_core::{EventBus, FeatureFlagStore, FeatureFlags, InMemoryFeatureFlagStore};
 
 /// Sets up a test app with an in-memory SQLite database.
 async fn setup_test_app() -> Router {
@@ -130,7 +131,9 @@ async fn setup_test_app() -> Router {
 
     let db = DbPool::Sqlite(pool);
     let event_bus = EventBus::new(100);
-    let state = AppState::new(db, event_bus);
+    let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+    let feature_flags = FeatureFlags::new(store);
+    let state = AppState::new(db, event_bus, feature_flags);
 
     // Add test user middleware to bypass authentication
     create_web_router(state).layer(middleware::from_fn(move |req, next| {
@@ -254,7 +257,9 @@ async fn setup_test_app_with_state() -> (Router, AppState) {
 
     let db = DbPool::Sqlite(pool);
     let event_bus = EventBus::new(100);
-    let state = AppState::new(db, event_bus);
+    let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+    let feature_flags = FeatureFlags::new(store);
+    let state = AppState::new(db, event_bus, feature_flags);
     // Add test user middleware to bypass authentication
     let router = create_web_router(state.clone()).layer(middleware::from_fn(move |req, next| {
         inject_test_user(TestUser::admin(), req, next)

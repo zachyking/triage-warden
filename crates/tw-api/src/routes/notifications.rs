@@ -693,9 +693,10 @@ mod tests {
     };
     use sqlx::Executor;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
     use tower::ServiceExt;
     use tw_core::db::DbPool;
-    use tw_core::EventBus;
+    use tw_core::{EventBus, FeatureFlagStore, FeatureFlags, InMemoryFeatureFlagStore};
 
     // Counter to ensure unique database names across tests
     static DB_COUNTER: AtomicU64 = AtomicU64::new(5_000_000);
@@ -794,7 +795,9 @@ mod tests {
         let pool = setup_test_pool().await;
         let db = DbPool::Sqlite(pool);
         let event_bus = EventBus::new(100);
-        let state = AppState::new(db, event_bus);
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        let state = AppState::new(db, event_bus, feature_flags);
 
         axum::Router::new()
             .nest("/api/notifications", routes())
@@ -846,7 +849,9 @@ mod tests {
         repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
-        let state = AppState::new(db, event_bus);
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        let state = AppState::new(db, event_bus, feature_flags);
         let app = axum::Router::new()
             .nest("/api/notifications", routes())
             .with_state(state);
@@ -894,7 +899,9 @@ mod tests {
         let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
-        let state = AppState::new(db, event_bus);
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        let state = AppState::new(db, event_bus, feature_flags);
         let app = axum::Router::new()
             .nest("/api/notifications", routes())
             .with_state(state);
@@ -1221,7 +1228,9 @@ mod tests {
         let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
-        let state = AppState::new(db, event_bus);
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        let state = AppState::new(db, event_bus, feature_flags);
         let app = axum::Router::new()
             .nest("/api/notifications", routes())
             .with_state(state);
@@ -1293,7 +1302,9 @@ mod tests {
         let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
-        let state = AppState::new(db, event_bus);
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        let state = AppState::new(db, event_bus, feature_flags);
         let app = axum::Router::new()
             .nest("/api/notifications", routes())
             .with_state(state);
@@ -1360,7 +1371,9 @@ mod tests {
         assert!(!created.enabled);
 
         let event_bus = EventBus::new(100);
-        let state = AppState::new(db, event_bus);
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        let state = AppState::new(db, event_bus, feature_flags);
         let app = axum::Router::new()
             .nest("/api/notifications", routes())
             .with_state(state);
@@ -1405,7 +1418,9 @@ mod tests {
         assert!(created.enabled);
 
         let event_bus = EventBus::new(100);
-        let state = AppState::new(db, event_bus);
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        let state = AppState::new(db, event_bus, feature_flags);
         let app = axum::Router::new()
             .nest("/api/notifications", routes())
             .with_state(state);
@@ -1474,7 +1489,9 @@ mod tests {
         let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
-        let state = AppState::new(db, event_bus);
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        let state = AppState::new(db, event_bus, feature_flags);
         let app = axum::Router::new()
             .nest("/api/notifications", routes())
             .with_state(state);
@@ -1517,7 +1534,9 @@ mod tests {
         let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
-        let state = AppState::new(db, event_bus);
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        let state = AppState::new(db, event_bus, feature_flags);
         let app = axum::Router::new()
             .nest("/api/notifications", routes())
             .with_state(state);
@@ -1579,7 +1598,9 @@ mod tests {
         let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
-        let state = AppState::new(db, event_bus);
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        let state = AppState::new(db, event_bus, feature_flags);
         let app = axum::Router::new()
             .nest("/api/notifications", routes())
             .with_state(state);
@@ -1655,7 +1676,9 @@ mod tests {
         let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
-        let state = AppState::new(db, event_bus);
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        let state = AppState::new(db, event_bus, feature_flags);
         let app = axum::Router::new()
             .nest("/api/notifications", routes())
             .with_state(state);
@@ -1698,7 +1721,9 @@ mod tests {
         let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
-        let state = AppState::new(db, event_bus);
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        let state = AppState::new(db, event_bus, feature_flags);
         let app = axum::Router::new()
             .nest("/api/notifications", routes())
             .with_state(state);
@@ -1745,7 +1770,9 @@ mod tests {
         let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
-        let state = AppState::new(db, event_bus);
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        let state = AppState::new(db, event_bus, feature_flags);
         let app = axum::Router::new()
             .nest("/api/notifications", routes())
             .with_state(state);
@@ -1795,7 +1822,9 @@ mod tests {
         assert!(!created.enabled);
 
         let event_bus = EventBus::new(100);
-        let state = AppState::new(db, event_bus);
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        let state = AppState::new(db, event_bus, feature_flags);
         let app = axum::Router::new()
             .nest("/api/notifications", routes())
             .with_state(state);
@@ -1840,7 +1869,9 @@ mod tests {
         let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
-        let state = AppState::new(db, event_bus);
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        let state = AppState::new(db, event_bus, feature_flags);
         let app = axum::Router::new()
             .nest("/api/notifications", routes())
             .with_state(state);
@@ -1886,7 +1917,9 @@ mod tests {
         let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
-        let state = AppState::new(db, event_bus);
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        let state = AppState::new(db, event_bus, feature_flags);
         let app = axum::Router::new()
             .nest("/api/notifications", routes())
             .with_state(state);
@@ -2048,7 +2081,9 @@ mod tests {
         repo.create(DEFAULT_TENANT_ID, &channel3).await.unwrap();
 
         let event_bus = EventBus::new(100);
-        let state = AppState::new(db, event_bus);
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        let state = AppState::new(db, event_bus, feature_flags);
         let app = axum::Router::new()
             .nest("/api/notifications", routes())
             .with_state(state);
@@ -2092,7 +2127,9 @@ mod tests {
         let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
-        let state = AppState::new(db, event_bus);
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        let state = AppState::new(db, event_bus, feature_flags);
         let app = axum::Router::new()
             .nest("/api/notifications", routes())
             .with_state(state);

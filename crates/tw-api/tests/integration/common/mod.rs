@@ -7,9 +7,10 @@ use axum::{
 };
 use serde::de::DeserializeOwned;
 use sqlx::SqlitePool;
+use std::sync::Arc;
 use tower::ServiceExt;
 use tw_api::{routes, state::AppState};
-use tw_core::{db::DbPool, EventBus};
+use tw_core::{db::DbPool, EventBus, FeatureFlagStore, FeatureFlags, InMemoryFeatureFlagStore};
 use uuid::Uuid;
 
 /// Creates an in-memory SQLite database with all migrations applied.
@@ -139,7 +140,9 @@ pub async fn create_test_state() -> AppState {
     let pool = setup_test_db().await;
     let db = DbPool::Sqlite(pool);
     let event_bus = EventBus::new(100);
-    AppState::new(db, event_bus)
+    let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+    let feature_flags = FeatureFlags::new(store);
+    AppState::new(db, event_bus, feature_flags)
 }
 
 /// Creates a test router (without authentication layer for health tests).

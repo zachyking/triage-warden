@@ -5,8 +5,8 @@ use std::time::Instant;
 use tw_core::ConnectorStatus;
 
 use crate::dto::{
-    ComponentsHealth, ConnectorsHealth, DatabaseHealth, EventBusHealth, HealthResponse,
-    KillSwitchHealth, LlmHealth,
+    CacheHealth, ComponentsHealth, ConnectorsHealth, DatabaseHealth, EventBusHealth,
+    HealthResponse, KillSwitchHealth, LeaderElectorHealth, LlmHealth, MessageQueueHealth,
 };
 use crate::state::AppState;
 
@@ -106,6 +106,11 @@ async fn health_check_detailed(
         operational: true,
     };
 
+    // Get distributed component health (optional components)
+    let message_queue_health = get_message_queue_health(&state).await;
+    let cache_health = get_cache_health(&state).await;
+    let leader_elector_health = get_leader_elector_health(&state).await;
+
     // Determine overall status
     let status = determine_overall_status(
         db_healthy,
@@ -137,6 +142,9 @@ async fn health_check_detailed(
                 connectors: connectors_health,
                 llm: llm_health,
                 event_bus,
+                message_queue: message_queue_health,
+                cache: cache_health,
+                leader_elector: leader_elector_health,
             }),
         }),
     )
@@ -209,6 +217,76 @@ async fn get_llm_health(state: &AppState) -> LlmHealth {
     }
 }
 
+/// Get message queue health status (if configured).
+async fn get_message_queue_health(state: &AppState) -> Option<MessageQueueHealth> {
+    match &state.message_queue {
+        Some(mq) => {
+            let health = mq.health_check().await.ok();
+            match health {
+                Some(h) => Some(MessageQueueHealth {
+                    enabled: true,
+                    connected: h.connected,
+                    pending_messages: h.pending_messages,
+                    consumer_count: h.consumer_count,
+                }),
+                None => Some(MessageQueueHealth {
+                    enabled: true,
+                    connected: false,
+                    pending_messages: 0,
+                    consumer_count: 0,
+                }),
+            }
+        }
+        None => None,
+    }
+}
+
+/// Get cache health status (if configured).
+async fn get_cache_health(state: &AppState) -> Option<CacheHealth> {
+    match &state.cache {
+        Some(cache) => {
+            let stats = cache.stats().await;
+            let total = stats.hits + stats.misses;
+            let hit_rate = if total > 0 {
+                stats.hits as f64 / total as f64
+            } else {
+                0.0
+            };
+            Some(CacheHealth {
+                enabled: true,
+                hits: stats.hits,
+                misses: stats.misses,
+                hit_rate,
+                size: stats.size,
+            })
+        }
+        None => None,
+    }
+}
+
+/// Well-known resources that the leader elector manages.
+const LEADER_RESOURCES: &[&str] = &["scheduler", "metrics-aggregator", "cleanup"];
+
+/// Get leader elector health status (if configured).
+async fn get_leader_elector_health(state: &AppState) -> Option<LeaderElectorHealth> {
+    match &state.leader_elector {
+        Some(elector) => {
+            // Check which well-known resources this instance is leader for
+            let leader_resources: Vec<String> = LEADER_RESOURCES
+                .iter()
+                .filter(|r| elector.is_leader(r))
+                .map(|r| r.to_string())
+                .collect();
+            Some(LeaderElectorHealth {
+                enabled: true,
+                is_leader: !leader_resources.is_empty(),
+                leader_resources,
+            })
+        }
+        None => None,
+    }
+}
+
 /// Determine overall system status based on component health.
 fn determine_overall_status(
     db_healthy: bool,
@@ -244,11 +322,19 @@ fn determine_overall_status(
     tag = "Health"
 )]
 async fn readiness_check(State(state): State<AppState>) -> axum::http::StatusCode {
-    if state.db.is_healthy().await {
-        axum::http::StatusCode::OK
-    } else {
-        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    // Check database health (required)
+    if !state.db.is_healthy().await {
+        return axum::http::StatusCode::SERVICE_UNAVAILABLE;
     }
+
+    // Check message queue health if configured
+    if let Some(mq) = &state.message_queue {
+        if mq.health_check().await.is_err() {
+            return axum::http::StatusCode::SERVICE_UNAVAILABLE;
+        }
+    }
+
+    axum::http::StatusCode::OK
 }
 
 /// Kubernetes liveness probe.
@@ -274,9 +360,10 @@ mod tests {
         http::{Request, StatusCode},
         Router,
     };
+    use std::sync::Arc;
     use tower::ServiceExt;
     use tw_core::db::DbPool;
-    use tw_core::EventBus;
+    use tw_core::{EventBus, FeatureFlagStore, FeatureFlags, InMemoryFeatureFlagStore};
     use uuid::Uuid;
 
     use crate::state::AppState;
@@ -302,7 +389,9 @@ mod tests {
         let pool = create_test_pool().await;
         let db = DbPool::Sqlite(pool);
         let event_bus = EventBus::new(100);
-        AppState::new(db, event_bus)
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        let feature_flags = FeatureFlags::new(store);
+        AppState::new(db, event_bus, feature_flags)
     }
 
     /// Creates a test router with the health routes.

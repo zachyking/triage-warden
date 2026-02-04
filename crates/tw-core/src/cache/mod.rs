@@ -43,6 +43,36 @@ use async_trait::async_trait;
 use std::future::Future;
 use std::time::Duration;
 
+/// A dyn-safe cache trait for use in trait objects.
+///
+/// This trait includes only the methods that are dyn-compatible (no generic parameters).
+/// Use this when you need `Arc<dyn DynCache>` for dependency injection.
+///
+/// For the full cache interface including `get_or_set`, use the [`Cache`] trait.
+#[async_trait]
+pub trait DynCache: Send + Sync + 'static {
+    /// Gets a value from the cache by key.
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, CacheError>;
+
+    /// Sets a value in the cache with a TTL.
+    async fn set(&self, key: &str, value: &[u8], ttl: Duration) -> Result<(), CacheError>;
+
+    /// Deletes a key from the cache.
+    async fn delete(&self, key: &str) -> Result<bool, CacheError>;
+
+    /// Checks if a key exists in the cache.
+    async fn exists(&self, key: &str) -> Result<bool, CacheError>;
+
+    /// Gets multiple values from the cache in a single operation.
+    async fn mget(&self, keys: &[&str]) -> Result<Vec<Option<Vec<u8>>>, CacheError>;
+
+    /// Sets multiple key-value pairs in a single operation.
+    async fn mset(&self, entries: &[(&str, &[u8], Duration)]) -> Result<(), CacheError>;
+
+    /// Returns current cache statistics.
+    async fn stats(&self) -> CacheStats;
+}
+
 /// A trait for cache implementations supporting TTL, atomic operations, and batch access.
 ///
 /// Implementations must be thread-safe (`Send + Sync`) and have a static lifetime.
@@ -59,40 +89,13 @@ use std::time::Duration;
 ///
 /// Implementations may support namespacing by prepending a prefix to all keys,
 /// enabling tenant isolation in multi-tenant environments.
+///
+/// # Note on Trait Objects
+///
+/// This trait is NOT dyn-compatible due to the generic `get_or_set` method.
+/// For trait objects, use [`DynCache`] instead.
 #[async_trait]
-pub trait Cache: Send + Sync + 'static {
-    /// Gets a value from the cache by key.
-    ///
-    /// Returns `Ok(Some(value))` if the key exists and hasn't expired,
-    /// `Ok(None)` if the key doesn't exist or has expired.
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, CacheError>;
-
-    /// Sets a value in the cache with a TTL.
-    ///
-    /// A TTL of `Duration::ZERO` means the entry will never expire.
-    async fn set(&self, key: &str, value: &[u8], ttl: Duration) -> Result<(), CacheError>;
-
-    /// Deletes a key from the cache.
-    ///
-    /// Returns `Ok(true)` if the key existed and was deleted,
-    /// `Ok(false)` if the key didn't exist.
-    async fn delete(&self, key: &str) -> Result<bool, CacheError>;
-
-    /// Checks if a key exists in the cache (and hasn't expired).
-    async fn exists(&self, key: &str) -> Result<bool, CacheError>;
-
-    /// Gets multiple values from the cache in a single operation.
-    ///
-    /// Returns a vector of `Option<Vec<u8>>` in the same order as the input keys.
-    /// Missing or expired keys will have `None` at their position.
-    async fn mget(&self, keys: &[&str]) -> Result<Vec<Option<Vec<u8>>>, CacheError>;
-
-    /// Sets multiple key-value pairs in a single operation.
-    ///
-    /// Each entry is a tuple of (key, value, ttl).
-    /// A TTL of `Duration::ZERO` means the entry will never expire.
-    async fn mset(&self, entries: &[(&str, &[u8], Duration)]) -> Result<(), CacheError>;
-
+pub trait Cache: DynCache {
     /// Atomically gets a value or computes and sets it if missing.
     ///
     /// This method prevents the "thundering herd" problem by ensuring that when multiple
@@ -123,11 +126,6 @@ pub trait Cache: Send + Sync + 'static {
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = Result<Vec<u8>, CacheError>> + Send;
-
-    /// Returns current cache statistics.
-    ///
-    /// Statistics include hit count, miss count, current size, and hit rate.
-    fn stats(&self) -> CacheStats;
 }
 
 #[cfg(test)]
