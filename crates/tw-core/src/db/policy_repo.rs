@@ -519,11 +519,11 @@ impl PolicyRepository for PgPolicyRepository {
     }
 
     async fn list_with_filter(&self, filter: &PolicyFilter) -> Result<Vec<Policy>, DbError> {
-        let rows: Vec<PgPolicyRow> = if filter.tenant_id.is_some() {
+        let rows: Vec<PgPolicyRow> = if let Some(tenant_id) = filter.tenant_id {
             let query = "SELECT id, tenant_id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at FROM policies WHERE tenant_id = $1 ORDER BY priority ASC, created_at ASC";
 
             sqlx::query_as::<_, PgPolicyRow>(query)
-                .bind(filter.tenant_id.unwrap())
+                .bind(tenant_id)
                 .fetch_all(&self.pool)
                 .await?
         } else {

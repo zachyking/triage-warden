@@ -76,7 +76,7 @@
 //! # Implementations
 //!
 //! - [`MockMessageQueue`]: In-memory implementation for testing
-//! - [`RedisMessageQueue`]: Redis Streams implementation (requires `redis-streams` feature)
+//! - `RedisMessageQueue`: Redis Streams implementation (requires `redis-streams` feature)
 //! - Future: `RabbitMQMessageQueue`, `KafkaMessageQueue`
 
 pub mod error;
