@@ -85,6 +85,7 @@
 
 - [Operations Guide](./operations/README.md)
   - [Monitoring](./operations/monitoring.md)
+  - [Scaling](./operations/scaling.md)
   - [Backup & Restore](./operations/backup-restore.md)
   - [Troubleshooting](./operations/troubleshooting.md)
 

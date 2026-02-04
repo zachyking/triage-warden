@@ -1,38 +1,169 @@
-# Kubernetes Deployment
+# Kubernetes Deployment Guide
 
-Deploy Triage Warden on Kubernetes for scalable, production-grade deployments.
+This guide covers deploying Triage Warden to Kubernetes using Helm or raw manifests.
 
 ## Prerequisites
 
-- Kubernetes 1.25+
-- kubectl configured with cluster access
-- Helm 3.x (optional, for database)
-- Storage class for persistent volumes
-- Ingress controller (nginx, traefik, or similar)
+Before deploying, ensure you have:
 
-## Quick Start
+- **Kubernetes cluster** version 1.25 or later
+- **kubectl** configured with cluster access
+- **Helm 3.x** (if using Helm deployment)
+- **Container registry access** to pull Triage Warden images
+- **PostgreSQL database** (managed or self-hosted)
+- **Redis** (optional, required for HA deployments)
+
+### Optional Prerequisites
+
+- **Ingress controller** (nginx-ingress or Traefik recommended)
+- **cert-manager** for automatic TLS certificate management
+- **Prometheus Operator** for metrics and alerting
+
+## Quick Start with Helm
+
+### 1. Add the Helm Repository
 
 ```bash
-# Create namespace
-kubectl create namespace triage-warden
-
-# Create secrets
-kubectl create secret generic triage-warden-secrets \
-  --namespace triage-warden \
-  --from-literal=encryption-key=$(openssl rand -base64 32) \
-  --from-literal=jwt-secret=$(openssl rand -hex 32) \
-  --from-literal=session-secret=$(openssl rand -hex 32) \
-  --from-literal=database-url="postgres://user:pass@postgres:5432/triage_warden"
-
-# Apply manifests
-kubectl apply -f deploy/kubernetes/ -n triage-warden
-
-# Check status
-kubectl get pods -n triage-warden
-kubectl logs -f deployment/triage-warden -n triage-warden
+# Add the Triage Warden Helm repository
+helm repo add triage-warden https://charts.triage-warden.io
+helm repo update
 ```
 
-## Architecture
+### 2. Create Namespace
+
+```bash
+kubectl create namespace triage-warden
+```
+
+### 3. Create Secrets
+
+Generate required secrets before deployment:
+
+```bash
+# Generate encryption keys
+export TW_ENCRYPTION_KEY=$(openssl rand -base64 32)
+export TW_JWT_SECRET=$(openssl rand -hex 32)
+export TW_SESSION_SECRET=$(openssl rand -hex 32)
+
+# Create Kubernetes secret
+kubectl create secret generic triage-warden-secrets \
+  --namespace triage-warden \
+  --from-literal=TW_ENCRYPTION_KEY="$TW_ENCRYPTION_KEY" \
+  --from-literal=TW_JWT_SECRET="$TW_JWT_SECRET" \
+  --from-literal=TW_SESSION_SECRET="$TW_SESSION_SECRET" \
+  --from-literal=DATABASE_URL="postgres://user:password@postgres:5432/triage_warden"
+```
+
+### 4. Install Triage Warden
+
+```bash
+# Basic installation
+helm install triage-warden triage-warden/triage-warden \
+  --namespace triage-warden \
+  --set global.domain=triage.example.com
+
+# Installation with custom values
+helm install triage-warden triage-warden/triage-warden \
+  --namespace triage-warden \
+  --values values-production.yaml
+```
+
+### 5. Verify Deployment
+
+```bash
+# Check pod status
+kubectl get pods -n triage-warden
+
+# Check service status
+kubectl get svc -n triage-warden
+
+# View logs
+kubectl logs -n triage-warden -l app.kubernetes.io/name=triage-warden -f
+```
+
+## Helm Configuration
+
+### Minimal Production Values
+
+Create a `values-production.yaml` file:
+
+```yaml
+# values-production.yaml
+global:
+  domain: triage.example.com
+
+api:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+orchestrator:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+postgresql:
+  # Use external database
+  enabled: false
+  external:
+    host: postgres.example.com
+    port: 5432
+    database: triage_warden
+    existingSecret: triage-warden-secrets
+    existingSecretPasswordKey: DATABASE_PASSWORD
+
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: true
+    existingSecret: triage-warden-secrets
+    existingSecretPasswordKey: REDIS_PASSWORD
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: triage-warden-tls
+      hosts:
+        - triage.example.com
+
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+```
+
+### Common Configuration Options
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `api.replicas` | Number of API server replicas | `2` |
+| `orchestrator.replicas` | Number of orchestrator replicas | `2` |
+| `image.repository` | Container image repository | `ghcr.io/triage-warden/triage-warden` |
+| `image.tag` | Container image tag | `latest` |
+| `ingress.enabled` | Enable ingress | `true` |
+| `postgresql.enabled` | Deploy PostgreSQL | `true` |
+| `redis.enabled` | Deploy Redis | `true` |
+| `monitoring.enabled` | Enable monitoring | `true` |
+
+## Manual Deployment (Without Helm)
+
+If you prefer to use raw Kubernetes manifests:
+
+### Architecture
 
 ```
                         ┌─────────────────┐
@@ -60,9 +191,9 @@ kubectl logs -f deployment/triage-warden -n triage-warden
                         └─────────────────┘
 ```
 
-## Manifests
+### Manifests
 
-### Namespace
+#### Namespace
 
 ```yaml
 # namespace.yaml
@@ -74,7 +205,7 @@ metadata:
     app.kubernetes.io/name: triage-warden
 ```
 
-### Secret
+#### Secret
 
 ```yaml
 # secret.yaml
@@ -95,7 +226,7 @@ stringData:
   database-url: "postgres://triage_warden:password@postgres-postgresql:5432/triage_warden"
 ```
 
-### ConfigMap
+#### ConfigMap
 
 ```yaml
 # configmap.yaml
@@ -110,7 +241,7 @@ data:
   TW_BASE_URL: "https://triage.example.com"
 ```
 
-### Deployment
+#### Deployment
 
 ```yaml
 # deployment.yaml
@@ -200,7 +331,7 @@ spec:
                 - ALL
 ```
 
-### Service
+#### Service
 
 ```yaml
 # service.yaml
@@ -222,7 +353,7 @@ spec:
     app.kubernetes.io/name: triage-warden
 ```
 
-### Ingress
+#### Ingress
 
 ```yaml
 # ingress.yaml
@@ -253,7 +384,7 @@ spec:
                   number: 80
 ```
 
-### ServiceAccount
+#### ServiceAccount
 
 ```yaml
 # serviceaccount.yaml
@@ -264,7 +395,7 @@ metadata:
   namespace: triage-warden
 ```
 
-### HorizontalPodAutoscaler
+#### HorizontalPodAutoscaler
 
 ```yaml
 # hpa.yaml
@@ -295,7 +426,7 @@ spec:
           averageUtilization: 80
 ```
 
-### PodDisruptionBudget
+#### PodDisruptionBudget
 
 ```yaml
 # pdb.yaml
@@ -309,6 +440,62 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: triage-warden
+```
+
+### Apply Manifests
+
+```bash
+kubectl apply -f deploy/kubernetes/namespace.yaml
+kubectl apply -f deploy/kubernetes/secret.yaml
+kubectl apply -f deploy/kubernetes/configmap.yaml
+kubectl apply -f deploy/kubernetes/deployment.yaml
+kubectl apply -f deploy/kubernetes/service.yaml
+kubectl apply -f deploy/kubernetes/ingress.yaml
+kubectl apply -f deploy/kubernetes/servicemonitor.yaml
+kubectl apply -f deploy/kubernetes/hpa.yaml
+```
+
+## High Availability Configuration
+
+For production HA deployments:
+
+### API Server HA
+
+The API servers are stateless and can be scaled horizontally:
+
+```yaml
+api:
+  replicas: 3
+  podAntiAffinity:
+    enabled: true
+    topologyKey: kubernetes.io/hostname
+  topologySpreadConstraints:
+    enabled: true
+    maxSkew: 1
+```
+
+### Orchestrator HA
+
+Orchestrators use leader election to coordinate singleton tasks:
+
+```yaml
+orchestrator:
+  replicas: 2
+  leaderElection:
+    enabled: true
+    leaseDuration: 15s
+    renewDeadline: 10s
+    retryPeriod: 2s
+```
+
+### Pod Disruption Budget
+
+Ensure availability during updates:
+
+```yaml
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
 ```
 
 ## Database Setup
@@ -391,89 +578,69 @@ spec:
             summary: "High error rate in Triage Warden"
 ```
 
-## Operations
+## Upgrading
 
-### View Logs
+### Helm Upgrade
 
 ```bash
-# All pods
-kubectl logs -l app.kubernetes.io/name=triage-warden -n triage-warden -f
+# Check current version
+helm list -n triage-warden
 
-# Specific pod
-kubectl logs -f deployment/triage-warden -n triage-warden
+# Upgrade to new version
+helm upgrade triage-warden triage-warden/triage-warden \
+  --namespace triage-warden \
+  --values values-production.yaml \
+  --set image.tag=v1.1.0
 
-# Previous container (after crash)
-kubectl logs deployment/triage-warden -n triage-warden --previous
+# Monitor the rollout
+kubectl rollout status deployment/triage-warden-api -n triage-warden
 ```
 
-### Scale Deployment
+### Rollback
 
 ```bash
-# Manual scale
-kubectl scale deployment triage-warden -n triage-warden --replicas=5
+# View release history
+helm history triage-warden -n triage-warden
 
-# Check HPA status
-kubectl get hpa -n triage-warden
+# Rollback to previous version
+helm rollback triage-warden 1 -n triage-warden
 ```
 
-### Rolling Update
+## Database Migrations
+
+Triage Warden automatically runs database migrations on startup. For manual control:
 
 ```bash
-# Update image
-kubectl set image deployment/triage-warden \
-  triage-warden=ghcr.io/your-org/triage-warden:v1.2.0 \
-  -n triage-warden
+# Run migrations manually
+kubectl exec -it deployment/triage-warden-api -n triage-warden -- \
+  triage-warden migrate
 
-# Watch rollout
-kubectl rollout status deployment/triage-warden -n triage-warden
-
-# Rollback if needed
-kubectl rollout undo deployment/triage-warden -n triage-warden
+# Check migration status
+kubectl exec -it deployment/triage-warden-api -n triage-warden -- \
+  triage-warden migrate --status
 ```
 
-### Database Migration
+## TLS Configuration
 
-```bash
-# Run migrations via job
-kubectl create job --from=cronjob/triage-warden-migrate migrate-$(date +%s) -n triage-warden
+### Using cert-manager
+
+```yaml
+ingress:
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: triage-warden-tls
+      hosts:
+        - triage.example.com
 ```
 
-## Troubleshooting
-
-### Pod Not Starting
+### Manual TLS Secret
 
 ```bash
-# Check events
-kubectl describe pod -l app.kubernetes.io/name=triage-warden -n triage-warden
-
-# Common issues:
-# - ImagePullBackOff: Check image name and registry credentials
-# - CrashLoopBackOff: Check logs for startup errors
-# - Pending: Check resource requests and node capacity
-```
-
-### Database Connection Issues
-
-```bash
-# Test from pod
-kubectl exec -it deployment/triage-warden -n triage-warden -- \
-  curl -s http://localhost:8080/health | jq '.components.database'
-
-# Check secret
-kubectl get secret triage-warden-secrets -n triage-warden -o jsonpath='{.data.database-url}' | base64 -d
-```
-
-### Ingress Not Working
-
-```bash
-# Check ingress
-kubectl describe ingress triage-warden -n triage-warden
-
-# Check TLS secret
-kubectl get secret triage-warden-tls -n triage-warden
-
-# Check ingress controller logs
-kubectl logs -l app.kubernetes.io/name=ingress-nginx -n ingress-nginx
+kubectl create secret tls triage-warden-tls \
+  --namespace triage-warden \
+  --cert=tls.crt \
+  --key=tls.key
 ```
 
 ## Security Hardening
@@ -530,8 +697,145 @@ spec:
           port: 443
 ```
 
+## Troubleshooting
+
+### Pod Not Starting
+
+```bash
+# Check pod events
+kubectl describe pod -n triage-warden -l app.kubernetes.io/name=triage-warden
+
+# Check logs
+kubectl logs -n triage-warden -l app.kubernetes.io/name=triage-warden --previous
+
+# Common issues:
+# - ImagePullBackOff: Check image name and registry credentials
+# - CrashLoopBackOff: Check logs for startup errors
+# - Pending: Check resource requests and node capacity
+```
+
+### Database Connection Issues
+
+```bash
+# Test database connectivity from a pod
+kubectl exec -it deployment/triage-warden-api -n triage-warden -- \
+  curl -v telnet://postgres:5432
+
+# Check database URL
+kubectl get secret triage-warden-secrets -n triage-warden -o jsonpath='{.data.DATABASE_URL}' | base64 -d
+```
+
+### Health Check Failures
+
+```bash
+# Check liveness endpoint
+kubectl exec -it deployment/triage-warden-api -n triage-warden -- \
+  curl -s http://localhost:8080/live
+
+# Check readiness endpoint
+kubectl exec -it deployment/triage-warden-api -n triage-warden -- \
+  curl -s http://localhost:8080/ready
+
+# Check detailed health
+kubectl exec -it deployment/triage-warden-api -n triage-warden -- \
+  curl -s http://localhost:8080/health/detailed | jq
+```
+
+### Leader Election Issues
+
+```bash
+# Check which instance is the leader
+kubectl exec -it deployment/triage-warden-orchestrator-0 -n triage-warden -- \
+  curl -s http://localhost:8080/health/detailed | jq '.components.leader_elector'
+
+# Check leader lease in Redis
+kubectl exec -it deployment/triage-warden-redis-0 -n triage-warden -- \
+  redis-cli KEYS "tw:leader:*"
+```
+
+### Performance Issues
+
+```bash
+# Check resource usage
+kubectl top pods -n triage-warden
+
+# Check HPA status
+kubectl get hpa -n triage-warden
+
+# View Prometheus metrics
+kubectl port-forward svc/prometheus -n monitoring 9090:9090
+```
+
+### Ingress Not Working
+
+```bash
+# Check ingress
+kubectl describe ingress triage-warden -n triage-warden
+
+# Check TLS secret
+kubectl get secret triage-warden-tls -n triage-warden
+
+# Check ingress controller logs
+kubectl logs -l app.kubernetes.io/name=ingress-nginx -n ingress-nginx
+```
+
+## Operations
+
+### View Logs
+
+```bash
+# All pods
+kubectl logs -l app.kubernetes.io/name=triage-warden -n triage-warden -f
+
+# Specific pod
+kubectl logs -f deployment/triage-warden -n triage-warden
+
+# Previous container (after crash)
+kubectl logs deployment/triage-warden -n triage-warden --previous
+```
+
+### Scale Deployment
+
+```bash
+# Manual scale
+kubectl scale deployment triage-warden -n triage-warden --replicas=5
+
+# Check HPA status
+kubectl get hpa -n triage-warden
+```
+
+### Rolling Update
+
+```bash
+# Update image
+kubectl set image deployment/triage-warden \
+  triage-warden=ghcr.io/your-org/triage-warden:v1.2.0 \
+  -n triage-warden
+
+# Watch rollout
+kubectl rollout status deployment/triage-warden -n triage-warden
+
+# Rollback if needed
+kubectl rollout undo deployment/triage-warden -n triage-warden
+```
+
+## Uninstalling
+
+### Helm Uninstall
+
+```bash
+# Uninstall Triage Warden
+helm uninstall triage-warden -n triage-warden
+
+# Delete namespace (optional, removes all resources)
+kubectl delete namespace triage-warden
+
+# Delete PVCs if needed
+kubectl delete pvc -n triage-warden --all
+```
+
 ## Next Steps
 
-- [Configure connectors](../configuration/connectors-setup.md)
-- [Set up monitoring](../operations/monitoring.md)
-- [Review operational runbooks](../operations/README.md)
+- Configure [monitoring and alerting](../operations/monitoring.md)
+- Set up [horizontal scaling](../operations/scaling.md)
+- Review [configuration options](./configuration.md)
