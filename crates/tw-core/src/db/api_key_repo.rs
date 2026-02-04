@@ -9,6 +9,8 @@ use uuid::Uuid;
 /// Filter for listing API keys.
 #[derive(Debug, Clone, Default)]
 pub struct ApiKeyFilter {
+    /// Filter by tenant ID.
+    pub tenant_id: Option<Uuid>,
     /// Filter by user ID.
     pub user_id: Option<Uuid>,
     /// Filter by active (non-expired) keys only.
@@ -19,10 +21,13 @@ pub struct ApiKeyFilter {
 #[async_trait]
 pub trait ApiKeyRepository: Send + Sync {
     /// Creates a new API key.
-    async fn create(&self, api_key: &ApiKey) -> Result<ApiKey, DbError>;
+    async fn create(&self, tenant_id: Uuid, api_key: &ApiKey) -> Result<ApiKey, DbError>;
 
     /// Gets an API key by ID.
     async fn get(&self, id: Uuid) -> Result<Option<ApiKey>, DbError>;
+
+    /// Gets an API key by ID within a specific tenant (ensures tenant isolation).
+    async fn get_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<Option<ApiKey>, DbError>;
 
     /// Gets an API key by its prefix (for lookup during authentication).
     async fn get_by_prefix(&self, prefix: &str) -> Result<Option<ApiKey>, DbError>;
@@ -33,14 +38,31 @@ pub trait ApiKeyRepository: Send + Sync {
     /// Lists API keys for a specific user.
     async fn list_by_user(&self, user_id: Uuid) -> Result<Vec<ApiKey>, DbError>;
 
+    /// Lists API keys for a specific user within a tenant.
+    async fn list_by_user_for_tenant(
+        &self,
+        user_id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<Vec<ApiKey>, DbError>;
+
     /// Updates the last_used_at timestamp.
     async fn update_last_used(&self, id: Uuid) -> Result<(), DbError>;
 
     /// Deletes an API key.
     async fn delete(&self, id: Uuid) -> Result<bool, DbError>;
 
+    /// Deletes an API key within a specific tenant (ensures tenant isolation).
+    async fn delete_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<bool, DbError>;
+
     /// Deletes all API keys for a user.
     async fn delete_by_user(&self, user_id: Uuid) -> Result<u64, DbError>;
+
+    /// Deletes all API keys for a user within a tenant.
+    async fn delete_by_user_for_tenant(
+        &self,
+        user_id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<u64, DbError>;
 
     /// Counts API keys matching a filter.
     async fn count(&self, filter: &ApiKeyFilter) -> Result<u64, DbError>;
@@ -62,8 +84,9 @@ impl SqliteApiKeyRepository {
 #[cfg(feature = "database")]
 #[async_trait]
 impl ApiKeyRepository for SqliteApiKeyRepository {
-    async fn create(&self, api_key: &ApiKey) -> Result<ApiKey, DbError> {
+    async fn create(&self, tenant_id: Uuid, api_key: &ApiKey) -> Result<ApiKey, DbError> {
         let id = api_key.id.to_string();
+        let tenant_id_str = tenant_id.to_string();
         let user_id = api_key.user_id.to_string();
         let scopes = serde_json::to_string(&api_key.scopes)
             .map_err(|e| DbError::Serialization(e.to_string()))?;
@@ -73,11 +96,12 @@ impl ApiKeyRepository for SqliteApiKeyRepository {
 
         sqlx::query(
             r#"
-            INSERT INTO api_keys (id, user_id, name, key_hash, key_prefix, scopes, expires_at, last_used_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO api_keys (id, tenant_id, user_id, name, key_hash, key_prefix, scopes, expires_at, last_used_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&id)
+        .bind(&tenant_id_str)
         .bind(&user_id)
         .bind(&api_key.name)
         .bind(&api_key.key_hash)
@@ -95,7 +119,7 @@ impl ApiKeyRepository for SqliteApiKeyRepository {
     async fn get(&self, id: Uuid) -> Result<Option<ApiKey>, DbError> {
         let id_str = id.to_string();
         let row: Option<SqliteApiKeyRow> = sqlx::query_as(
-            "SELECT id, user_id, name, key_hash, key_prefix, scopes, expires_at, last_used_at, created_at FROM api_keys WHERE id = ?",
+            "SELECT id, tenant_id, user_id, name, key_hash, key_prefix, scopes, expires_at, last_used_at, created_at FROM api_keys WHERE id = ?",
         )
         .bind(&id_str)
         .fetch_optional(&self.pool)
@@ -104,9 +128,23 @@ impl ApiKeyRepository for SqliteApiKeyRepository {
         row.map(TryInto::try_into).transpose()
     }
 
+    async fn get_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<Option<ApiKey>, DbError> {
+        let id_str = id.to_string();
+        let tenant_id_str = tenant_id.to_string();
+        let row: Option<SqliteApiKeyRow> = sqlx::query_as(
+            "SELECT id, tenant_id, user_id, name, key_hash, key_prefix, scopes, expires_at, last_used_at, created_at FROM api_keys WHERE id = ? AND tenant_id = ?",
+        )
+        .bind(&id_str)
+        .bind(&tenant_id_str)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(TryInto::try_into).transpose()
+    }
+
     async fn get_by_prefix(&self, prefix: &str) -> Result<Option<ApiKey>, DbError> {
         let row: Option<SqliteApiKeyRow> = sqlx::query_as(
-            "SELECT id, user_id, name, key_hash, key_prefix, scopes, expires_at, last_used_at, created_at FROM api_keys WHERE key_prefix = ?",
+            "SELECT id, tenant_id, user_id, name, key_hash, key_prefix, scopes, expires_at, last_used_at, created_at FROM api_keys WHERE key_prefix = ?",
         )
         .bind(prefix)
         .fetch_optional(&self.pool)
@@ -117,9 +155,14 @@ impl ApiKeyRepository for SqliteApiKeyRepository {
 
     async fn list(&self, filter: &ApiKeyFilter) -> Result<Vec<ApiKey>, DbError> {
         let mut query = String::from(
-            "SELECT id, user_id, name, key_hash, key_prefix, scopes, expires_at, last_used_at, created_at FROM api_keys WHERE 1=1",
+            "SELECT id, tenant_id, user_id, name, key_hash, key_prefix, scopes, expires_at, last_used_at, created_at FROM api_keys WHERE 1=1",
         );
         let mut params: Vec<String> = Vec::new();
+
+        if let Some(tenant_id) = &filter.tenant_id {
+            query.push_str(" AND tenant_id = ?");
+            params.push(tenant_id.to_string());
+        }
 
         if let Some(user_id) = &filter.user_id {
             query.push_str(" AND user_id = ?");
@@ -144,6 +187,20 @@ impl ApiKeyRepository for SqliteApiKeyRepository {
 
     async fn list_by_user(&self, user_id: Uuid) -> Result<Vec<ApiKey>, DbError> {
         self.list(&ApiKeyFilter {
+            tenant_id: None,
+            user_id: Some(user_id),
+            active_only: None,
+        })
+        .await
+    }
+
+    async fn list_by_user_for_tenant(
+        &self,
+        user_id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<Vec<ApiKey>, DbError> {
+        self.list(&ApiKeyFilter {
+            tenant_id: Some(tenant_id),
             user_id: Some(user_id),
             active_only: None,
         })
@@ -171,6 +228,16 @@ impl ApiKeyRepository for SqliteApiKeyRepository {
         Ok(result.rows_affected() > 0)
     }
 
+    async fn delete_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<bool, DbError> {
+        let result = sqlx::query("DELETE FROM api_keys WHERE id = ? AND tenant_id = ?")
+            .bind(id.to_string())
+            .bind(tenant_id.to_string())
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
     async fn delete_by_user(&self, user_id: Uuid) -> Result<u64, DbError> {
         let result = sqlx::query("DELETE FROM api_keys WHERE user_id = ?")
             .bind(user_id.to_string())
@@ -180,9 +247,28 @@ impl ApiKeyRepository for SqliteApiKeyRepository {
         Ok(result.rows_affected())
     }
 
+    async fn delete_by_user_for_tenant(
+        &self,
+        user_id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<u64, DbError> {
+        let result = sqlx::query("DELETE FROM api_keys WHERE user_id = ? AND tenant_id = ?")
+            .bind(user_id.to_string())
+            .bind(tenant_id.to_string())
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected())
+    }
+
     async fn count(&self, filter: &ApiKeyFilter) -> Result<u64, DbError> {
         let mut query = String::from("SELECT COUNT(*) as count FROM api_keys WHERE 1=1");
         let mut params: Vec<String> = Vec::new();
+
+        if let Some(tenant_id) = &filter.tenant_id {
+            query.push_str(" AND tenant_id = ?");
+            params.push(tenant_id.to_string());
+        }
 
         if let Some(user_id) = &filter.user_id {
             query.push_str(" AND user_id = ?");
@@ -220,17 +306,18 @@ impl PgApiKeyRepository {
 #[cfg(feature = "database")]
 #[async_trait]
 impl ApiKeyRepository for PgApiKeyRepository {
-    async fn create(&self, api_key: &ApiKey) -> Result<ApiKey, DbError> {
+    async fn create(&self, tenant_id: Uuid, api_key: &ApiKey) -> Result<ApiKey, DbError> {
         let scopes = serde_json::to_value(&api_key.scopes)
             .map_err(|e| DbError::Serialization(e.to_string()))?;
 
         sqlx::query(
             r#"
-            INSERT INTO api_keys (id, user_id, name, key_hash, key_prefix, scopes, expires_at, last_used_at, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            INSERT INTO api_keys (id, tenant_id, user_id, name, key_hash, key_prefix, scopes, expires_at, last_used_at, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             "#,
         )
         .bind(api_key.id)
+        .bind(tenant_id)
         .bind(api_key.user_id)
         .bind(&api_key.name)
         .bind(&api_key.key_hash)
@@ -247,7 +334,7 @@ impl ApiKeyRepository for PgApiKeyRepository {
 
     async fn get(&self, id: Uuid) -> Result<Option<ApiKey>, DbError> {
         let row: Option<PgApiKeyRow> = sqlx::query_as(
-            "SELECT id, user_id, name, key_hash, key_prefix, scopes, expires_at, last_used_at, created_at FROM api_keys WHERE id = $1",
+            "SELECT id, tenant_id, user_id, name, key_hash, key_prefix, scopes, expires_at, last_used_at, created_at FROM api_keys WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -256,9 +343,21 @@ impl ApiKeyRepository for PgApiKeyRepository {
         row.map(TryInto::try_into).transpose()
     }
 
+    async fn get_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<Option<ApiKey>, DbError> {
+        let row: Option<PgApiKeyRow> = sqlx::query_as(
+            "SELECT id, tenant_id, user_id, name, key_hash, key_prefix, scopes, expires_at, last_used_at, created_at FROM api_keys WHERE id = $1 AND tenant_id = $2",
+        )
+        .bind(id)
+        .bind(tenant_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(TryInto::try_into).transpose()
+    }
+
     async fn get_by_prefix(&self, prefix: &str) -> Result<Option<ApiKey>, DbError> {
         let row: Option<PgApiKeyRow> = sqlx::query_as(
-            "SELECT id, user_id, name, key_hash, key_prefix, scopes, expires_at, last_used_at, created_at FROM api_keys WHERE key_prefix = $1",
+            "SELECT id, tenant_id, user_id, name, key_hash, key_prefix, scopes, expires_at, last_used_at, created_at FROM api_keys WHERE key_prefix = $1",
         )
         .bind(prefix)
         .fetch_optional(&self.pool)
@@ -268,9 +367,17 @@ impl ApiKeyRepository for PgApiKeyRepository {
     }
 
     async fn list(&self, filter: &ApiKeyFilter) -> Result<Vec<ApiKey>, DbError> {
-        let rows: Vec<PgApiKeyRow> = if filter.user_id.is_some() || filter.active_only.is_some() {
+        let rows: Vec<PgApiKeyRow> = if filter.tenant_id.is_some()
+            || filter.user_id.is_some()
+            || filter.active_only.is_some()
+        {
             let mut conditions = vec!["1=1".to_string()];
             let mut param_idx = 1;
+
+            if filter.tenant_id.is_some() {
+                conditions.push(format!("tenant_id = ${}", param_idx));
+                param_idx += 1;
+            }
 
             if filter.user_id.is_some() {
                 conditions.push(format!("user_id = ${}", param_idx));
@@ -285,11 +392,15 @@ impl ApiKeyRepository for PgApiKeyRepository {
             }
 
             let query = format!(
-                "SELECT id, user_id, name, key_hash, key_prefix, scopes, expires_at, last_used_at, created_at FROM api_keys WHERE {} ORDER BY created_at DESC",
+                "SELECT id, tenant_id, user_id, name, key_hash, key_prefix, scopes, expires_at, last_used_at, created_at FROM api_keys WHERE {} ORDER BY created_at DESC",
                 conditions.join(" AND ")
             );
 
             let mut sqlx_query = sqlx::query_as::<_, PgApiKeyRow>(&query);
+
+            if let Some(tenant_id) = filter.tenant_id {
+                sqlx_query = sqlx_query.bind(tenant_id);
+            }
 
             if let Some(user_id) = filter.user_id {
                 sqlx_query = sqlx_query.bind(user_id);
@@ -302,7 +413,7 @@ impl ApiKeyRepository for PgApiKeyRepository {
             sqlx_query.fetch_all(&self.pool).await?
         } else {
             sqlx::query_as(
-                "SELECT id, user_id, name, key_hash, key_prefix, scopes, expires_at, last_used_at, created_at FROM api_keys ORDER BY created_at DESC",
+                "SELECT id, tenant_id, user_id, name, key_hash, key_prefix, scopes, expires_at, last_used_at, created_at FROM api_keys ORDER BY created_at DESC",
             )
             .fetch_all(&self.pool)
             .await?
@@ -313,6 +424,20 @@ impl ApiKeyRepository for PgApiKeyRepository {
 
     async fn list_by_user(&self, user_id: Uuid) -> Result<Vec<ApiKey>, DbError> {
         self.list(&ApiKeyFilter {
+            tenant_id: None,
+            user_id: Some(user_id),
+            active_only: None,
+        })
+        .await
+    }
+
+    async fn list_by_user_for_tenant(
+        &self,
+        user_id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<Vec<ApiKey>, DbError> {
+        self.list(&ApiKeyFilter {
+            tenant_id: Some(tenant_id),
             user_id: Some(user_id),
             active_only: None,
         })
@@ -337,6 +462,16 @@ impl ApiKeyRepository for PgApiKeyRepository {
         Ok(result.rows_affected() > 0)
     }
 
+    async fn delete_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<bool, DbError> {
+        let result = sqlx::query("DELETE FROM api_keys WHERE id = $1 AND tenant_id = $2")
+            .bind(id)
+            .bind(tenant_id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
     async fn delete_by_user(&self, user_id: Uuid) -> Result<u64, DbError> {
         let result = sqlx::query("DELETE FROM api_keys WHERE user_id = $1")
             .bind(user_id)
@@ -346,10 +481,32 @@ impl ApiKeyRepository for PgApiKeyRepository {
         Ok(result.rows_affected())
     }
 
+    async fn delete_by_user_for_tenant(
+        &self,
+        user_id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<u64, DbError> {
+        let result = sqlx::query("DELETE FROM api_keys WHERE user_id = $1 AND tenant_id = $2")
+            .bind(user_id)
+            .bind(tenant_id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected())
+    }
+
     async fn count(&self, filter: &ApiKeyFilter) -> Result<u64, DbError> {
-        let count: i64 = if filter.user_id.is_some() || filter.active_only.is_some() {
+        let count: i64 = if filter.tenant_id.is_some()
+            || filter.user_id.is_some()
+            || filter.active_only.is_some()
+        {
             let mut conditions = vec!["1=1".to_string()];
             let mut param_idx = 1;
+
+            if filter.tenant_id.is_some() {
+                conditions.push(format!("tenant_id = ${}", param_idx));
+                param_idx += 1;
+            }
 
             if filter.user_id.is_some() {
                 conditions.push(format!("user_id = ${}", param_idx));
@@ -369,6 +526,10 @@ impl ApiKeyRepository for PgApiKeyRepository {
             );
 
             let mut sqlx_query = sqlx::query_scalar::<_, i64>(&query);
+
+            if let Some(tenant_id) = filter.tenant_id {
+                sqlx_query = sqlx_query.bind(tenant_id);
+            }
 
             if let Some(user_id) = filter.user_id {
                 sqlx_query = sqlx_query.bind(user_id);
@@ -404,6 +565,8 @@ pub fn create_api_key_repository(pool: &DbPool) -> Box<dyn ApiKeyRepository> {
 #[derive(sqlx::FromRow)]
 struct SqliteApiKeyRow {
     id: String,
+    #[allow(dead_code)]
+    tenant_id: String,
     user_id: String,
     name: String,
     key_hash: String,
@@ -464,6 +627,8 @@ impl TryFrom<SqliteApiKeyRow> for ApiKey {
 #[derive(sqlx::FromRow)]
 struct PgApiKeyRow {
     id: Uuid,
+    #[allow(dead_code)]
+    tenant_id: Uuid,
     user_id: Uuid,
     name: String,
     key_hash: String,
@@ -503,6 +668,7 @@ mod tests {
     #[test]
     fn test_api_key_filter_default() {
         let filter = ApiKeyFilter::default();
+        assert!(filter.tenant_id.is_none());
         assert!(filter.user_id.is_none());
         assert!(filter.active_only.is_none());
     }

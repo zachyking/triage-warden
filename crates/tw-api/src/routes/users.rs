@@ -145,7 +145,9 @@ async fn list_users(
     let page = query.page.max(1);
     let per_page = query.per_page.clamp(1, MAX_PER_PAGE);
 
+    // TODO: Task 1.4.1 - Get tenant_id from TenantContext middleware
     let filter = UserFilter {
+        tenant_id: None, // Will be set by tenant middleware
         role: query.role.as_deref().and_then(|r| r.parse().ok()),
         enabled: query.enabled,
         search: query.search,
@@ -408,6 +410,7 @@ mod tests {
 
         let user = User {
             id: Uuid::new_v4(),
+            tenant_id: DEFAULT_TENANT_ID,
             email: "test@example.com".to_string(),
             username: "testuser".to_string(),
             password_hash: "hashed".to_string(),
@@ -436,6 +439,7 @@ mod tests {
 
         let user = User {
             id: Uuid::new_v4(),
+            tenant_id: DEFAULT_TENANT_ID,
             email: "minimal@example.com".to_string(),
             username: "minimal".to_string(),
             password_hash: "hashed".to_string(),

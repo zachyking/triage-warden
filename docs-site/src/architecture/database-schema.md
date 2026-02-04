@@ -4,11 +4,48 @@ Triage Warden supports both SQLite (development/small deployments) and PostgreSQ
 
 ## Overview
 
-The database consists of 11 tables organized into three logical groups:
+The database consists of 13 tables organized into four logical groups:
 
 - **Core Incident Management**: incidents, audit_logs, actions, approvals
 - **Configuration**: playbooks, connectors, policies, notification_channels, settings
 - **Authentication**: users, sessions, api_keys
+- **Multi-Tenancy**: tenants, feature_flags
+
+## Multi-Tenancy
+
+All tenant-scoped tables include a `tenant_id` foreign key that references the `tenants` table. In PostgreSQL, Row-Level Security (RLS) policies automatically filter all queries by the current tenant context.
+
+### tenants
+
+Tenant organizations in a multi-tenant deployment.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| id | UUID/TEXT | PRIMARY KEY | Unique identifier |
+| name | TEXT | NOT NULL | Organization display name |
+| slug | TEXT | UNIQUE, NOT NULL | URL-safe identifier for routing |
+| status | ENUM/TEXT | DEFAULT 'active' | active, suspended, pending_deletion |
+| settings | JSON/TEXT | DEFAULT '{}' | Tenant-specific settings |
+| created_at | TIMESTAMP/TEXT | NOT NULL | Creation timestamp |
+| updated_at | TIMESTAMP/TEXT | NOT NULL | Last update timestamp |
+
+**Indexes**: slug (unique), status
+
+### feature_flags
+
+Feature flag configuration for gradual rollouts.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| name | TEXT | PRIMARY KEY | Flag name |
+| description | TEXT | DEFAULT '' | Flag description |
+| default_enabled | BOOLEAN | DEFAULT FALSE | Default state |
+| tenant_overrides | JSON | DEFAULT '{}' | Per-tenant overrides |
+| percentage_rollout | INTEGER | NULLABLE | 0-100 percentage rollout |
+| created_at | TIMESTAMP | NOT NULL | Creation timestamp |
+| updated_at | TIMESTAMP | NOT NULL | Last update timestamp |
+
+**Note**: The `tenants` and `feature_flags` tables are NOT protected by RLS.
 
 ## Entity Relationship Diagram
 
@@ -53,6 +90,7 @@ Stores security incidents created from incoming alerts.
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
 | id | UUID/TEXT | PRIMARY KEY | Unique identifier |
+| tenant_id | UUID/TEXT | FK → tenants, NOT NULL | Owning tenant |
 | source | JSON/TEXT | NOT NULL | Alert source metadata |
 | severity | ENUM/TEXT | NOT NULL | info, low, medium, high, critical |
 | status | ENUM/TEXT | NOT NULL | See [Status Values](#incident-status-values) |
@@ -66,7 +104,9 @@ Stores security incidents created from incoming alerts.
 | created_at | TIMESTAMP/TEXT | NOT NULL | Creation timestamp |
 | updated_at | TIMESTAMP/TEXT | NOT NULL | Last update timestamp |
 
-**Indexes**: status, severity, created_at, updated_at
+**Indexes**: (tenant_id, status), (tenant_id, severity), (tenant_id, created_at), status, severity, created_at, updated_at
+
+**RLS**: Protected by Row-Level Security in PostgreSQL.
 
 #### Incident Status Values
 
@@ -300,6 +340,36 @@ API key authentication.
 - Native BOOLEAN type
 - Native JSONB type with indexing
 - Uses custom ENUM types for status fields
+- **Row-Level Security (RLS)** enabled on all tenant-scoped tables
+
+#### Row-Level Security
+
+PostgreSQL deployments use RLS for defense-in-depth tenant isolation:
+
+```sql
+-- RLS policy example (automatically applied to all queries)
+CREATE POLICY incidents_select_tenant_isolation ON incidents
+    FOR SELECT
+    USING (tenant_id = current_setting('app.current_tenant', true)::uuid);
+```
+
+To set the tenant context:
+
+```sql
+-- Set before executing tenant-scoped queries
+SELECT set_tenant_context('00000000-0000-0000-0000-000000000001'::uuid);
+
+-- Or use the session variable directly
+SET app.current_tenant = '00000000-0000-0000-0000-000000000001';
+```
+
+Helper functions:
+
+| Function | Description |
+|----------|-------------|
+| `set_tenant_context(uuid)` | Sets tenant context, returns previous value |
+| `get_current_tenant()` | Returns current tenant UUID or NULL |
+| `clear_tenant_context()` | Clears tenant context |
 
 ## Migrations
 

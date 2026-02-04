@@ -14,7 +14,10 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 use validator::Validate;
 
-use tw_core::{auth::ApiKey, db::create_api_key_repository};
+use tw_core::{
+    auth::{ApiKey, DEFAULT_TENANT_ID},
+    db::create_api_key_repository,
+};
 
 use crate::auth::AuthenticatedUser;
 use crate::error::ApiError;
@@ -147,7 +150,7 @@ async fn create_api_key(
     }
 
     let api_key_repo = create_api_key_repository(&state.db);
-    let created_key = api_key_repo.create(&api_key).await?;
+    let created_key = api_key_repo.create(DEFAULT_TENANT_ID, &api_key).await?;
 
     info!(
         "API key created by {}: {} (prefix: {})",

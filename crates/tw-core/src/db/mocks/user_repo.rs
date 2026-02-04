@@ -227,16 +227,162 @@ impl UserRepository for MockUserRepository {
         let users = self.users.read().await;
         Ok(!users.is_empty())
     }
+
+    async fn get_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<Option<User>, DbError> {
+        let users = self.users.read().await;
+        match users.get(&id) {
+            Some(user) if user.tenant_id == tenant_id => Ok(Some(user.clone())),
+            _ => Ok(None),
+        }
+    }
+
+    async fn get_by_email_for_tenant(
+        &self,
+        email: &str,
+        tenant_id: Uuid,
+    ) -> Result<Option<User>, DbError> {
+        let users = self.users.read().await;
+        Ok(users
+            .values()
+            .find(|u| u.email == email && u.tenant_id == tenant_id)
+            .cloned())
+    }
+
+    async fn get_by_username_for_tenant(
+        &self,
+        username: &str,
+        tenant_id: Uuid,
+    ) -> Result<Option<User>, DbError> {
+        let users = self.users.read().await;
+        Ok(users
+            .values()
+            .find(|u| u.username == username && u.tenant_id == tenant_id)
+            .cloned())
+    }
+
+    async fn update_for_tenant(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+        update: &UserUpdate,
+    ) -> Result<User, DbError> {
+        let mut users = self.users.write().await;
+
+        // Check if user exists and belongs to the tenant
+        let user = users.get(&id).ok_or_else(|| DbError::NotFound {
+            entity: "User".to_string(),
+            id: id.to_string(),
+        })?;
+
+        if user.tenant_id != tenant_id {
+            return Err(DbError::NotFound {
+                entity: "User".to_string(),
+                id: id.to_string(),
+            });
+        }
+
+        // Check for duplicate email if email is being updated
+        if let Some(email) = &update.email {
+            for (other_id, other) in users.iter() {
+                if *other_id != id && other.email == *email && other.tenant_id == tenant_id {
+                    return Err(DbError::Constraint(format!(
+                        "User with email '{}' already exists",
+                        email
+                    )));
+                }
+            }
+        }
+
+        // Check for duplicate username if username is being updated
+        if let Some(username) = &update.username {
+            for (other_id, other) in users.iter() {
+                if *other_id != id && other.username == *username && other.tenant_id == tenant_id {
+                    return Err(DbError::Constraint(format!(
+                        "User with username '{}' already exists",
+                        username
+                    )));
+                }
+            }
+        }
+
+        // Now perform the update
+        let user = users.get_mut(&id).unwrap();
+
+        if let Some(email) = &update.email {
+            user.email = email.clone();
+        }
+
+        if let Some(username) = &update.username {
+            user.username = username.clone();
+        }
+
+        if let Some(role) = update.role {
+            user.role = role;
+        }
+
+        if let Some(display_name) = &update.display_name {
+            user.display_name = display_name.clone();
+        }
+
+        if let Some(enabled) = update.enabled {
+            user.enabled = enabled;
+        }
+
+        user.updated_at = Utc::now();
+        Ok(user.clone())
+    }
+
+    async fn update_password_for_tenant(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+        password_hash: &str,
+    ) -> Result<(), DbError> {
+        let mut users = self.users.write().await;
+
+        let user = users.get_mut(&id).ok_or_else(|| DbError::NotFound {
+            entity: "User".to_string(),
+            id: id.to_string(),
+        })?;
+
+        if user.tenant_id != tenant_id {
+            return Err(DbError::NotFound {
+                entity: "User".to_string(),
+                id: id.to_string(),
+            });
+        }
+
+        user.password_hash = password_hash.to_string();
+        user.updated_at = Utc::now();
+        Ok(())
+    }
+
+    async fn delete_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<bool, DbError> {
+        let mut users = self.users.write().await;
+        if let Some(user) = users.get(&id) {
+            if user.tenant_id == tenant_id {
+                users.remove(&id);
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn any_exist_for_tenant(&self, tenant_id: Uuid) -> Result<bool, DbError> {
+        let users = self.users.read().await;
+        Ok(users.values().any(|u| u.tenant_id == tenant_id))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::Role;
+    use crate::auth::{Role, DEFAULT_TENANT_ID};
 
     fn test_user(id: Uuid, username: &str, email: &str) -> User {
         User {
             id,
+            tenant_id: DEFAULT_TENANT_ID,
             email: email.to_string(),
             username: username.to_string(),
             password_hash: "hashed".to_string(),

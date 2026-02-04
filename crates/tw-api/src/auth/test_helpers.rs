@@ -4,7 +4,10 @@
 //! setting up full session infrastructure.
 
 use axum::{extract::Request, middleware::Next, response::Response};
-use tw_core::{auth::Role, User};
+use tw_core::{
+    auth::{Role, DEFAULT_TENANT_ID},
+    User,
+};
 use uuid::Uuid;
 
 /// Extension type for injecting a test user into requests.
@@ -16,6 +19,7 @@ impl TestUser {
     pub fn admin() -> Self {
         TestUser(User {
             id: Uuid::new_v4(),
+            tenant_id: DEFAULT_TENANT_ID,
             email: "admin@test.local".to_string(),
             username: "test_admin".to_string(),
             password_hash: "not_used".to_string(),
@@ -32,6 +36,7 @@ impl TestUser {
     pub fn analyst() -> Self {
         TestUser(User {
             id: Uuid::new_v4(),
+            tenant_id: DEFAULT_TENANT_ID,
             email: "analyst@test.local".to_string(),
             username: "test_analyst".to_string(),
             password_hash: "not_used".to_string(),
@@ -48,6 +53,7 @@ impl TestUser {
     pub fn viewer() -> Self {
         TestUser(User {
             id: Uuid::new_v4(),
+            tenant_id: DEFAULT_TENANT_ID,
             email: "viewer@test.local".to_string(),
             username: "test_viewer".to_string(),
             password_hash: "not_used".to_string(),

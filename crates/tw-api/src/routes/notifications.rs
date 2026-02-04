@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::error::ApiError;
 use crate::state::AppState;
+use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::db::{create_notification_repository, NotificationChannelRepository};
 use tw_core::notification::{ChannelType, NotificationChannel, NotificationChannelUpdate};
 
@@ -203,7 +204,7 @@ async fn create_channel(
     channel.enabled = enabled;
 
     let repo: Box<dyn NotificationChannelRepository> = create_notification_repository(&state.db);
-    let created = repo.create(&channel).await?;
+    let created = repo.create(DEFAULT_TENANT_ID, &channel).await?;
 
     // Return with HX-Trigger for toast notification
     let trigger_json = serde_json::json!({
@@ -751,6 +752,40 @@ mod tests {
         .await
         .expect("Failed to create settings table");
 
+        // Create tenants table for multi-tenancy
+        pool.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS tenants (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                slug TEXT NOT NULL UNIQUE,
+                settings TEXT NOT NULL DEFAULT '{}',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT OR IGNORE INTO tenants (id, name, slug, settings, enabled, created_at, updated_at)
+            VALUES ('00000000-0000-0000-0000-000000000001', 'Default', 'default', '{}', 1, datetime('now'), datetime('now'));
+            "#,
+        )
+        .await
+        .expect("Failed to create tenants table");
+
+        // Add tenant_id to tables that need it
+        pool.execute(
+            r#"
+            ALTER TABLE notification_channels ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001' REFERENCES tenants(id);
+            ALTER TABLE settings ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001';
+            ALTER TABLE incidents ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001' REFERENCES tenants(id);
+            ALTER TABLE audit_logs ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001' REFERENCES tenants(id);
+            ALTER TABLE playbooks ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001' REFERENCES tenants(id);
+            ALTER TABLE connectors ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001' REFERENCES tenants(id);
+            ALTER TABLE policies ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001' REFERENCES tenants(id);
+            "#,
+        )
+        .await
+        .expect("Failed to add tenant_id to tables");
+
         pool
     }
 
@@ -808,7 +843,7 @@ mod tests {
             serde_json::json!({"webhook_url": "https://hooks.slack.com/test"}),
             vec!["incident.created".to_string()],
         );
-        repo.create(&channel).await.unwrap();
+        repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
         let state = AppState::new(db, event_bus);
@@ -856,7 +891,7 @@ mod tests {
             serde_json::json!({"webhook_url": "https://outlook.office.com/webhook/test"}),
             vec!["action.approved".to_string()],
         );
-        let created = repo.create(&channel).await.unwrap();
+        let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
         let state = AppState::new(db, event_bus);
@@ -1183,7 +1218,7 @@ mod tests {
             serde_json::json!({"webhook_url": "https://hooks.slack.com/test"}),
             vec!["incident.created".to_string()],
         );
-        let created = repo.create(&channel).await.unwrap();
+        let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
         let state = AppState::new(db, event_bus);
@@ -1255,7 +1290,7 @@ mod tests {
             serde_json::json!({"webhook_url": "https://example.com/delete"}),
             vec![],
         );
-        let created = repo.create(&channel).await.unwrap();
+        let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
         let state = AppState::new(db, event_bus);
@@ -1320,7 +1355,7 @@ mod tests {
             vec!["incident.resolved".to_string()],
         );
         channel.enabled = false;
-        let created = repo.create(&channel).await.unwrap();
+        let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         assert!(!created.enabled);
 
@@ -1365,7 +1400,7 @@ mod tests {
             vec![],
         );
         channel.enabled = true;
-        let created = repo.create(&channel).await.unwrap();
+        let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         assert!(created.enabled);
 
@@ -1436,7 +1471,7 @@ mod tests {
             serde_json::json!({"recipients": "test@example.com"}),
             vec!["incident.created".to_string()],
         );
-        let created = repo.create(&channel).await.unwrap();
+        let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
         let state = AppState::new(db, event_bus);
@@ -1479,7 +1514,7 @@ mod tests {
             serde_json::json!({"integration_key": "test123"}),
             vec!["incident.created".to_string()],
         );
-        let created = repo.create(&channel).await.unwrap();
+        let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
         let state = AppState::new(db, event_bus);
@@ -1541,7 +1576,7 @@ mod tests {
             serde_json::json!({}), // Missing webhook_url
             vec![],
         );
-        let created = repo.create(&channel).await.unwrap();
+        let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
         let state = AppState::new(db, event_bus);
@@ -1617,7 +1652,7 @@ mod tests {
             serde_json::json!({"webhook_url": "https://example.com/hx"}),
             vec![],
         );
-        let created = repo.create(&channel).await.unwrap();
+        let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
         let state = AppState::new(db, event_bus);
@@ -1660,7 +1695,7 @@ mod tests {
             serde_json::json!({"webhook_url": "https://hooks.slack.com/hx"}),
             vec![],
         );
-        let created = repo.create(&channel).await.unwrap();
+        let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
         let state = AppState::new(db, event_bus);
@@ -1707,7 +1742,7 @@ mod tests {
             serde_json::json!({"webhook_url": "https://hooks.slack.com/old"}),
             vec![],
         );
-        let created = repo.create(&channel).await.unwrap();
+        let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
         let state = AppState::new(db, event_bus);
@@ -1755,7 +1790,7 @@ mod tests {
             vec![],
         );
         channel.enabled = false;
-        let created = repo.create(&channel).await.unwrap();
+        let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         assert!(!created.enabled);
 
@@ -1802,7 +1837,7 @@ mod tests {
             serde_json::json!({"webhook_url": "https://hooks.slack.com/test"}),
             vec![],
         );
-        let created = repo.create(&channel).await.unwrap();
+        let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
         let state = AppState::new(db, event_bus);
@@ -1848,7 +1883,7 @@ mod tests {
             serde_json::json!({"webhook_url": "https://hooks.slack.com/test"}),
             vec![],
         );
-        let created = repo.create(&channel).await.unwrap();
+        let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
         let state = AppState::new(db, event_bus);
@@ -1994,7 +2029,7 @@ mod tests {
             serde_json::json!({"webhook_url": "https://hooks.slack.com/test1"}),
             vec!["incident.created".to_string()],
         );
-        repo.create(&channel1).await.unwrap();
+        repo.create(DEFAULT_TENANT_ID, &channel1).await.unwrap();
 
         let channel2 = NotificationChannel::new(
             "Teams Channel".to_string(),
@@ -2002,7 +2037,7 @@ mod tests {
             serde_json::json!({"webhook_url": "https://outlook.office.com/webhook/test2"}),
             vec!["action.approved".to_string()],
         );
-        repo.create(&channel2).await.unwrap();
+        repo.create(DEFAULT_TENANT_ID, &channel2).await.unwrap();
 
         let channel3 = NotificationChannel::new(
             "Email Channel".to_string(),
@@ -2010,7 +2045,7 @@ mod tests {
             serde_json::json!({"recipients": "admin@test.com"}),
             vec![],
         );
-        repo.create(&channel3).await.unwrap();
+        repo.create(DEFAULT_TENANT_ID, &channel3).await.unwrap();
 
         let event_bus = EventBus::new(100);
         let state = AppState::new(db, event_bus);
@@ -2054,7 +2089,7 @@ mod tests {
                 "action.approved".to_string(),
             ],
         );
-        let created = repo.create(&channel).await.unwrap();
+        let created = repo.create(DEFAULT_TENANT_ID, &channel).await.unwrap();
 
         let event_bus = EventBus::new(100);
         let state = AppState::new(db, event_bus);

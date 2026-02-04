@@ -185,10 +185,11 @@ async fn get_connectors_health(state: &AppState) -> ConnectorsHealth {
 
 /// Get LLM configuration health.
 async fn get_llm_health(state: &AppState) -> LlmHealth {
+    use tw_core::auth::DEFAULT_TENANT_ID;
     use tw_core::db::create_settings_repository;
 
     let repo = create_settings_repository(&state.db, state.encryptor.clone());
-    let llm_settings = repo.get_llm().await.ok();
+    let llm_settings = repo.get_llm(DEFAULT_TENANT_ID).await.ok();
 
     match llm_settings {
         Some(settings) => LlmHealth {

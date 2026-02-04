@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use uuid::Uuid;
 
 /// General application settings.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -72,29 +73,33 @@ impl Default for LlmSettings {
 /// Repository trait for settings persistence.
 #[async_trait]
 pub trait SettingsRepository: Send + Sync {
-    /// Gets general settings.
-    async fn get_general(&self) -> Result<GeneralSettings, DbError>;
+    /// Gets general settings for a tenant.
+    async fn get_general(&self, tenant_id: Uuid) -> Result<GeneralSettings, DbError>;
 
-    /// Saves general settings.
-    async fn save_general(&self, settings: &GeneralSettings) -> Result<(), DbError>;
+    /// Saves general settings for a tenant.
+    async fn save_general(
+        &self,
+        tenant_id: Uuid,
+        settings: &GeneralSettings,
+    ) -> Result<(), DbError>;
 
-    /// Gets rate limit settings.
-    async fn get_rate_limits(&self) -> Result<RateLimits, DbError>;
+    /// Gets rate limit settings for a tenant.
+    async fn get_rate_limits(&self, tenant_id: Uuid) -> Result<RateLimits, DbError>;
 
-    /// Saves rate limit settings.
-    async fn save_rate_limits(&self, limits: &RateLimits) -> Result<(), DbError>;
+    /// Saves rate limit settings for a tenant.
+    async fn save_rate_limits(&self, tenant_id: Uuid, limits: &RateLimits) -> Result<(), DbError>;
 
-    /// Gets LLM settings.
-    async fn get_llm(&self) -> Result<LlmSettings, DbError>;
+    /// Gets LLM settings for a tenant.
+    async fn get_llm(&self, tenant_id: Uuid) -> Result<LlmSettings, DbError>;
 
-    /// Saves LLM settings.
-    async fn save_llm(&self, settings: &LlmSettings) -> Result<(), DbError>;
+    /// Saves LLM settings for a tenant.
+    async fn save_llm(&self, tenant_id: Uuid, settings: &LlmSettings) -> Result<(), DbError>;
 
-    /// Gets a raw setting value by key.
-    async fn get_raw(&self, key: &str) -> Result<Option<String>, DbError>;
+    /// Gets a raw setting value by key for a tenant.
+    async fn get_raw(&self, tenant_id: Uuid, key: &str) -> Result<Option<String>, DbError>;
 
-    /// Saves a raw setting value by key.
-    async fn save_raw(&self, key: &str, value: &str) -> Result<(), DbError>;
+    /// Saves a raw setting value by key for a tenant.
+    async fn save_raw(&self, tenant_id: Uuid, key: &str, value: &str) -> Result<(), DbError>;
 }
 
 /// SQLite implementation of SettingsRepository.
@@ -114,9 +119,10 @@ impl SqliteSettingsRepository {
 #[cfg(feature = "database")]
 #[async_trait]
 impl SettingsRepository for SqliteSettingsRepository {
-    async fn get_general(&self) -> Result<GeneralSettings, DbError> {
+    async fn get_general(&self, tenant_id: Uuid) -> Result<GeneralSettings, DbError> {
         let row: Option<SettingsRow> =
-            sqlx::query_as("SELECT key, value, updated_at FROM settings WHERE key = ?")
+            sqlx::query_as("SELECT tenant_id, key, value, updated_at FROM settings WHERE tenant_id = ? AND key = ?")
+                .bind(tenant_id.to_string())
                 .bind("general")
                 .fetch_optional(&self.pool)
                 .await?;
@@ -127,16 +133,21 @@ impl SettingsRepository for SqliteSettingsRepository {
         }
     }
 
-    async fn save_general(&self, settings: &GeneralSettings) -> Result<(), DbError> {
+    async fn save_general(
+        &self,
+        tenant_id: Uuid,
+        settings: &GeneralSettings,
+    ) -> Result<(), DbError> {
         let value = serde_json::to_string(settings)?;
         let now = Utc::now().to_rfc3339();
 
         sqlx::query(
             r#"
-            INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            INSERT INTO settings (tenant_id, key, value, updated_at) VALUES (?, ?, ?, ?)
+            ON CONFLICT(tenant_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
             "#,
         )
+        .bind(tenant_id.to_string())
         .bind("general")
         .bind(&value)
         .bind(&now)
@@ -146,9 +157,10 @@ impl SettingsRepository for SqliteSettingsRepository {
         Ok(())
     }
 
-    async fn get_rate_limits(&self) -> Result<RateLimits, DbError> {
+    async fn get_rate_limits(&self, tenant_id: Uuid) -> Result<RateLimits, DbError> {
         let row: Option<SettingsRow> =
-            sqlx::query_as("SELECT key, value, updated_at FROM settings WHERE key = ?")
+            sqlx::query_as("SELECT tenant_id, key, value, updated_at FROM settings WHERE tenant_id = ? AND key = ?")
+                .bind(tenant_id.to_string())
                 .bind("rate_limits")
                 .fetch_optional(&self.pool)
                 .await?;
@@ -159,16 +171,17 @@ impl SettingsRepository for SqliteSettingsRepository {
         }
     }
 
-    async fn save_rate_limits(&self, limits: &RateLimits) -> Result<(), DbError> {
+    async fn save_rate_limits(&self, tenant_id: Uuid, limits: &RateLimits) -> Result<(), DbError> {
         let value = serde_json::to_string(limits)?;
         let now = Utc::now().to_rfc3339();
 
         sqlx::query(
             r#"
-            INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            INSERT INTO settings (tenant_id, key, value, updated_at) VALUES (?, ?, ?, ?)
+            ON CONFLICT(tenant_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
             "#,
         )
+        .bind(tenant_id.to_string())
         .bind("rate_limits")
         .bind(&value)
         .bind(&now)
@@ -178,9 +191,10 @@ impl SettingsRepository for SqliteSettingsRepository {
         Ok(())
     }
 
-    async fn get_llm(&self) -> Result<LlmSettings, DbError> {
+    async fn get_llm(&self, tenant_id: Uuid) -> Result<LlmSettings, DbError> {
         let row: Option<SettingsRow> =
-            sqlx::query_as("SELECT key, value, updated_at FROM settings WHERE key = ?")
+            sqlx::query_as("SELECT tenant_id, key, value, updated_at FROM settings WHERE tenant_id = ? AND key = ?")
+                .bind(tenant_id.to_string())
                 .bind("llm")
                 .fetch_optional(&self.pool)
                 .await?;
@@ -204,7 +218,7 @@ impl SettingsRepository for SqliteSettingsRepository {
         }
     }
 
-    async fn save_llm(&self, settings: &LlmSettings) -> Result<(), DbError> {
+    async fn save_llm(&self, tenant_id: Uuid, settings: &LlmSettings) -> Result<(), DbError> {
         // Clone settings and encrypt the API key before storage
         let mut settings_to_store = settings.clone();
         if !settings_to_store.api_key.is_empty() {
@@ -216,10 +230,11 @@ impl SettingsRepository for SqliteSettingsRepository {
 
         sqlx::query(
             r#"
-            INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            INSERT INTO settings (tenant_id, key, value, updated_at) VALUES (?, ?, ?, ?)
+            ON CONFLICT(tenant_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
             "#,
         )
+        .bind(tenant_id.to_string())
         .bind("llm")
         .bind(&value)
         .bind(&now)
@@ -229,9 +244,10 @@ impl SettingsRepository for SqliteSettingsRepository {
         Ok(())
     }
 
-    async fn get_raw(&self, key: &str) -> Result<Option<String>, DbError> {
+    async fn get_raw(&self, tenant_id: Uuid, key: &str) -> Result<Option<String>, DbError> {
         let row: Option<SettingsRow> =
-            sqlx::query_as("SELECT key, value, updated_at FROM settings WHERE key = ?")
+            sqlx::query_as("SELECT tenant_id, key, value, updated_at FROM settings WHERE tenant_id = ? AND key = ?")
+                .bind(tenant_id.to_string())
                 .bind(key)
                 .fetch_optional(&self.pool)
                 .await?;
@@ -239,15 +255,16 @@ impl SettingsRepository for SqliteSettingsRepository {
         Ok(row.map(|r| r.value))
     }
 
-    async fn save_raw(&self, key: &str, value: &str) -> Result<(), DbError> {
+    async fn save_raw(&self, tenant_id: Uuid, key: &str, value: &str) -> Result<(), DbError> {
         let now = Utc::now().to_rfc3339();
 
         sqlx::query(
             r#"
-            INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            INSERT INTO settings (tenant_id, key, value, updated_at) VALUES (?, ?, ?, ?)
+            ON CONFLICT(tenant_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
             "#,
         )
+        .bind(tenant_id.to_string())
         .bind(key)
         .bind(value)
         .bind(&now)
@@ -275,9 +292,10 @@ impl PgSettingsRepository {
 #[cfg(feature = "database")]
 #[async_trait]
 impl SettingsRepository for PgSettingsRepository {
-    async fn get_general(&self) -> Result<GeneralSettings, DbError> {
+    async fn get_general(&self, tenant_id: Uuid) -> Result<GeneralSettings, DbError> {
         let row: Option<PgSettingsRow> =
-            sqlx::query_as("SELECT key, value, updated_at FROM settings WHERE key = $1")
+            sqlx::query_as("SELECT tenant_id, key, value, updated_at FROM settings WHERE tenant_id = $1 AND key = $2")
+                .bind(tenant_id)
                 .bind("general")
                 .fetch_optional(&self.pool)
                 .await?;
@@ -288,15 +306,20 @@ impl SettingsRepository for PgSettingsRepository {
         }
     }
 
-    async fn save_general(&self, settings: &GeneralSettings) -> Result<(), DbError> {
+    async fn save_general(
+        &self,
+        tenant_id: Uuid,
+        settings: &GeneralSettings,
+    ) -> Result<(), DbError> {
         let value = serde_json::to_value(settings)?;
 
         sqlx::query(
             r#"
-            INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, NOW())
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = NOW()
+            INSERT INTO settings (tenant_id, key, value, updated_at) VALUES ($1, $2, $3, NOW())
+            ON CONFLICT(tenant_id, key) DO UPDATE SET value = excluded.value, updated_at = NOW()
             "#,
         )
+        .bind(tenant_id)
         .bind("general")
         .bind(&value)
         .execute(&self.pool)
@@ -305,9 +328,10 @@ impl SettingsRepository for PgSettingsRepository {
         Ok(())
     }
 
-    async fn get_rate_limits(&self) -> Result<RateLimits, DbError> {
+    async fn get_rate_limits(&self, tenant_id: Uuid) -> Result<RateLimits, DbError> {
         let row: Option<PgSettingsRow> =
-            sqlx::query_as("SELECT key, value, updated_at FROM settings WHERE key = $1")
+            sqlx::query_as("SELECT tenant_id, key, value, updated_at FROM settings WHERE tenant_id = $1 AND key = $2")
+                .bind(tenant_id)
                 .bind("rate_limits")
                 .fetch_optional(&self.pool)
                 .await?;
@@ -318,15 +342,16 @@ impl SettingsRepository for PgSettingsRepository {
         }
     }
 
-    async fn save_rate_limits(&self, limits: &RateLimits) -> Result<(), DbError> {
+    async fn save_rate_limits(&self, tenant_id: Uuid, limits: &RateLimits) -> Result<(), DbError> {
         let value = serde_json::to_value(limits)?;
 
         sqlx::query(
             r#"
-            INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, NOW())
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = NOW()
+            INSERT INTO settings (tenant_id, key, value, updated_at) VALUES ($1, $2, $3, NOW())
+            ON CONFLICT(tenant_id, key) DO UPDATE SET value = excluded.value, updated_at = NOW()
             "#,
         )
+        .bind(tenant_id)
         .bind("rate_limits")
         .bind(&value)
         .execute(&self.pool)
@@ -335,9 +360,10 @@ impl SettingsRepository for PgSettingsRepository {
         Ok(())
     }
 
-    async fn get_llm(&self) -> Result<LlmSettings, DbError> {
+    async fn get_llm(&self, tenant_id: Uuid) -> Result<LlmSettings, DbError> {
         let row: Option<PgSettingsRow> =
-            sqlx::query_as("SELECT key, value, updated_at FROM settings WHERE key = $1")
+            sqlx::query_as("SELECT tenant_id, key, value, updated_at FROM settings WHERE tenant_id = $1 AND key = $2")
+                .bind(tenant_id)
                 .bind("llm")
                 .fetch_optional(&self.pool)
                 .await?;
@@ -361,7 +387,7 @@ impl SettingsRepository for PgSettingsRepository {
         }
     }
 
-    async fn save_llm(&self, settings: &LlmSettings) -> Result<(), DbError> {
+    async fn save_llm(&self, tenant_id: Uuid, settings: &LlmSettings) -> Result<(), DbError> {
         // Clone settings and encrypt the API key before storage
         let mut settings_to_store = settings.clone();
         if !settings_to_store.api_key.is_empty() {
@@ -372,10 +398,11 @@ impl SettingsRepository for PgSettingsRepository {
 
         sqlx::query(
             r#"
-            INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, NOW())
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = NOW()
+            INSERT INTO settings (tenant_id, key, value, updated_at) VALUES ($1, $2, $3, NOW())
+            ON CONFLICT(tenant_id, key) DO UPDATE SET value = excluded.value, updated_at = NOW()
             "#,
         )
+        .bind(tenant_id)
         .bind("llm")
         .bind(&value)
         .execute(&self.pool)
@@ -384,9 +411,10 @@ impl SettingsRepository for PgSettingsRepository {
         Ok(())
     }
 
-    async fn get_raw(&self, key: &str) -> Result<Option<String>, DbError> {
+    async fn get_raw(&self, tenant_id: Uuid, key: &str) -> Result<Option<String>, DbError> {
         let row: Option<PgSettingsRow> =
-            sqlx::query_as("SELECT key, value, updated_at FROM settings WHERE key = $1")
+            sqlx::query_as("SELECT tenant_id, key, value, updated_at FROM settings WHERE tenant_id = $1 AND key = $2")
+                .bind(tenant_id)
                 .bind(key)
                 .fetch_optional(&self.pool)
                 .await?;
@@ -394,16 +422,17 @@ impl SettingsRepository for PgSettingsRepository {
         Ok(row.map(|r| r.value.to_string()))
     }
 
-    async fn save_raw(&self, key: &str, value: &str) -> Result<(), DbError> {
+    async fn save_raw(&self, tenant_id: Uuid, key: &str, value: &str) -> Result<(), DbError> {
         let json_value: serde_json::Value = serde_json::from_str(value)
             .unwrap_or_else(|_| serde_json::Value::String(value.to_string()));
 
         sqlx::query(
             r#"
-            INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, NOW())
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = NOW()
+            INSERT INTO settings (tenant_id, key, value, updated_at) VALUES ($1, $2, $3, NOW())
+            ON CONFLICT(tenant_id, key) DO UPDATE SET value = excluded.value, updated_at = NOW()
             "#,
         )
+        .bind(tenant_id)
         .bind(key)
         .bind(&json_value)
         .execute(&self.pool)
@@ -436,6 +465,8 @@ pub fn create_settings_repository(
 #[derive(sqlx::FromRow)]
 struct SettingsRow {
     #[allow(dead_code)]
+    tenant_id: String,
+    #[allow(dead_code)]
     key: String,
     value: String,
     #[allow(dead_code)]
@@ -445,6 +476,8 @@ struct SettingsRow {
 #[cfg(feature = "database")]
 #[derive(sqlx::FromRow)]
 struct PgSettingsRow {
+    #[allow(dead_code)]
+    tenant_id: Uuid,
     #[allow(dead_code)]
     key: String,
     value: serde_json::Value,

@@ -79,6 +79,86 @@ decision = "denied"
 reason = "Deletion not allowed in production"
 ```
 
+## Multi-Tenant Isolation
+
+Triage Warden supports multi-tenancy with strong data isolation guarantees.
+
+### Row-Level Security (RLS)
+
+PostgreSQL Row-Level Security provides database-level tenant isolation:
+
+```sql
+-- Each table has RLS policies that filter by tenant
+-- Application sets tenant context at the start of each request
+SELECT set_tenant_context('tenant-uuid-here');
+
+-- All subsequent queries automatically filtered
+SELECT * FROM incidents;  -- Only returns current tenant's data
+```
+
+**Key Features:**
+
+| Feature | Description |
+|---------|-------------|
+| **Automatic filtering** | All SELECT/UPDATE/DELETE queries filtered by tenant |
+| **Insert validation** | INSERT must match current tenant context |
+| **Fail-secure** | No tenant context = no data access |
+| **Defense-in-depth** | Database enforces isolation even if app has bugs |
+
+### Tenant Context Management
+
+The application manages tenant context through several mechanisms:
+
+1. **Request Middleware**: Resolves tenant from subdomain, header, or JWT
+2. **Session Variable**: Sets `app.current_tenant` on each database connection
+3. **Context Guard**: RAII pattern ensures cleanup
+
+```rust
+// Using the tenant context guard
+async fn handle_request(pool: &TenantAwarePool, tenant_id: Uuid) {
+    let _guard = TenantContextGuard::new(pool, tenant_id).await?;
+
+    // All queries here are automatically filtered by tenant
+    let incidents = incident_repo.list_all().await?;
+
+    // Context cleared when guard drops
+}
+```
+
+### Admin Operations
+
+Admin operations that need to bypass RLS use a separate connection pool:
+
+- **Admin pool**: Superuser role that bypasses RLS policies
+- **Use cases**: Tenant management, cross-tenant reporting, maintenance
+- **Access control**: Restricted to Admin role users only
+
+### Tables Protected by RLS
+
+All tenant-scoped data tables have RLS enabled:
+
+- `incidents`, `actions`, `approvals`, `audit_logs`
+- `users`, `api_keys`, `sessions`
+- `playbooks`, `policies`, `connectors`
+- `notification_channels`, `settings`
+
+System tables (`tenants`, `feature_flags`) do NOT have RLS.
+
+### Debugging RLS Issues
+
+```sql
+-- Check current tenant context
+SELECT get_current_tenant();
+
+-- View RLS policies for a table
+SELECT * FROM pg_policies WHERE tablename = 'incidents';
+
+-- Check if RLS is enabled
+SELECT relname, relrowsecurity
+FROM pg_class
+WHERE relname IN ('incidents', 'tenants');
+```
+
 ## Data Protection
 
 ### At Rest

@@ -10,20 +10,39 @@ use uuid::Uuid;
 #[async_trait]
 pub trait AuditRepository: Send + Sync {
     /// Logs an audit entry.
-    async fn log(&self, incident_id: Uuid, entry: &AuditEntry) -> Result<(), DbError>;
+    async fn log(
+        &self,
+        tenant_id: Uuid,
+        incident_id: Uuid,
+        entry: &AuditEntry,
+    ) -> Result<(), DbError>;
 
     /// Logs multiple audit entries in a single transaction.
-    async fn log_batch(&self, incident_id: Uuid, entries: &[AuditEntry]) -> Result<(), DbError>;
-
-    /// Gets all audit entries for an incident.
-    async fn get_for_incident(&self, incident_id: Uuid) -> Result<Vec<AuditEntry>, DbError>;
-
-    /// Gets recent audit entries across all incidents.
-    async fn get_recent(&self, limit: u32) -> Result<Vec<(Uuid, AuditEntry)>, DbError>;
-
-    /// Gets audit entries by actor.
-    async fn get_by_actor(
+    async fn log_batch(
         &self,
+        tenant_id: Uuid,
+        incident_id: Uuid,
+        entries: &[AuditEntry],
+    ) -> Result<(), DbError>;
+
+    /// Gets all audit entries for an incident within a tenant.
+    async fn get_for_incident(
+        &self,
+        tenant_id: Uuid,
+        incident_id: Uuid,
+    ) -> Result<Vec<AuditEntry>, DbError>;
+
+    /// Gets recent audit entries for a tenant across all incidents.
+    async fn get_recent_for_tenant(
+        &self,
+        tenant_id: Uuid,
+        limit: u32,
+    ) -> Result<Vec<(Uuid, AuditEntry)>, DbError>;
+
+    /// Gets audit entries by actor within a tenant.
+    async fn get_by_actor_for_tenant(
+        &self,
+        tenant_id: Uuid,
         actor: &str,
         limit: u32,
     ) -> Result<Vec<(Uuid, AuditEntry)>, DbError>;
@@ -45,8 +64,14 @@ impl SqliteAuditRepository {
 #[cfg(feature = "database")]
 #[async_trait]
 impl AuditRepository for SqliteAuditRepository {
-    async fn log(&self, incident_id: Uuid, entry: &AuditEntry) -> Result<(), DbError> {
+    async fn log(
+        &self,
+        tenant_id: Uuid,
+        incident_id: Uuid,
+        entry: &AuditEntry,
+    ) -> Result<(), DbError> {
         let id = entry.id.to_string();
+        let tenant_id_str = tenant_id.to_string();
         let incident_id_str = incident_id.to_string();
         let action = serde_json::to_string(&entry.action)?;
         let details = entry
@@ -58,11 +83,12 @@ impl AuditRepository for SqliteAuditRepository {
 
         sqlx::query(
             r#"
-            INSERT INTO audit_logs (id, incident_id, action, actor, details, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO audit_logs (id, tenant_id, incident_id, action, actor, details, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&id)
+        .bind(&tenant_id_str)
         .bind(&incident_id_str)
         .bind(&action)
         .bind(&entry.actor)
@@ -74,8 +100,14 @@ impl AuditRepository for SqliteAuditRepository {
         Ok(())
     }
 
-    async fn log_batch(&self, incident_id: Uuid, entries: &[AuditEntry]) -> Result<(), DbError> {
+    async fn log_batch(
+        &self,
+        tenant_id: Uuid,
+        incident_id: Uuid,
+        entries: &[AuditEntry],
+    ) -> Result<(), DbError> {
         let mut tx = self.pool.begin().await?;
+        let tenant_id_str = tenant_id.to_string();
         let incident_id_str = incident_id.to_string();
 
         for entry in entries {
@@ -90,11 +122,12 @@ impl AuditRepository for SqliteAuditRepository {
 
             sqlx::query(
                 r#"
-                INSERT INTO audit_logs (id, incident_id, action, actor, details, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO audit_logs (id, tenant_id, incident_id, action, actor, details, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(&id)
+            .bind(&tenant_id_str)
             .bind(&incident_id_str)
             .bind(&action)
             .bind(&entry.actor)
@@ -108,17 +141,23 @@ impl AuditRepository for SqliteAuditRepository {
         Ok(())
     }
 
-    async fn get_for_incident(&self, incident_id: Uuid) -> Result<Vec<AuditEntry>, DbError> {
+    async fn get_for_incident(
+        &self,
+        tenant_id: Uuid,
+        incident_id: Uuid,
+    ) -> Result<Vec<AuditEntry>, DbError> {
+        let tenant_id_str = tenant_id.to_string();
         let incident_id_str = incident_id.to_string();
 
         let rows: Vec<AuditLogRow> = sqlx::query_as(
             r#"
-            SELECT id, incident_id, action, actor, details, created_at
+            SELECT id, tenant_id, incident_id, action, actor, details, created_at
             FROM audit_logs
-            WHERE incident_id = ?
+            WHERE tenant_id = ? AND incident_id = ?
             ORDER BY created_at ASC
             "#,
         )
+        .bind(&tenant_id_str)
         .bind(&incident_id_str)
         .fetch_all(&self.pool)
         .await?;
@@ -126,15 +165,23 @@ impl AuditRepository for SqliteAuditRepository {
         rows.into_iter().map(|r| r.try_into()).collect()
     }
 
-    async fn get_recent(&self, limit: u32) -> Result<Vec<(Uuid, AuditEntry)>, DbError> {
+    async fn get_recent_for_tenant(
+        &self,
+        tenant_id: Uuid,
+        limit: u32,
+    ) -> Result<Vec<(Uuid, AuditEntry)>, DbError> {
+        let tenant_id_str = tenant_id.to_string();
+
         let rows: Vec<AuditLogRow> = sqlx::query_as(
             r#"
-            SELECT id, incident_id, action, actor, details, created_at
+            SELECT id, tenant_id, incident_id, action, actor, details, created_at
             FROM audit_logs
+            WHERE tenant_id = ?
             ORDER BY created_at DESC
             LIMIT ?
             "#,
         )
+        .bind(&tenant_id_str)
         .bind(limit as i64)
         .fetch_all(&self.pool)
         .await?;
@@ -149,20 +196,24 @@ impl AuditRepository for SqliteAuditRepository {
             .collect()
     }
 
-    async fn get_by_actor(
+    async fn get_by_actor_for_tenant(
         &self,
+        tenant_id: Uuid,
         actor: &str,
         limit: u32,
     ) -> Result<Vec<(Uuid, AuditEntry)>, DbError> {
+        let tenant_id_str = tenant_id.to_string();
+
         let rows: Vec<AuditLogRow> = sqlx::query_as(
             r#"
-            SELECT id, incident_id, action, actor, details, created_at
+            SELECT id, tenant_id, incident_id, action, actor, details, created_at
             FROM audit_logs
-            WHERE actor = ?
+            WHERE tenant_id = ? AND actor = ?
             ORDER BY created_at DESC
             LIMIT ?
             "#,
         )
+        .bind(&tenant_id_str)
         .bind(actor)
         .bind(limit as i64)
         .fetch_all(&self.pool)
@@ -195,16 +246,22 @@ impl PgAuditRepository {
 #[cfg(feature = "database")]
 #[async_trait]
 impl AuditRepository for PgAuditRepository {
-    async fn log(&self, incident_id: Uuid, entry: &AuditEntry) -> Result<(), DbError> {
+    async fn log(
+        &self,
+        tenant_id: Uuid,
+        incident_id: Uuid,
+        entry: &AuditEntry,
+    ) -> Result<(), DbError> {
         let action = serde_json::to_string(&entry.action)?;
 
         sqlx::query(
             r#"
-            INSERT INTO audit_logs (id, incident_id, action, actor, details, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO audit_logs (id, tenant_id, incident_id, action, actor, details, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             "#,
         )
         .bind(entry.id)
+        .bind(tenant_id)
         .bind(incident_id)
         .bind(&action)
         .bind(&entry.actor)
@@ -216,7 +273,12 @@ impl AuditRepository for PgAuditRepository {
         Ok(())
     }
 
-    async fn log_batch(&self, incident_id: Uuid, entries: &[AuditEntry]) -> Result<(), DbError> {
+    async fn log_batch(
+        &self,
+        tenant_id: Uuid,
+        incident_id: Uuid,
+        entries: &[AuditEntry],
+    ) -> Result<(), DbError> {
         let mut tx = self.pool.begin().await?;
 
         for entry in entries {
@@ -224,11 +286,12 @@ impl AuditRepository for PgAuditRepository {
 
             sqlx::query(
                 r#"
-                INSERT INTO audit_logs (id, incident_id, action, actor, details, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6)
+                INSERT INTO audit_logs (id, tenant_id, incident_id, action, actor, details, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
                 "#,
             )
             .bind(entry.id)
+            .bind(tenant_id)
             .bind(incident_id)
             .bind(&action)
             .bind(&entry.actor)
@@ -242,15 +305,20 @@ impl AuditRepository for PgAuditRepository {
         Ok(())
     }
 
-    async fn get_for_incident(&self, incident_id: Uuid) -> Result<Vec<AuditEntry>, DbError> {
+    async fn get_for_incident(
+        &self,
+        tenant_id: Uuid,
+        incident_id: Uuid,
+    ) -> Result<Vec<AuditEntry>, DbError> {
         let rows: Vec<PgAuditLogRow> = sqlx::query_as(
             r#"
-            SELECT id, incident_id, action, actor, details, created_at
+            SELECT id, tenant_id, incident_id, action, actor, details, created_at
             FROM audit_logs
-            WHERE incident_id = $1
+            WHERE tenant_id = $1 AND incident_id = $2
             ORDER BY created_at ASC
             "#,
         )
+        .bind(tenant_id)
         .bind(incident_id)
         .fetch_all(&self.pool)
         .await?;
@@ -258,15 +326,21 @@ impl AuditRepository for PgAuditRepository {
         rows.into_iter().map(|r| r.try_into()).collect()
     }
 
-    async fn get_recent(&self, limit: u32) -> Result<Vec<(Uuid, AuditEntry)>, DbError> {
+    async fn get_recent_for_tenant(
+        &self,
+        tenant_id: Uuid,
+        limit: u32,
+    ) -> Result<Vec<(Uuid, AuditEntry)>, DbError> {
         let rows: Vec<PgAuditLogRow> = sqlx::query_as(
             r#"
-            SELECT id, incident_id, action, actor, details, created_at
+            SELECT id, tenant_id, incident_id, action, actor, details, created_at
             FROM audit_logs
+            WHERE tenant_id = $1
             ORDER BY created_at DESC
-            LIMIT $1
+            LIMIT $2
             "#,
         )
+        .bind(tenant_id)
         .bind(limit as i64)
         .fetch_all(&self.pool)
         .await?;
@@ -280,20 +354,22 @@ impl AuditRepository for PgAuditRepository {
             .collect()
     }
 
-    async fn get_by_actor(
+    async fn get_by_actor_for_tenant(
         &self,
+        tenant_id: Uuid,
         actor: &str,
         limit: u32,
     ) -> Result<Vec<(Uuid, AuditEntry)>, DbError> {
         let rows: Vec<PgAuditLogRow> = sqlx::query_as(
             r#"
-            SELECT id, incident_id, action, actor, details, created_at
+            SELECT id, tenant_id, incident_id, action, actor, details, created_at
             FROM audit_logs
-            WHERE actor = $1
+            WHERE tenant_id = $1 AND actor = $2
             ORDER BY created_at DESC
-            LIMIT $2
+            LIMIT $3
             "#,
         )
+        .bind(tenant_id)
         .bind(actor)
         .bind(limit as i64)
         .fetch_all(&self.pool)
@@ -324,6 +400,8 @@ pub fn create_audit_repository(pool: &DbPool) -> Box<dyn AuditRepository> {
 #[derive(sqlx::FromRow)]
 struct AuditLogRow {
     id: String,
+    #[allow(dead_code)]
+    tenant_id: String,
     incident_id: String,
     action: String,
     actor: String,
@@ -352,6 +430,8 @@ impl TryFrom<AuditLogRow> for AuditEntry {
 #[derive(sqlx::FromRow)]
 struct PgAuditLogRow {
     id: Uuid,
+    #[allow(dead_code)]
+    tenant_id: Uuid,
     incident_id: Uuid,
     action: String,
     actor: String,

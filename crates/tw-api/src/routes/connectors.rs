@@ -1019,10 +1019,23 @@ mod api_tests {
     use tw_core::db::DbPool;
     use tw_core::EventBus;
 
-    /// SQL to create the connectors table for testing.
+    /// SQL to create the tenants and connectors tables for testing.
     const CREATE_CONNECTORS_TABLE: &str = r#"
+        CREATE TABLE IF NOT EXISTS tenants (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            slug TEXT NOT NULL UNIQUE,
+            settings TEXT NOT NULL DEFAULT '{}',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        INSERT OR IGNORE INTO tenants (id, name, slug, settings, enabled, created_at, updated_at)
+        VALUES ('00000000-0000-0000-0000-000000000001', 'Default', 'default', '{}', 1, datetime('now'), datetime('now'));
+
         CREATE TABLE IF NOT EXISTS connectors (
             id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001' REFERENCES tenants(id),
             name TEXT NOT NULL,
             connector_type TEXT NOT NULL,
             config TEXT NOT NULL DEFAULT '{}',
@@ -1032,6 +1045,7 @@ mod api_tests {
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
+        CREATE INDEX IF NOT EXISTS idx_connectors_tenant_id ON connectors(tenant_id);
         CREATE INDEX IF NOT EXISTS idx_connectors_name ON connectors(name);
         CREATE INDEX IF NOT EXISTS idx_connectors_connector_type ON connectors(connector_type);
         CREATE INDEX IF NOT EXISTS idx_connectors_status ON connectors(status);

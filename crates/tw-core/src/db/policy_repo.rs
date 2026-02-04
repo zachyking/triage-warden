@@ -1,6 +1,7 @@
 //! Policy repository for database operations.
 
 use super::{DbError, DbPool};
+use crate::auth::DEFAULT_TENANT_ID;
 use crate::policy::{ApprovalLevel, Policy, PolicyAction};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -18,29 +19,66 @@ pub struct PolicyUpdate {
     pub enabled: Option<bool>,
 }
 
+/// Filter for listing policies.
+#[derive(Debug, Clone, Default)]
+pub struct PolicyFilter {
+    /// Filter by tenant ID.
+    pub tenant_id: Option<Uuid>,
+}
+
 /// Repository trait for policy persistence.
 #[async_trait]
 pub trait PolicyRepository: Send + Sync {
-    /// Creates a new policy.
+    /// Creates a new policy (backward-compatible, uses default tenant).
     async fn create(&self, policy: &Policy) -> Result<Policy, DbError>;
+
+    /// Creates a new policy for a specific tenant.
+    async fn create_for_tenant(&self, tenant_id: Uuid, policy: &Policy) -> Result<Policy, DbError>;
 
     /// Gets a policy by ID.
     async fn get(&self, id: Uuid) -> Result<Option<Policy>, DbError>;
 
-    /// Lists all policies ordered by priority.
+    /// Gets a policy by ID within a specific tenant (ensures tenant isolation).
+    async fn get_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<Option<Policy>, DbError>;
+
+    /// Lists all policies ordered by priority (backward-compatible).
     async fn list(&self) -> Result<Vec<Policy>, DbError>;
+
+    /// Lists policies with optional filtering.
+    async fn list_with_filter(&self, filter: &PolicyFilter) -> Result<Vec<Policy>, DbError>;
+
+    /// Lists all policies for a specific tenant ordered by priority.
+    async fn list_for_tenant(&self, tenant_id: Uuid) -> Result<Vec<Policy>, DbError>;
 
     /// Updates a policy.
     async fn update(&self, id: Uuid, update: &PolicyUpdate) -> Result<Policy, DbError>;
 
+    /// Updates a policy within a specific tenant (ensures tenant isolation).
+    async fn update_for_tenant(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+        update: &PolicyUpdate,
+    ) -> Result<Policy, DbError>;
+
     /// Deletes a policy.
     async fn delete(&self, id: Uuid) -> Result<bool, DbError>;
+
+    /// Deletes a policy within a specific tenant (ensures tenant isolation).
+    async fn delete_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<bool, DbError>;
 
     /// Toggles the enabled status of a policy.
     async fn toggle_enabled(&self, id: Uuid) -> Result<Policy, DbError>;
 
+    /// Toggles the enabled status of a policy within a specific tenant.
+    async fn toggle_enabled_for_tenant(&self, id: Uuid, tenant_id: Uuid)
+        -> Result<Policy, DbError>;
+
     /// Lists only enabled policies ordered by priority (for policy engine).
     async fn list_enabled(&self) -> Result<Vec<Policy>, DbError>;
+
+    /// Lists only enabled policies for a specific tenant ordered by priority.
+    async fn list_enabled_for_tenant(&self, tenant_id: Uuid) -> Result<Vec<Policy>, DbError>;
 }
 
 /// SQLite implementation of PolicyRepository.
@@ -60,7 +98,13 @@ impl SqlitePolicyRepository {
 #[async_trait]
 impl PolicyRepository for SqlitePolicyRepository {
     async fn create(&self, policy: &Policy) -> Result<Policy, DbError> {
+        // For backward compatibility, use the default tenant
+        self.create_for_tenant(DEFAULT_TENANT_ID, policy).await
+    }
+
+    async fn create_for_tenant(&self, tenant_id: Uuid, policy: &Policy) -> Result<Policy, DbError> {
         let id = policy.id.to_string();
+        let tenant_id_str = tenant_id.to_string();
         let action = policy.action.as_db_str();
         let approval_level = policy.approval_level.as_ref().map(|l| l.as_db_str());
         let created_at = policy.created_at.to_rfc3339();
@@ -68,11 +112,12 @@ impl PolicyRepository for SqlitePolicyRepository {
 
         sqlx::query(
             r#"
-            INSERT INTO policies (id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO policies (id, tenant_id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&id)
+        .bind(&tenant_id_str)
         .bind(&policy.name)
         .bind(&policy.description)
         .bind(&policy.condition)
@@ -92,7 +137,7 @@ impl PolicyRepository for SqlitePolicyRepository {
         let id_str = id.to_string();
 
         let row: Option<PolicyRow> = sqlx::query_as(
-            r#"SELECT id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at FROM policies WHERE id = ?"#,
+            r#"SELECT id, tenant_id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at FROM policies WHERE id = ?"#,
         )
         .bind(&id_str)
         .fetch_optional(&self.pool)
@@ -104,14 +149,61 @@ impl PolicyRepository for SqlitePolicyRepository {
         }
     }
 
+    async fn get_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<Option<Policy>, DbError> {
+        let id_str = id.to_string();
+        let tenant_id_str = tenant_id.to_string();
+
+        let row: Option<PolicyRow> = sqlx::query_as(
+            r#"SELECT id, tenant_id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at FROM policies WHERE id = ? AND tenant_id = ?"#,
+        )
+        .bind(&id_str)
+        .bind(&tenant_id_str)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            Some(row) => Ok(Some(row.try_into()?)),
+            None => Ok(None),
+        }
+    }
+
     async fn list(&self) -> Result<Vec<Policy>, DbError> {
         let rows: Vec<PolicyRow> = sqlx::query_as(
-            r#"SELECT id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at FROM policies ORDER BY priority ASC, created_at ASC"#,
+            r#"SELECT id, tenant_id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at FROM policies ORDER BY priority ASC, created_at ASC"#,
         )
         .fetch_all(&self.pool)
         .await?;
 
         rows.into_iter().map(|r| r.try_into()).collect()
+    }
+
+    async fn list_with_filter(&self, filter: &PolicyFilter) -> Result<Vec<Policy>, DbError> {
+        let mut query = String::from(
+            "SELECT id, tenant_id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at FROM policies WHERE 1=1",
+        );
+        let mut params: Vec<String> = Vec::new();
+
+        if let Some(tenant_id) = &filter.tenant_id {
+            query.push_str(" AND tenant_id = ?");
+            params.push(tenant_id.to_string());
+        }
+
+        query.push_str(" ORDER BY priority ASC, created_at ASC");
+
+        let mut sqlx_query = sqlx::query_as::<_, PolicyRow>(&query);
+        for param in params {
+            sqlx_query = sqlx_query.bind(param);
+        }
+
+        let rows: Vec<PolicyRow> = sqlx_query.fetch_all(&self.pool).await?;
+        rows.into_iter().map(|r| r.try_into()).collect()
+    }
+
+    async fn list_for_tenant(&self, tenant_id: Uuid) -> Result<Vec<Policy>, DbError> {
+        self.list_with_filter(&PolicyFilter {
+            tenant_id: Some(tenant_id),
+        })
+        .await
     }
 
     async fn update(&self, id: Uuid, update: &PolicyUpdate) -> Result<Policy, DbError> {
@@ -177,11 +269,96 @@ impl PolicyRepository for SqlitePolicyRepository {
         })
     }
 
+    async fn update_for_tenant(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+        update: &PolicyUpdate,
+    ) -> Result<Policy, DbError> {
+        let id_str = id.to_string();
+        let tenant_id_str = tenant_id.to_string();
+        let now = Utc::now().to_rfc3339();
+
+        // Build dynamic update query
+        let mut set_clauses = vec!["updated_at = ?".to_string()];
+        let mut values: Vec<Option<String>> = vec![Some(now)];
+
+        if let Some(name) = &update.name {
+            set_clauses.push("name = ?".to_string());
+            values.push(Some(name.clone()));
+        }
+
+        if let Some(description) = &update.description {
+            set_clauses.push("description = ?".to_string());
+            values.push(description.clone());
+        }
+
+        if let Some(condition) = &update.condition {
+            set_clauses.push("condition = ?".to_string());
+            values.push(Some(condition.clone()));
+        }
+
+        if let Some(action) = &update.action {
+            set_clauses.push("action = ?".to_string());
+            values.push(Some(action.as_db_str().to_string()));
+        }
+
+        if let Some(approval_level) = &update.approval_level {
+            set_clauses.push("approval_level = ?".to_string());
+            values.push(approval_level.as_ref().map(|l| l.as_db_str().to_string()));
+        }
+
+        if let Some(priority) = &update.priority {
+            set_clauses.push("priority = ?".to_string());
+            values.push(Some(priority.to_string()));
+        }
+
+        if let Some(enabled) = &update.enabled {
+            set_clauses.push("enabled = ?".to_string());
+            values.push(Some(if *enabled { "1" } else { "0" }.to_string()));
+        }
+
+        let query = format!(
+            "UPDATE policies SET {} WHERE id = ? AND tenant_id = ?",
+            set_clauses.join(", ")
+        );
+
+        let mut query_builder = sqlx::query(&query);
+
+        for value in &values {
+            query_builder = query_builder.bind(value);
+        }
+
+        query_builder = query_builder.bind(&id_str);
+        query_builder = query_builder.bind(&tenant_id_str);
+        query_builder.execute(&self.pool).await?;
+
+        self.get_for_tenant(id, tenant_id)
+            .await?
+            .ok_or_else(|| DbError::NotFound {
+                entity: "Policy".to_string(),
+                id: id.to_string(),
+            })
+    }
+
     async fn delete(&self, id: Uuid) -> Result<bool, DbError> {
         let id_str = id.to_string();
 
         let result = sqlx::query("DELETE FROM policies WHERE id = ?")
             .bind(&id_str)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn delete_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<bool, DbError> {
+        let id_str = id.to_string();
+        let tenant_id_str = tenant_id.to_string();
+
+        let result = sqlx::query("DELETE FROM policies WHERE id = ? AND tenant_id = ?")
+            .bind(&id_str)
+            .bind(&tenant_id_str)
             .execute(&self.pool)
             .await?;
 
@@ -204,10 +381,49 @@ impl PolicyRepository for SqlitePolicyRepository {
         })
     }
 
+    async fn toggle_enabled_for_tenant(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<Policy, DbError> {
+        let id_str = id.to_string();
+        let tenant_id_str = tenant_id.to_string();
+        let now = Utc::now().to_rfc3339();
+
+        sqlx::query(
+            r#"UPDATE policies SET enabled = NOT enabled, updated_at = ? WHERE id = ? AND tenant_id = ?"#,
+        )
+        .bind(&now)
+        .bind(&id_str)
+        .bind(&tenant_id_str)
+        .execute(&self.pool)
+        .await?;
+
+        self.get_for_tenant(id, tenant_id)
+            .await?
+            .ok_or_else(|| DbError::NotFound {
+                entity: "Policy".to_string(),
+                id: id.to_string(),
+            })
+    }
+
     async fn list_enabled(&self) -> Result<Vec<Policy>, DbError> {
         let rows: Vec<PolicyRow> = sqlx::query_as(
-            r#"SELECT id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at FROM policies WHERE enabled = 1 ORDER BY priority ASC, created_at ASC"#,
+            r#"SELECT id, tenant_id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at FROM policies WHERE enabled = 1 ORDER BY priority ASC, created_at ASC"#,
         )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(|r| r.try_into()).collect()
+    }
+
+    async fn list_enabled_for_tenant(&self, tenant_id: Uuid) -> Result<Vec<Policy>, DbError> {
+        let tenant_id_str = tenant_id.to_string();
+
+        let rows: Vec<PolicyRow> = sqlx::query_as(
+            r#"SELECT id, tenant_id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at FROM policies WHERE enabled = 1 AND tenant_id = ? ORDER BY priority ASC, created_at ASC"#,
+        )
+        .bind(&tenant_id_str)
         .fetch_all(&self.pool)
         .await?;
 
@@ -232,16 +448,22 @@ impl PgPolicyRepository {
 #[async_trait]
 impl PolicyRepository for PgPolicyRepository {
     async fn create(&self, policy: &Policy) -> Result<Policy, DbError> {
+        // For backward compatibility, use the default tenant
+        self.create_for_tenant(DEFAULT_TENANT_ID, policy).await
+    }
+
+    async fn create_for_tenant(&self, tenant_id: Uuid, policy: &Policy) -> Result<Policy, DbError> {
         let action = policy.action.as_db_str();
         let approval_level = policy.approval_level.as_ref().map(|l| l.as_db_str());
 
         sqlx::query(
             r#"
-            INSERT INTO policies (id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            INSERT INTO policies (id, tenant_id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             "#,
         )
         .bind(policy.id)
+        .bind(tenant_id)
         .bind(&policy.name)
         .bind(&policy.description)
         .bind(&policy.condition)
@@ -259,7 +481,7 @@ impl PolicyRepository for PgPolicyRepository {
 
     async fn get(&self, id: Uuid) -> Result<Option<Policy>, DbError> {
         let row: Option<PgPolicyRow> = sqlx::query_as(
-            r#"SELECT id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at FROM policies WHERE id = $1"#,
+            r#"SELECT id, tenant_id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at FROM policies WHERE id = $1"#,
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -271,14 +493,55 @@ impl PolicyRepository for PgPolicyRepository {
         }
     }
 
+    async fn get_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<Option<Policy>, DbError> {
+        let row: Option<PgPolicyRow> = sqlx::query_as(
+            r#"SELECT id, tenant_id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at FROM policies WHERE id = $1 AND tenant_id = $2"#,
+        )
+        .bind(id)
+        .bind(tenant_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            Some(row) => Ok(Some(row.try_into()?)),
+            None => Ok(None),
+        }
+    }
+
     async fn list(&self) -> Result<Vec<Policy>, DbError> {
         let rows: Vec<PgPolicyRow> = sqlx::query_as(
-            r#"SELECT id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at FROM policies ORDER BY priority ASC, created_at ASC"#,
+            r#"SELECT id, tenant_id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at FROM policies ORDER BY priority ASC, created_at ASC"#,
         )
         .fetch_all(&self.pool)
         .await?;
 
         rows.into_iter().map(|r| r.try_into()).collect()
+    }
+
+    async fn list_with_filter(&self, filter: &PolicyFilter) -> Result<Vec<Policy>, DbError> {
+        let rows: Vec<PgPolicyRow> = if filter.tenant_id.is_some() {
+            let query = "SELECT id, tenant_id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at FROM policies WHERE tenant_id = $1 ORDER BY priority ASC, created_at ASC";
+
+            sqlx::query_as::<_, PgPolicyRow>(query)
+                .bind(filter.tenant_id.unwrap())
+                .fetch_all(&self.pool)
+                .await?
+        } else {
+            sqlx::query_as(
+                r#"SELECT id, tenant_id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at FROM policies ORDER BY priority ASC, created_at ASC"#,
+            )
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        rows.into_iter().map(|r| r.try_into()).collect()
+    }
+
+    async fn list_for_tenant(&self, tenant_id: Uuid) -> Result<Vec<Policy>, DbError> {
+        self.list_with_filter(&PolicyFilter {
+            tenant_id: Some(tenant_id),
+        })
+        .await
     }
 
     async fn update(&self, id: Uuid, update: &PolicyUpdate) -> Result<Policy, DbError> {
@@ -320,9 +583,66 @@ impl PolicyRepository for PgPolicyRepository {
         })
     }
 
+    async fn update_for_tenant(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+        update: &PolicyUpdate,
+    ) -> Result<Policy, DbError> {
+        sqlx::query(
+            r#"
+            UPDATE policies SET
+                name = COALESCE($2, name),
+                description = CASE WHEN $3::boolean THEN $4 ELSE description END,
+                condition = COALESCE($5, condition),
+                action = COALESCE($6, action),
+                approval_level = CASE WHEN $7::boolean THEN $8 ELSE approval_level END,
+                priority = COALESCE($9, priority),
+                enabled = COALESCE($10, enabled),
+                updated_at = NOW()
+            WHERE id = $1 AND tenant_id = $11
+            "#,
+        )
+        .bind(id)
+        .bind(&update.name)
+        .bind(update.description.is_some())
+        .bind(update.description.as_ref().and_then(|d| d.as_ref()))
+        .bind(&update.condition)
+        .bind(update.action.as_ref().map(|a| a.as_db_str()))
+        .bind(update.approval_level.is_some())
+        .bind(
+            update
+                .approval_level
+                .as_ref()
+                .and_then(|l| l.as_ref().map(|a| a.as_db_str())),
+        )
+        .bind(update.priority)
+        .bind(update.enabled)
+        .bind(tenant_id)
+        .execute(&self.pool)
+        .await?;
+
+        self.get_for_tenant(id, tenant_id)
+            .await?
+            .ok_or_else(|| DbError::NotFound {
+                entity: "Policy".to_string(),
+                id: id.to_string(),
+            })
+    }
+
     async fn delete(&self, id: Uuid) -> Result<bool, DbError> {
         let result = sqlx::query("DELETE FROM policies WHERE id = $1")
             .bind(id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn delete_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<bool, DbError> {
+        let result = sqlx::query("DELETE FROM policies WHERE id = $1 AND tenant_id = $2")
+            .bind(id)
+            .bind(tenant_id)
             .execute(&self.pool)
             .await?;
 
@@ -343,10 +663,42 @@ impl PolicyRepository for PgPolicyRepository {
         })
     }
 
+    async fn toggle_enabled_for_tenant(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<Policy, DbError> {
+        sqlx::query(
+            r#"UPDATE policies SET enabled = NOT enabled, updated_at = NOW() WHERE id = $1 AND tenant_id = $2"#,
+        )
+        .bind(id)
+        .bind(tenant_id)
+        .execute(&self.pool)
+        .await?;
+
+        self.get_for_tenant(id, tenant_id)
+            .await?
+            .ok_or_else(|| DbError::NotFound {
+                entity: "Policy".to_string(),
+                id: id.to_string(),
+            })
+    }
+
     async fn list_enabled(&self) -> Result<Vec<Policy>, DbError> {
         let rows: Vec<PgPolicyRow> = sqlx::query_as(
-            r#"SELECT id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at FROM policies WHERE enabled = true ORDER BY priority ASC, created_at ASC"#,
+            r#"SELECT id, tenant_id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at FROM policies WHERE enabled = true ORDER BY priority ASC, created_at ASC"#,
         )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(|r| r.try_into()).collect()
+    }
+
+    async fn list_enabled_for_tenant(&self, tenant_id: Uuid) -> Result<Vec<Policy>, DbError> {
+        let rows: Vec<PgPolicyRow> = sqlx::query_as(
+            r#"SELECT id, tenant_id, name, description, condition, action, approval_level, priority, enabled, created_at, updated_at FROM policies WHERE enabled = true AND tenant_id = $1 ORDER BY priority ASC, created_at ASC"#,
+        )
+        .bind(tenant_id)
         .fetch_all(&self.pool)
         .await?;
 
@@ -369,6 +721,8 @@ pub fn create_policy_repository(pool: &DbPool) -> Box<dyn PolicyRepository> {
 #[derive(sqlx::FromRow)]
 struct PolicyRow {
     id: String,
+    #[allow(dead_code)]
+    tenant_id: String,
     name: String,
     description: Option<String>,
     condition: String,
@@ -421,6 +775,8 @@ impl TryFrom<PolicyRow> for Policy {
 #[derive(sqlx::FromRow)]
 struct PgPolicyRow {
     id: Uuid,
+    #[allow(dead_code)]
+    tenant_id: Uuid,
     name: String,
     description: Option<String>,
     condition: String,
@@ -479,5 +835,11 @@ mod tests {
         assert!(update.approval_level.is_none());
         assert!(update.priority.is_none());
         assert!(update.enabled.is_none());
+    }
+
+    #[test]
+    fn test_policy_filter_default() {
+        let filter = PolicyFilter::default();
+        assert!(filter.tenant_id.is_none());
     }
 }

@@ -10,6 +10,7 @@ use axum::{
     middleware,
 };
 use tower::ServiceExt;
+use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::db::DbPool;
 use tw_core::EventBus;
 
@@ -68,6 +69,64 @@ async fn setup_test_app() -> Router {
     .execute(&pool)
     .await
     .expect("Failed to run settings schema");
+
+    sqlx::query(include_str!(
+        "../../../tw-core/src/db/migrations/sqlite/20240107_000001_create_auth_tables.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("Failed to run auth tables schema");
+
+    // Multi-tenancy migrations
+    for raw_statement in
+        include_str!("../../../tw-core/src/db/migrations/sqlite/20240215_000001_create_tenants.sql")
+            .split(';')
+    {
+        let statement: String = raw_statement
+            .lines()
+            .filter(|line| !line.trim().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let statement = statement.trim();
+        if statement.is_empty() {
+            continue;
+        }
+        sqlx::query(statement)
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Failed to run tenants migration: {} - Error: {}",
+                    statement, e
+                )
+            });
+    }
+
+    // Add tenant_id to all tables
+    for raw_statement in include_str!(
+        "../../../tw-core/src/db/migrations/sqlite/20240215_000002_add_tenant_id_to_tables.sql"
+    )
+    .split(';')
+    {
+        let statement: String = raw_statement
+            .lines()
+            .filter(|line| !line.trim().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let statement = statement.trim();
+        if statement.is_empty() {
+            continue;
+        }
+        sqlx::query(statement)
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Failed to run tenant migration: {} - Error: {}",
+                    statement, e
+                )
+            });
+    }
 
     let db = DbPool::Sqlite(pool);
     let event_bus = EventBus::new(100);
@@ -134,6 +193,64 @@ async fn setup_test_app_with_state() -> (Router, AppState) {
     .execute(&pool)
     .await
     .expect("Failed to run settings schema");
+
+    sqlx::query(include_str!(
+        "../../../tw-core/src/db/migrations/sqlite/20240107_000001_create_auth_tables.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("Failed to run auth tables schema");
+
+    // Multi-tenancy migrations
+    for raw_statement in
+        include_str!("../../../tw-core/src/db/migrations/sqlite/20240215_000001_create_tenants.sql")
+            .split(';')
+    {
+        let statement: String = raw_statement
+            .lines()
+            .filter(|line| !line.trim().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let statement = statement.trim();
+        if statement.is_empty() {
+            continue;
+        }
+        sqlx::query(statement)
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Failed to run tenants migration: {} - Error: {}",
+                    statement, e
+                )
+            });
+    }
+
+    // Add tenant_id to all tables
+    for raw_statement in include_str!(
+        "../../../tw-core/src/db/migrations/sqlite/20240215_000002_add_tenant_id_to_tables.sql"
+    )
+    .split(';')
+    {
+        let statement: String = raw_statement
+            .lines()
+            .filter(|line| !line.trim().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let statement = statement.trim();
+        if statement.is_empty() {
+            continue;
+        }
+        sqlx::query(statement)
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Failed to run tenant migration: {} - Error: {}",
+                    statement, e
+                )
+            });
+    }
 
     let db = DbPool::Sqlite(pool);
     let event_bus = EventBus::new(100);
@@ -626,7 +743,7 @@ async fn test_partials_notifications_with_data() {
     );
 
     notification_repo
-        .create(&channel)
+        .create(DEFAULT_TENANT_ID, &channel)
         .await
         .expect("Failed to create test notification channel");
 
@@ -746,7 +863,7 @@ async fn test_modal_edit_notification_with_existing_entity() {
         vec!["critical_incident".to_string()],
     );
     let created = notification_repo
-        .create(&channel)
+        .create(DEFAULT_TENANT_ID, &channel)
         .await
         .expect("Failed to create test notification channel");
 

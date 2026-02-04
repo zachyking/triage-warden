@@ -19,6 +19,7 @@ use crate::dto::{
 };
 use crate::error::ApiError;
 use crate::state::AppState;
+use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::db::{
     create_audit_repository, create_incident_repository, AuditRepository, IncidentFilter,
     IncidentRepository, Pagination,
@@ -70,7 +71,9 @@ async fn list_incidents(
     let repo: Box<dyn IncidentRepository> = create_incident_repository(&state.db);
 
     // Build filter from query
+    // TODO: Task 1.4.1 - Get tenant_id from TenantContext middleware
     let filter = IncidentFilter {
+        tenant_id: None, // Will be set by tenant middleware
         status: query.status.map(|s| parse_statuses(&s)),
         severity: query.severity.map(|s| parse_severities(&s)),
         since: query.since,
@@ -132,7 +135,8 @@ async fn get_incident(
         .ok_or_else(|| ApiError::NotFound(format!("Incident {} not found", id)))?;
 
     // Get audit log for this incident
-    let audit_entries: Vec<tw_core::incident::AuditEntry> = audit_repo.get_for_incident(id).await?;
+    let audit_entries: Vec<tw_core::incident::AuditEntry> =
+        audit_repo.get_for_incident(DEFAULT_TENANT_ID, id).await?;
 
     let response = incident_to_detail_response(incident, audit_entries);
 
@@ -485,7 +489,9 @@ async fn dismiss_incident(
         user.username.clone(),
         details,
     );
-    audit_repo.log(incident_id, &audit_entry).await?;
+    audit_repo
+        .log(DEFAULT_TENANT_ID, incident_id, &audit_entry)
+        .await?;
 
     // Publish status change event with fallback logging
     state
@@ -567,7 +573,9 @@ async fn resolve_incident(
         user.username.clone(),
         details,
     );
-    audit_repo.log(incident_id, &audit_entry).await?;
+    audit_repo
+        .log(DEFAULT_TENANT_ID, incident_id, &audit_entry)
+        .await?;
 
     // Publish status change event with fallback logging
     state
@@ -642,7 +650,9 @@ async fn enrich_incident(
         user.username.clone(),
         Some(serde_json::json!({ "action": "re-enrichment requested" })),
     );
-    audit_repo.log(incident_id, &audit_entry).await?;
+    audit_repo
+        .log(DEFAULT_TENANT_ID, incident_id, &audit_entry)
+        .await?;
 
     // Publish events with fallback logging
     state
@@ -944,11 +954,32 @@ mod tests {
             .await
             .expect("Failed to create pool");
 
+        // Create tenants table first
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS tenants (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                slug TEXT NOT NULL UNIQUE,
+                settings TEXT NOT NULL DEFAULT '{}',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT OR IGNORE INTO tenants (id, name, slug, settings, enabled, created_at, updated_at)
+            VALUES ('00000000-0000-0000-0000-000000000001', 'Default', 'default', '{}', 1, datetime('now'), datetime('now'));
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("Failed to create tenants table");
+
         // Create schema manually with all status values including 'dismissed'
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS incidents (
                 id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001' REFERENCES tenants(id),
                 source TEXT NOT NULL,
                 severity TEXT NOT NULL CHECK (severity IN ('info', 'low', 'medium', 'high', 'critical')),
                 status TEXT NOT NULL CHECK (status IN ('new', 'enriching', 'analyzing', 'pending_review', 'pending_approval', 'executing', 'resolved', 'false_positive', 'dismissed', 'escalated', 'closed')),
@@ -963,6 +994,7 @@ mod tests {
                 updated_at TEXT NOT NULL
             );
 
+            CREATE INDEX IF NOT EXISTS idx_incidents_tenant_id ON incidents(tenant_id);
             CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
             CREATE INDEX IF NOT EXISTS idx_incidents_severity ON incidents(severity);
             CREATE INDEX IF NOT EXISTS idx_incidents_created_at ON incidents(created_at);
@@ -978,6 +1010,7 @@ mod tests {
             r#"
             CREATE TABLE IF NOT EXISTS audit_logs (
                 id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001' REFERENCES tenants(id),
                 incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
                 action TEXT NOT NULL,
                 actor TEXT NOT NULL,
@@ -985,6 +1018,7 @@ mod tests {
                 created_at TEXT NOT NULL
             );
 
+            CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_id ON audit_logs(tenant_id);
             CREATE INDEX IF NOT EXISTS idx_audit_logs_incident_id ON audit_logs(incident_id);
             CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
             "#,
@@ -998,6 +1032,7 @@ mod tests {
             r#"
             CREATE TABLE IF NOT EXISTS actions (
                 id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001' REFERENCES tenants(id),
                 incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
                 action_type TEXT NOT NULL,
                 target TEXT NOT NULL,
@@ -1012,6 +1047,7 @@ mod tests {
                 executed_at TEXT
             );
 
+            CREATE INDEX IF NOT EXISTS idx_actions_tenant_id ON actions(tenant_id);
             CREATE INDEX IF NOT EXISTS idx_actions_incident_id ON actions(incident_id);
             CREATE INDEX IF NOT EXISTS idx_actions_status ON actions(approval_status);
             CREATE INDEX IF NOT EXISTS idx_actions_created_at ON actions(created_at);

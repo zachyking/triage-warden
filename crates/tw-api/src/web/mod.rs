@@ -15,6 +15,7 @@ use chrono::{Duration, Utc};
 use serde::Deserialize;
 use uuid::Uuid;
 
+use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::db::{
     create_api_key_repository, create_audit_repository, create_connector_repository,
     create_incident_repository, create_notification_repository, create_playbook_repository,
@@ -250,7 +251,7 @@ async fn incident_detail(
         Ok(Some(incident)) => {
             // Fetch audit log
             let audit_entries = audit_repo
-                .get_for_incident(id)
+                .get_for_incident(DEFAULT_TENANT_ID, id)
                 .await
                 .unwrap_or_default()
                 .into_iter()
@@ -484,7 +485,7 @@ async fn settings(
     // Load general settings from database
     let settings_repo = create_settings_repository(&state.db, state.encryptor.clone());
     let general_settings = settings_repo
-        .get_general()
+        .get_general(DEFAULT_TENANT_ID)
         .await
         .unwrap_or(GeneralSettings {
             org_name: "Triage Warden".to_string(),
@@ -532,11 +533,14 @@ async fn settings(
     let policies = fetch_policies(policy_repo.as_ref()).await;
 
     // Load rate limits from database
-    let db_rate_limits = settings_repo.get_rate_limits().await.unwrap_or(RateLimits {
-        isolate_host_hour: 5,
-        disable_user_hour: 10,
-        block_ip_hour: 20,
-    });
+    let db_rate_limits = settings_repo
+        .get_rate_limits(DEFAULT_TENANT_ID)
+        .await
+        .unwrap_or(RateLimits {
+            isolate_host_hour: 5,
+            disable_user_hour: 10,
+            block_ip_hour: 20,
+        });
 
     // Use defaults if settings are zero (first run)
     let rate_limits = RateLimitsData {
@@ -575,7 +579,7 @@ async fn settings(
 
     // Load LLM settings from repository
     let llm = settings_repo
-        .get_llm()
+        .get_llm(DEFAULT_TENANT_ID)
         .await
         .unwrap_or(LlmSettings::default());
     let llm_settings = LlmSettingsData {
@@ -1469,6 +1473,65 @@ mod tests {
         .await
         .expect("Failed to run settings schema");
 
+        sqlx::query(include_str!(
+            "../../../tw-core/src/db/migrations/sqlite/20240107_000001_create_auth_tables.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("Failed to run auth tables schema");
+
+        // Multi-tenancy migrations
+        for raw_statement in include_str!(
+            "../../../tw-core/src/db/migrations/sqlite/20240215_000001_create_tenants.sql"
+        )
+        .split(';')
+        {
+            let statement: String = raw_statement
+                .lines()
+                .filter(|line| !line.trim().starts_with("--"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let statement = statement.trim();
+            if statement.is_empty() {
+                continue;
+            }
+            sqlx::query(statement)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "Failed to run tenants migration: {} - Error: {}",
+                        statement, e
+                    )
+                });
+        }
+
+        // Add tenant_id to all tables - need to run statements separately due to SQLite limitations
+        for raw_statement in include_str!(
+            "../../../tw-core/src/db/migrations/sqlite/20240215_000002_add_tenant_id_to_tables.sql"
+        )
+        .split(';')
+        {
+            let statement: String = raw_statement
+                .lines()
+                .filter(|line| !line.trim().starts_with("--"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let statement = statement.trim();
+            if statement.is_empty() {
+                continue;
+            }
+            sqlx::query(statement)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "Failed to run tenant migration statement: {} - Error: {}",
+                        statement, e
+                    )
+                });
+        }
+
         let db = DbPool::Sqlite(pool);
         let event_bus = EventBus::new(100);
         let state = AppState::new(db, event_bus);
@@ -1535,6 +1598,65 @@ mod tests {
         .await
         .expect("Failed to run settings schema");
 
+        sqlx::query(include_str!(
+            "../../../tw-core/src/db/migrations/sqlite/20240107_000001_create_auth_tables.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("Failed to run auth tables schema");
+
+        // Multi-tenancy migrations
+        for raw_statement in include_str!(
+            "../../../tw-core/src/db/migrations/sqlite/20240215_000001_create_tenants.sql"
+        )
+        .split(';')
+        {
+            let statement: String = raw_statement
+                .lines()
+                .filter(|line| !line.trim().starts_with("--"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let statement = statement.trim();
+            if statement.is_empty() {
+                continue;
+            }
+            sqlx::query(statement)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "Failed to run tenants migration: {} - Error: {}",
+                        statement, e
+                    )
+                });
+        }
+
+        // Add tenant_id to all tables - need to run statements separately due to SQLite limitations
+        for raw_statement in include_str!(
+            "../../../tw-core/src/db/migrations/sqlite/20240215_000002_add_tenant_id_to_tables.sql"
+        )
+        .split(';')
+        {
+            let statement: String = raw_statement
+                .lines()
+                .filter(|line| !line.trim().starts_with("--"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let statement = statement.trim();
+            if statement.is_empty() {
+                continue;
+            }
+            sqlx::query(statement)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "Failed to run tenant migration statement: {} - Error: {}",
+                        statement, e
+                    )
+                });
+        }
+
         let db = DbPool::Sqlite(pool);
         let event_bus = EventBus::new(100);
         let state = AppState::new(db, event_bus);
@@ -1559,7 +1681,7 @@ mod tests {
                     .with_step(PlaybookStep::new("lookup_sender")),
             );
 
-        repo.create(&playbook)
+        repo.create(DEFAULT_TENANT_ID, &playbook)
             .await
             .expect("Failed to create test playbook")
     }

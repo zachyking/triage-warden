@@ -17,6 +17,7 @@ use crate::dto::{
 };
 use crate::error::ApiError;
 use crate::state::AppState;
+use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::db::{create_playbook_repository, PlaybookFilter, PlaybookRepository, PlaybookUpdate};
 use tw_core::playbook::{Playbook, PlaybookStage, PlaybookStep};
 
@@ -154,7 +155,7 @@ async fn create_playbook(
     }
 
     // Create the playbook
-    repo.create(&playbook).await?;
+    repo.create(DEFAULT_TENANT_ID, &playbook).await?;
 
     let trigger = serde_json::json!({
         "showToast": {
@@ -840,10 +841,23 @@ mod tests {
     use crate::auth::test_helpers::TestUser;
     use crate::state::AppState;
 
-    /// SQL to create the playbooks table for testing.
+    /// SQL to create the tenants and playbooks tables for testing.
     const CREATE_PLAYBOOKS_TABLE: &str = r#"
+        CREATE TABLE IF NOT EXISTS tenants (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            slug TEXT NOT NULL UNIQUE,
+            settings TEXT NOT NULL DEFAULT '{}',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        INSERT OR IGNORE INTO tenants (id, name, slug, settings, enabled, created_at, updated_at)
+        VALUES ('00000000-0000-0000-0000-000000000001', 'Default', 'default', '{}', 1, datetime('now'), datetime('now'));
+
         CREATE TABLE IF NOT EXISTS playbooks (
             id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001' REFERENCES tenants(id),
             name TEXT NOT NULL,
             description TEXT,
             trigger_type TEXT NOT NULL,
@@ -854,6 +868,7 @@ mod tests {
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
+        CREATE INDEX IF NOT EXISTS idx_playbooks_tenant_id ON playbooks(tenant_id);
         CREATE INDEX IF NOT EXISTS idx_playbooks_name ON playbooks(name);
         CREATE INDEX IF NOT EXISTS idx_playbooks_trigger_type ON playbooks(trigger_type);
         CREATE INDEX IF NOT EXISTS idx_playbooks_enabled ON playbooks(enabled);
@@ -906,7 +921,7 @@ mod tests {
         let repo = create_playbook_repository(&db);
         let playbook = Playbook::new(name, trigger_type);
         let created = repo
-            .create(&playbook)
+            .create(DEFAULT_TENANT_ID, &playbook)
             .await
             .expect("Failed to create test playbook");
         created.id
@@ -926,7 +941,7 @@ mod tests {
         let repo = create_playbook_repository(&db);
         let playbook = Playbook::new(name, trigger_type).with_description(description);
         let created = repo
-            .create(&playbook)
+            .create(DEFAULT_TENANT_ID, &playbook)
             .await
             .expect("Failed to create test playbook");
         created.id
@@ -1512,7 +1527,7 @@ mod tests {
         let repo = create_playbook_repository(&db);
         let playbook = Playbook::new("disabled-toggle", "alert").with_enabled(false);
         let created = repo
-            .create(&playbook)
+            .create(DEFAULT_TENANT_ID, &playbook)
             .await
             .expect("Failed to create playbook");
         let playbook_id = created.id;
@@ -1814,7 +1829,7 @@ mod tests {
         let playbook =
             Playbook::new("clear-condition", "alert").with_trigger_condition("severity == 'high'");
         let created = repo
-            .create(&playbook)
+            .create(DEFAULT_TENANT_ID, &playbook)
             .await
             .expect("Failed to create playbook");
         let playbook_id = created.id;
@@ -1998,7 +2013,7 @@ mod tests {
 
         let playbook = Playbook::new("playbook-with-stages", "alert").with_stages(vec![stage]);
         let created = repo
-            .create(&playbook)
+            .create(DEFAULT_TENANT_ID, &playbook)
             .await
             .expect("Failed to create playbook");
 

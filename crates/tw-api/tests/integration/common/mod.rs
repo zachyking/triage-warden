@@ -80,6 +80,58 @@ async fn run_migrations(pool: &SqlitePool) {
     .execute(pool)
     .await
     .expect("Failed to run auth tables migration");
+
+    // Multi-tenancy migrations
+    for raw_statement in include_str!(
+        "../../../../tw-core/src/db/migrations/sqlite/20240215_000001_create_tenants.sql"
+    )
+    .split(';')
+    {
+        let statement: String = raw_statement
+            .lines()
+            .filter(|line| !line.trim().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let statement = statement.trim();
+        if statement.is_empty() {
+            continue;
+        }
+        sqlx::query(statement)
+            .execute(pool)
+            .await
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Failed to run tenants migration: {} - Error: {}",
+                    statement, e
+                )
+            });
+    }
+
+    // Add tenant_id to all tables
+    for raw_statement in include_str!(
+        "../../../../tw-core/src/db/migrations/sqlite/20240215_000002_add_tenant_id_to_tables.sql"
+    )
+    .split(';')
+    {
+        let statement: String = raw_statement
+            .lines()
+            .filter(|line| !line.trim().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let statement = statement.trim();
+        if statement.is_empty() {
+            continue;
+        }
+        sqlx::query(statement)
+            .execute(pool)
+            .await
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Failed to run tenant migration: {} - Error: {}",
+                    statement, e
+                )
+            });
+    }
 }
 
 /// Creates an AppState with test database.

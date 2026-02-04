@@ -336,14 +336,20 @@ impl FromStr for Role {
     }
 }
 
+/// Default tenant ID for backward compatibility.
+/// This is used when no tenant is specified or for single-tenant deployments.
+pub const DEFAULT_TENANT_ID: Uuid = Uuid::from_u128(0x00000000_0000_0000_0000_000000000001);
+
 /// A user in the system.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
     /// Unique identifier.
     pub id: Uuid,
-    /// Email address (unique).
+    /// Tenant that owns this user (multi-tenancy support).
+    pub tenant_id: Uuid,
+    /// Email address (unique within tenant).
     pub email: String,
-    /// Username for login (unique).
+    /// Username for login (unique within tenant).
     pub username: String,
     /// Argon2 password hash.
     #[serde(skip_serializing)]
@@ -364,7 +370,19 @@ pub struct User {
 
 impl User {
     /// Creates a new user with the given details.
+    /// Uses the default tenant for backward compatibility.
     pub fn new(
+        email: impl Into<String>,
+        username: impl Into<String>,
+        password_hash: impl Into<String>,
+        role: Role,
+    ) -> Self {
+        Self::new_for_tenant(DEFAULT_TENANT_ID, email, username, password_hash, role)
+    }
+
+    /// Creates a new user for a specific tenant.
+    pub fn new_for_tenant(
+        tenant_id: Uuid,
         email: impl Into<String>,
         username: impl Into<String>,
         password_hash: impl Into<String>,
@@ -373,6 +391,7 @@ impl User {
         let now = Utc::now();
         Self {
             id: Uuid::new_v4(),
+            tenant_id,
             email: email.into(),
             username: username.into(),
             password_hash: password_hash.into(),
@@ -414,6 +433,8 @@ pub struct UserUpdate {
 /// Filter for listing users.
 #[derive(Debug, Clone, Default)]
 pub struct UserFilter {
+    /// Filter by tenant (required for tenant-scoped queries).
+    pub tenant_id: Option<Uuid>,
     pub role: Option<Role>,
     pub enabled: Option<bool>,
     pub search: Option<String>,

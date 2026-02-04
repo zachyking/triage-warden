@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::auth::RequireAdmin;
 use crate::error::ApiError;
 use crate::state::AppState;
+use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::db::{
     create_settings_repository, GeneralSettings, LlmSettings, RateLimits, SettingsRepository,
 };
@@ -94,7 +95,7 @@ async fn get_general_settings(
     let repo: Box<dyn SettingsRepository> =
         create_settings_repository(&state.db, state.encryptor.clone());
 
-    let settings = repo.get_general().await?;
+    let settings = repo.get_general(DEFAULT_TENANT_ID).await?;
 
     Ok(Json(GeneralSettingsResponse {
         org_name: settings.org_name,
@@ -118,7 +119,7 @@ async fn save_general_settings(
         mode: form.mode,
     };
 
-    repo.save_general(&settings).await?;
+    repo.save_general(DEFAULT_TENANT_ID, &settings).await?;
 
     // Return HX-Trigger header for toast notification
     let trigger_json = serde_json::json!({
@@ -147,7 +148,7 @@ async fn get_rate_limits(
     let repo: Box<dyn SettingsRepository> =
         create_settings_repository(&state.db, state.encryptor.clone());
 
-    let limits = repo.get_rate_limits().await?;
+    let limits = repo.get_rate_limits(DEFAULT_TENANT_ID).await?;
 
     Ok(Json(RateLimitsResponse {
         isolate_host_hour: limits.isolate_host_hour,
@@ -171,7 +172,7 @@ async fn save_rate_limits(
         block_ip_hour: form.block_ip_hour,
     };
 
-    repo.save_rate_limits(&limits).await?;
+    repo.save_rate_limits(DEFAULT_TENANT_ID, &limits).await?;
 
     // Return HX-Trigger header for toast notification
     let trigger_json = serde_json::json!({
@@ -200,7 +201,7 @@ async fn get_llm_settings(
     let repo: Box<dyn SettingsRepository> =
         create_settings_repository(&state.db, state.encryptor.clone());
 
-    let settings = repo.get_llm().await?;
+    let settings = repo.get_llm(DEFAULT_TENANT_ID).await?;
 
     Ok(Json(LlmSettingsResponse {
         provider: settings.provider,
@@ -223,7 +224,7 @@ async fn save_llm_settings(
         create_settings_repository(&state.db, state.encryptor.clone());
 
     // Get existing settings to preserve API key if not provided
-    let existing = repo.get_llm().await?;
+    let existing = repo.get_llm(DEFAULT_TENANT_ID).await?;
 
     // Only update API key if a new one is provided (not empty)
     let api_key = if form.api_key.is_empty() {
@@ -242,7 +243,7 @@ async fn save_llm_settings(
         enabled: form.enabled.as_deref() == Some("on"),
     };
 
-    repo.save_llm(&settings).await?;
+    repo.save_llm(DEFAULT_TENANT_ID, &settings).await?;
 
     // Return HX-Trigger header for toast notification
     let trigger_json = serde_json::json!({
@@ -382,13 +383,35 @@ mod tests {
             .await
             .expect("Failed to create test database pool");
 
+        // Create the tenants table first
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS tenants (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                slug TEXT NOT NULL UNIQUE,
+                settings TEXT NOT NULL DEFAULT '{}',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT OR IGNORE INTO tenants (id, name, slug, settings, enabled, created_at, updated_at)
+            VALUES ('00000000-0000-0000-0000-000000000001', 'Default', 'default', '{}', 1, datetime('now'), datetime('now'));
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("Failed to create tenants table");
+
         // Create the settings table manually (not using migrations)
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001' REFERENCES tenants(id),
+                key TEXT NOT NULL,
                 value TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (tenant_id, key)
             )
             "#,
         )
@@ -457,7 +480,9 @@ mod tests {
             timezone: "America/Los_Angeles".to_string(),
             mode: "autonomous".to_string(),
         };
-        repo.save_general(&settings).await.unwrap();
+        repo.save_general(DEFAULT_TENANT_ID, &settings)
+            .await
+            .unwrap();
 
         let app = create_test_router(state);
 
@@ -551,7 +576,7 @@ mod tests {
 
         // Verify settings were actually saved
         let repo = create_settings_repository(&state.db, state.encryptor.clone());
-        let saved = repo.get_general().await.unwrap();
+        let saved = repo.get_general(DEFAULT_TENANT_ID).await.unwrap();
         assert_eq!(saved.org_name, "New Org");
         assert_eq!(saved.timezone, "Europe/London");
         assert_eq!(saved.mode, "assisted");
@@ -568,7 +593,9 @@ mod tests {
             timezone: "UTC".to_string(),
             mode: "supervised".to_string(),
         };
-        repo.save_general(&initial).await.unwrap();
+        repo.save_general(DEFAULT_TENANT_ID, &initial)
+            .await
+            .unwrap();
 
         let app = create_test_router(state.clone());
 
@@ -590,7 +617,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         // Verify settings were updated
-        let updated = repo.get_general().await.unwrap();
+        let updated = repo.get_general(DEFAULT_TENANT_ID).await.unwrap();
         assert_eq!(updated.org_name, "Updated Org");
         assert_eq!(updated.timezone, "Asia/Tokyo");
         assert_eq!(updated.mode, "autonomous");
@@ -617,7 +644,7 @@ mod tests {
 
         // Verify empty values were saved
         let repo = create_settings_repository(&state.db, state.encryptor.clone());
-        let saved = repo.get_general().await.unwrap();
+        let saved = repo.get_general(DEFAULT_TENANT_ID).await.unwrap();
         assert_eq!(saved.org_name, "");
         assert_eq!(saved.timezone, "");
         assert_eq!(saved.mode, "");
@@ -647,7 +674,7 @@ mod tests {
 
         // Verify unicode was saved correctly
         let repo = create_settings_repository(&state.db, state.encryptor.clone());
-        let saved = repo.get_general().await.unwrap();
+        let saved = repo.get_general(DEFAULT_TENANT_ID).await.unwrap();
         assert_eq!(
             saved.org_name,
             "\u{30BB}\u{30AD}\u{30E5}\u{30EA}\u{30C6}\u{30A3}\u{30FC}"
@@ -697,7 +724,9 @@ mod tests {
             disable_user_hour: 25,
             block_ip_hour: 100,
         };
-        repo.save_rate_limits(&limits).await.unwrap();
+        repo.save_rate_limits(DEFAULT_TENANT_ID, &limits)
+            .await
+            .unwrap();
 
         let app = create_test_router(state);
 
@@ -791,7 +820,7 @@ mod tests {
 
         // Verify settings were actually saved
         let repo = create_settings_repository(&state.db, state.encryptor.clone());
-        let saved = repo.get_rate_limits().await.unwrap();
+        let saved = repo.get_rate_limits(DEFAULT_TENANT_ID).await.unwrap();
         assert_eq!(saved.isolate_host_hour, 30);
         assert_eq!(saved.disable_user_hour, 15);
         assert_eq!(saved.block_ip_hour, 60);
@@ -808,7 +837,9 @@ mod tests {
             disable_user_hour: 5,
             block_ip_hour: 20,
         };
-        repo.save_rate_limits(&initial).await.unwrap();
+        repo.save_rate_limits(DEFAULT_TENANT_ID, &initial)
+            .await
+            .unwrap();
 
         let app = create_test_router(state.clone());
 
@@ -830,7 +861,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         // Verify rate limits were updated
-        let updated = repo.get_rate_limits().await.unwrap();
+        let updated = repo.get_rate_limits(DEFAULT_TENANT_ID).await.unwrap();
         assert_eq!(updated.isolate_host_hour, 100);
         assert_eq!(updated.disable_user_hour, 50);
         assert_eq!(updated.block_ip_hour, 200);
@@ -859,7 +890,7 @@ mod tests {
 
         // Verify zero values were saved
         let repo = create_settings_repository(&state.db, state.encryptor.clone());
-        let saved = repo.get_rate_limits().await.unwrap();
+        let saved = repo.get_rate_limits(DEFAULT_TENANT_ID).await.unwrap();
         assert_eq!(saved.isolate_host_hour, 0);
         assert_eq!(saved.disable_user_hour, 0);
         assert_eq!(saved.block_ip_hour, 0);
@@ -891,7 +922,7 @@ mod tests {
 
         // Verify max values were saved
         let repo = create_settings_repository(&state.db, state.encryptor.clone());
-        let saved = repo.get_rate_limits().await.unwrap();
+        let saved = repo.get_rate_limits(DEFAULT_TENANT_ID).await.unwrap();
         assert_eq!(saved.isolate_host_hour, u32::MAX);
         assert_eq!(saved.disable_user_hour, u32::MAX);
         assert_eq!(saved.block_ip_hour, u32::MAX);
@@ -1045,7 +1076,7 @@ mod tests {
 
         // Final state should be one of the updates (last writer wins)
         let repo = create_settings_repository(&state.db, state.encryptor.clone());
-        let saved = repo.get_general().await.unwrap();
+        let saved = repo.get_general(DEFAULT_TENANT_ID).await.unwrap();
         assert!(saved.org_name.starts_with("Org"));
     }
 

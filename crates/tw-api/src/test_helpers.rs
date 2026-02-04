@@ -21,6 +21,7 @@ use chrono::Utc;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
+use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::connector::{ConnectorConfig, ConnectorType};
 use tw_core::db::{
     create_connector_repository, create_incident_repository, create_playbook_repository, DbPool,
@@ -158,6 +159,67 @@ async fn run_migrations(pool: &SqlitePool) {
     .execute(pool)
     .await
     .expect("Failed to run settings migration");
+
+    // Create tenants table for multi-tenancy
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS tenants (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            slug TEXT NOT NULL UNIQUE,
+            settings TEXT NOT NULL DEFAULT '{}',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        INSERT OR IGNORE INTO tenants (id, name, slug, settings, enabled, created_at, updated_at)
+        VALUES ('00000000-0000-0000-0000-000000000001', 'Default', 'default', '{}', 1, datetime('now'), datetime('now'));
+        "#,
+    )
+    .execute(pool)
+    .await
+    .expect("Failed to create tenants table");
+
+    // Add tenant_id to all tables
+    sqlx::query("ALTER TABLE incidents ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001' REFERENCES tenants(id)")
+        .execute(pool)
+        .await
+        .expect("Failed to add tenant_id to incidents");
+
+    sqlx::query("ALTER TABLE audit_logs ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001' REFERENCES tenants(id)")
+        .execute(pool)
+        .await
+        .expect("Failed to add tenant_id to audit_logs");
+
+    sqlx::query("ALTER TABLE actions ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001' REFERENCES tenants(id)")
+        .execute(pool)
+        .await
+        .expect("Failed to add tenant_id to actions");
+
+    sqlx::query("ALTER TABLE playbooks ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001' REFERENCES tenants(id)")
+        .execute(pool)
+        .await
+        .expect("Failed to add tenant_id to playbooks");
+
+    sqlx::query("ALTER TABLE connectors ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001' REFERENCES tenants(id)")
+        .execute(pool)
+        .await
+        .expect("Failed to add tenant_id to connectors");
+
+    sqlx::query("ALTER TABLE policies ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001' REFERENCES tenants(id)")
+        .execute(pool)
+        .await
+        .expect("Failed to add tenant_id to policies");
+
+    sqlx::query("ALTER TABLE notification_channels ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001' REFERENCES tenants(id)")
+        .execute(pool)
+        .await
+        .expect("Failed to add tenant_id to notification_channels");
+
+    sqlx::query("ALTER TABLE settings ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'")
+        .execute(pool)
+        .await
+        .expect("Failed to add tenant_id to settings");
 }
 
 // ============================================================================
@@ -337,7 +399,7 @@ pub async fn create_test_incident_with_params(
 pub async fn create_test_playbook(state: &AppState, name: &str, trigger_type: &str) -> Playbook {
     let playbook = Playbook::new(name, trigger_type);
     let repo = create_playbook_repository(&state.db);
-    repo.create(&playbook)
+    repo.create(DEFAULT_TENANT_ID, &playbook)
         .await
         .expect("Failed to create test playbook")
 }
@@ -362,7 +424,7 @@ pub async fn create_test_playbook_with_description(
 ) -> Playbook {
     let playbook = Playbook::new(name, trigger_type).with_description(description);
     let repo = create_playbook_repository(&state.db);
-    repo.create(&playbook)
+    repo.create(DEFAULT_TENANT_ID, &playbook)
         .await
         .expect("Failed to create test playbook")
 }

@@ -13,6 +13,8 @@ use uuid::Uuid;
 pub struct Incident {
     /// Unique identifier for this incident.
     pub id: Uuid,
+    /// Tenant that owns this incident (multi-tenancy support).
+    pub tenant_id: Uuid,
     /// Source system that generated the alert.
     pub source: AlertSource,
     /// Severity level of the incident.
@@ -41,12 +43,17 @@ pub struct Incident {
     pub metadata: HashMap<String, serde_json::Value>,
 }
 
+/// Default tenant ID for backward compatibility.
+/// This is used when no tenant is specified or for single-tenant deployments.
+pub const DEFAULT_TENANT_ID: Uuid = Uuid::from_u128(0x00000000_0000_0000_0000_000000000001);
+
 impl Incident {
-    /// Creates a new incident from an alert.
-    pub fn from_alert(alert: Alert) -> Self {
+    /// Creates a new incident from an alert with the specified tenant.
+    pub fn from_alert_with_tenant(alert: Alert, tenant_id: Uuid) -> Self {
         let now = Utc::now();
         Self {
             id: Uuid::new_v4(),
+            tenant_id,
             source: alert.source,
             severity: alert.severity,
             status: IncidentStatus::New,
@@ -65,6 +72,12 @@ impl Incident {
             tags: alert.tags,
             metadata: HashMap::new(),
         }
+    }
+
+    /// Creates a new incident from an alert using the default tenant.
+    /// This is provided for backward compatibility with single-tenant deployments.
+    pub fn from_alert(alert: Alert) -> Self {
+        Self::from_alert_with_tenant(alert, DEFAULT_TENANT_ID)
     }
 
     /// Adds an enrichment to the incident.
@@ -643,6 +656,7 @@ mod tests {
         assert_eq!(incident.severity, Severity::High);
         assert_eq!(incident.enrichments.len(), 0);
         assert_eq!(incident.audit_log.len(), 1);
+        assert_eq!(incident.tenant_id, DEFAULT_TENANT_ID);
     }
 
     #[test]

@@ -189,6 +189,73 @@ impl IncidentRepository for MockIncidentRepository {
         let mut incidents = self.incidents.write().await;
         Ok(incidents.remove(&id).is_some())
     }
+
+    async fn get_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<Option<Incident>, DbError> {
+        let incidents = self.incidents.read().await;
+        match incidents.get(&id) {
+            Some(incident) if incident.tenant_id == tenant_id => Ok(Some(incident.clone())),
+            Some(_) => Ok(None), // Incident exists but belongs to different tenant
+            None => Ok(None),
+        }
+    }
+
+    async fn update_for_tenant(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+        update: &IncidentUpdate,
+    ) -> Result<Incident, DbError> {
+        let mut incidents = self.incidents.write().await;
+
+        let incident = incidents.get_mut(&id).ok_or_else(|| DbError::NotFound {
+            entity: "Incident".to_string(),
+            id: id.to_string(),
+        })?;
+
+        // Check tenant ownership
+        if incident.tenant_id != tenant_id {
+            return Err(DbError::NotFound {
+                entity: "Incident".to_string(),
+                id: id.to_string(),
+            });
+        }
+
+        if let Some(status) = &update.status {
+            incident.status = status.clone();
+        }
+
+        if let Some(severity) = &update.severity {
+            incident.severity = *severity;
+        }
+
+        if let Some(analysis) = &update.analysis {
+            if let Ok(parsed) = serde_json::from_value(analysis.clone()) {
+                incident.analysis = Some(parsed);
+            }
+        }
+
+        if let Some(ticket_id) = &update.ticket_id {
+            incident.ticket_id = Some(ticket_id.clone());
+        }
+
+        if let Some(tags) = &update.tags {
+            incident.tags = tags.clone();
+        }
+
+        incident.updated_at = Utc::now();
+        Ok(incident.clone())
+    }
+
+    async fn delete_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<bool, DbError> {
+        let mut incidents = self.incidents.write().await;
+        if let Some(incident) = incidents.get(&id) {
+            if incident.tenant_id == tenant_id {
+                incidents.remove(&id);
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
 }
 
 #[cfg(test)]
@@ -200,6 +267,7 @@ mod tests {
     fn test_incident(id: Uuid, status: IncidentStatus, severity: Severity) -> Incident {
         Incident {
             id,
+            tenant_id: Uuid::new_v4(),
             source: AlertSource::Siem("test".to_string()),
             severity,
             status,

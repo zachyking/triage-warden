@@ -9,6 +9,8 @@ use uuid::Uuid;
 /// Filter criteria for listing incidents.
 #[derive(Debug, Clone, Default)]
 pub struct IncidentFilter {
+    /// Filter by tenant (required for multi-tenant queries).
+    pub tenant_id: Option<Uuid>,
     /// Filter by status (multiple allowed).
     pub status: Option<Vec<IncidentStatus>>,
     /// Filter by severity (multiple allowed).
@@ -66,15 +68,27 @@ pub struct IncidentUpdate {
 }
 
 /// Repository trait for incident persistence.
+///
+/// All methods that query or modify incidents are tenant-scoped:
+/// - `get` and `get_for_tenant` - retrieves an incident by ID (optionally scoped to tenant)
+/// - `list` and `count` - use `IncidentFilter.tenant_id` to scope results
+/// - `create`, `save`, `update` - use the incident's `tenant_id` field
+/// - `delete` - deletes within the tenant scope
 #[async_trait]
 pub trait IncidentRepository: Send + Sync {
-    /// Creates a new incident.
+    /// Creates a new incident. The incident's tenant_id is used for tenant scoping.
     async fn create(&self, incident: &Incident) -> Result<Incident, DbError>;
 
-    /// Gets an incident by ID.
+    /// Gets an incident by ID without tenant scoping (admin use only).
+    /// For tenant-scoped access, use `get_for_tenant`.
     async fn get(&self, id: Uuid) -> Result<Option<Incident>, DbError>;
 
+    /// Gets an incident by ID, scoped to a specific tenant.
+    /// Returns None if the incident doesn't exist or belongs to a different tenant.
+    async fn get_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<Option<Incident>, DbError>;
+
     /// Lists incidents with optional filtering and pagination.
+    /// Use `filter.tenant_id` to scope results to a specific tenant.
     async fn list(
         &self,
         filter: &IncidentFilter,
@@ -82,16 +96,28 @@ pub trait IncidentRepository: Send + Sync {
     ) -> Result<Vec<Incident>, DbError>;
 
     /// Counts incidents matching the filter.
+    /// Use `filter.tenant_id` to scope results to a specific tenant.
     async fn count(&self, filter: &IncidentFilter) -> Result<u64, DbError>;
 
-    /// Updates an incident.
+    /// Updates an incident. The update is scoped to the incident's tenant.
     async fn update(&self, id: Uuid, update: &IncidentUpdate) -> Result<Incident, DbError>;
+
+    /// Updates an incident, scoped to a specific tenant.
+    async fn update_for_tenant(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+        update: &IncidentUpdate,
+    ) -> Result<Incident, DbError>;
 
     /// Updates the full incident (replaces all fields).
     async fn save(&self, incident: &Incident) -> Result<Incident, DbError>;
 
-    /// Deletes an incident.
+    /// Deletes an incident without tenant scoping (admin use only).
     async fn delete(&self, id: Uuid) -> Result<bool, DbError>;
+
+    /// Deletes an incident, scoped to a specific tenant.
+    async fn delete_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<bool, DbError>;
 }
 
 /// SQLite implementation of IncidentRepository.
@@ -112,6 +138,7 @@ impl SqliteIncidentRepository {
 impl IncidentRepository for SqliteIncidentRepository {
     async fn create(&self, incident: &Incident) -> Result<Incident, DbError> {
         let id = incident.id.to_string();
+        let tenant_id = incident.tenant_id.to_string();
         let source = serde_json::to_string(&incident.source)?;
         // Use plain strings for severity/status to match DB schema constraints
         let severity = incident.severity.as_db_str();
@@ -131,11 +158,12 @@ impl IncidentRepository for SqliteIncidentRepository {
 
         sqlx::query(
             r#"
-            INSERT INTO incidents (id, source, severity, status, alert_data, enrichments, analysis, proposed_actions, ticket_id, tags, metadata, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO incidents (id, tenant_id, source, severity, status, alert_data, enrichments, analysis, proposed_actions, ticket_id, tags, metadata, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
-        .bind(id)
+        .bind(&id)
+        .bind(&tenant_id)
         .bind(source)
         .bind(severity)
         .bind(status)
@@ -158,9 +186,27 @@ impl IncidentRepository for SqliteIncidentRepository {
         let id_str = id.to_string();
 
         let row: Option<IncidentRow> = sqlx::query_as(
-            r#"SELECT id, source, severity, status, alert_data, enrichments, analysis, proposed_actions, ticket_id, tags, metadata, created_at, updated_at FROM incidents WHERE id = ?"#,
+            r#"SELECT id, tenant_id, source, severity, status, alert_data, enrichments, analysis, proposed_actions, ticket_id, tags, metadata, created_at, updated_at FROM incidents WHERE id = ?"#,
         )
         .bind(&id_str)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            Some(row) => Ok(Some(row.try_into()?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<Option<Incident>, DbError> {
+        let id_str = id.to_string();
+        let tenant_id_str = tenant_id.to_string();
+
+        let row: Option<IncidentRow> = sqlx::query_as(
+            r#"SELECT id, tenant_id, source, severity, status, alert_data, enrichments, analysis, proposed_actions, ticket_id, tags, metadata, created_at, updated_at FROM incidents WHERE id = ? AND tenant_id = ?"#,
+        )
+        .bind(&id_str)
+        .bind(&tenant_id_str)
         .fetch_optional(&self.pool)
         .await?;
 
@@ -179,8 +225,12 @@ impl IncidentRepository for SqliteIncidentRepository {
 
         // Build dynamic query with filters
         let mut query = String::from(
-            "SELECT id, source, severity, status, alert_data, enrichments, analysis, proposed_actions, ticket_id, tags, metadata, created_at, updated_at FROM incidents WHERE 1=1",
+            "SELECT id, tenant_id, source, severity, status, alert_data, enrichments, analysis, proposed_actions, ticket_id, tags, metadata, created_at, updated_at FROM incidents WHERE 1=1",
         );
+
+        if filter.tenant_id.is_some() {
+            query.push_str(" AND tenant_id = ?");
+        }
 
         if filter.status.is_some() {
             query.push_str(" AND status IN (SELECT value FROM json_each(?))");
@@ -207,6 +257,10 @@ impl IncidentRepository for SqliteIncidentRepository {
         query.push_str(" ORDER BY created_at DESC LIMIT ? OFFSET ?");
 
         let mut query_builder = sqlx::query_as::<_, IncidentRow>(&query);
+
+        if let Some(tenant_id) = filter.tenant_id {
+            query_builder = query_builder.bind(tenant_id.to_string());
+        }
 
         if let Some(statuses) = &filter.status {
             // Use plain strings (not JSON-quoted) for DB comparison
@@ -250,6 +304,10 @@ impl IncidentRepository for SqliteIncidentRepository {
 
         let mut query = String::from("SELECT COUNT(*) as count FROM incidents WHERE 1=1");
 
+        if filter.tenant_id.is_some() {
+            query.push_str(" AND tenant_id = ?");
+        }
+
         if filter.status.is_some() {
             query.push_str(" AND status IN (SELECT value FROM json_each(?))");
         }
@@ -273,6 +331,10 @@ impl IncidentRepository for SqliteIncidentRepository {
         }
 
         let mut query_builder = sqlx::query_scalar::<_, i64>(&query);
+
+        if let Some(tenant_id) = filter.tenant_id {
+            query_builder = query_builder.bind(tenant_id.to_string());
+        }
 
         if let Some(statuses) = &filter.status {
             // Use plain strings (not JSON-quoted) for DB comparison
@@ -405,11 +467,92 @@ impl IncidentRepository for SqliteIncidentRepository {
         Ok(incident.clone())
     }
 
+    async fn update_for_tenant(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+        update: &IncidentUpdate,
+    ) -> Result<Incident, DbError> {
+        let id_str = id.to_string();
+        let tenant_id_str = tenant_id.to_string();
+        let now = Utc::now().to_rfc3339();
+
+        // Build dynamic update query with tenant scoping
+        let mut set_clauses = vec!["updated_at = ?".to_string()];
+        let mut values: Vec<String> = vec![now];
+
+        if let Some(status) = &update.status {
+            set_clauses.push("status = ?".to_string());
+            values.push(status.as_db_str().to_string());
+        }
+
+        if let Some(severity) = &update.severity {
+            set_clauses.push("severity = ?".to_string());
+            values.push(severity.as_db_str().to_string());
+        }
+
+        if let Some(analysis) = &update.analysis {
+            set_clauses.push("analysis = ?".to_string());
+            values.push(serde_json::to_string(analysis)?);
+        }
+
+        if let Some(ticket_id) = &update.ticket_id {
+            set_clauses.push("ticket_id = ?".to_string());
+            values.push(ticket_id.clone());
+        }
+
+        if let Some(tags) = &update.tags {
+            set_clauses.push("tags = ?".to_string());
+            values.push(serde_json::to_string(tags)?);
+        }
+
+        let query = format!(
+            "UPDATE incidents SET {} WHERE id = ? AND tenant_id = ?",
+            set_clauses.join(", ")
+        );
+
+        let mut query_builder = sqlx::query(&query);
+
+        for value in &values {
+            query_builder = query_builder.bind(value);
+        }
+
+        query_builder = query_builder.bind(&id_str).bind(&tenant_id_str);
+        let result = query_builder.execute(&self.pool).await?;
+
+        if result.rows_affected() == 0 {
+            return Err(DbError::NotFound {
+                entity: "Incident".to_string(),
+                id: id.to_string(),
+            });
+        }
+
+        self.get_for_tenant(id, tenant_id)
+            .await?
+            .ok_or_else(|| DbError::NotFound {
+                entity: "Incident".to_string(),
+                id: id.to_string(),
+            })
+    }
+
     async fn delete(&self, id: Uuid) -> Result<bool, DbError> {
         let id_str = id.to_string();
 
         let result = sqlx::query("DELETE FROM incidents WHERE id = ?")
             .bind(&id_str)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn delete_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<bool, DbError> {
+        let id_str = id.to_string();
+        let tenant_id_str = tenant_id.to_string();
+
+        let result = sqlx::query("DELETE FROM incidents WHERE id = ? AND tenant_id = ?")
+            .bind(&id_str)
+            .bind(&tenant_id_str)
             .execute(&self.pool)
             .await?;
 
@@ -440,11 +583,12 @@ impl IncidentRepository for PgIncidentRepository {
 
         sqlx::query(
             r#"
-            INSERT INTO incidents (id, source, severity, status, alert_data, enrichments, analysis, proposed_actions, ticket_id, tags, metadata, created_at, updated_at)
-            VALUES ($1, $2, $3::severity, $4::incident_status, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            INSERT INTO incidents (id, tenant_id, source, severity, status, alert_data, enrichments, analysis, proposed_actions, ticket_id, tags, metadata, created_at, updated_at)
+            VALUES ($1, $2, $3, $4::severity, $5::incident_status, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             "#,
         )
         .bind(incident.id)
+        .bind(incident.tenant_id)
         .bind(&source)
         .bind(&severity)
         .bind(&status)
@@ -465,9 +609,24 @@ impl IncidentRepository for PgIncidentRepository {
 
     async fn get(&self, id: Uuid) -> Result<Option<Incident>, DbError> {
         let row: Option<PgIncidentRow> = sqlx::query_as(
-            r#"SELECT id, source, severity::text, status::text, alert_data, enrichments, analysis, proposed_actions, ticket_id, tags, metadata, created_at, updated_at FROM incidents WHERE id = $1"#,
+            r#"SELECT id, tenant_id, source, severity::text, status::text, alert_data, enrichments, analysis, proposed_actions, ticket_id, tags, metadata, created_at, updated_at FROM incidents WHERE id = $1"#,
         )
         .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            Some(row) => Ok(Some(row.try_into()?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<Option<Incident>, DbError> {
+        let row: Option<PgIncidentRow> = sqlx::query_as(
+            r#"SELECT id, tenant_id, source, severity::text, status::text, alert_data, enrichments, analysis, proposed_actions, ticket_id, tags, metadata, created_at, updated_at FROM incidents WHERE id = $1 AND tenant_id = $2"#,
+        )
+        .bind(id)
+        .bind(tenant_id)
         .fetch_optional(&self.pool)
         .await?;
 
@@ -488,17 +647,19 @@ impl IncidentRepository for PgIncidentRepository {
 
         let rows: Vec<PgIncidentRow> = sqlx::query_as(
             r#"
-            SELECT id, source, severity::text, status::text, alert_data, enrichments, analysis, proposed_actions, ticket_id, tags, metadata, created_at, updated_at
+            SELECT id, tenant_id, source, severity::text, status::text, alert_data, enrichments, analysis, proposed_actions, ticket_id, tags, metadata, created_at, updated_at
             FROM incidents
-            WHERE ($1::text[] IS NULL OR status::text = ANY($1))
-              AND ($2::text[] IS NULL OR severity::text = ANY($2))
-              AND ($3::timestamptz IS NULL OR created_at >= $3)
-              AND ($4::timestamptz IS NULL OR created_at <= $4)
-              AND ($5::text IS NULL OR alert_data::text ILIKE $5 OR ticket_id ILIKE $5 OR tags::text ILIKE $5)
+            WHERE ($1::uuid IS NULL OR tenant_id = $1)
+              AND ($2::text[] IS NULL OR status::text = ANY($2))
+              AND ($3::text[] IS NULL OR severity::text = ANY($3))
+              AND ($4::timestamptz IS NULL OR created_at >= $4)
+              AND ($5::timestamptz IS NULL OR created_at <= $5)
+              AND ($6::text IS NULL OR alert_data::text ILIKE $6 OR ticket_id ILIKE $6 OR tags::text ILIKE $6)
             ORDER BY created_at DESC
-            LIMIT $6 OFFSET $7
+            LIMIT $7 OFFSET $8
             "#,
         )
+        .bind(filter.tenant_id)
         .bind(filter.status.as_ref().map(|s| {
             s.iter()
                 .map(|st| format!("{:?}", st).to_lowercase())
@@ -529,13 +690,15 @@ impl IncidentRepository for PgIncidentRepository {
             r#"
             SELECT COUNT(*)
             FROM incidents
-            WHERE ($1::text[] IS NULL OR status::text = ANY($1))
-              AND ($2::text[] IS NULL OR severity::text = ANY($2))
-              AND ($3::timestamptz IS NULL OR created_at >= $3)
-              AND ($4::timestamptz IS NULL OR created_at <= $4)
-              AND ($5::text IS NULL OR alert_data::text ILIKE $5 OR ticket_id ILIKE $5 OR tags::text ILIKE $5)
+            WHERE ($1::uuid IS NULL OR tenant_id = $1)
+              AND ($2::text[] IS NULL OR status::text = ANY($2))
+              AND ($3::text[] IS NULL OR severity::text = ANY($3))
+              AND ($4::timestamptz IS NULL OR created_at >= $4)
+              AND ($5::timestamptz IS NULL OR created_at <= $5)
+              AND ($6::text IS NULL OR alert_data::text ILIKE $6 OR ticket_id ILIKE $6 OR tags::text ILIKE $6)
             "#,
         )
+        .bind(filter.tenant_id)
         .bind(filter.status.as_ref().map(|s| {
             s.iter()
                 .map(|st| format!("{:?}", st).to_lowercase())
@@ -635,9 +798,70 @@ impl IncidentRepository for PgIncidentRepository {
         Ok(incident.clone())
     }
 
+    async fn update_for_tenant(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+        update: &IncidentUpdate,
+    ) -> Result<Incident, DbError> {
+        sqlx::query(
+            r#"
+            UPDATE incidents SET
+                status = COALESCE($3::incident_status, status),
+                severity = COALESCE($4::severity, severity),
+                analysis = COALESCE($5, analysis),
+                ticket_id = COALESCE($6, ticket_id),
+                tags = COALESCE($7, tags),
+                updated_at = NOW()
+            WHERE id = $1 AND tenant_id = $2
+            "#,
+        )
+        .bind(id)
+        .bind(tenant_id)
+        .bind(
+            update
+                .status
+                .as_ref()
+                .map(|s| format!("{:?}", s).to_lowercase()),
+        )
+        .bind(
+            update
+                .severity
+                .as_ref()
+                .map(|s| format!("{:?}", s).to_lowercase()),
+        )
+        .bind(&update.analysis)
+        .bind(&update.ticket_id)
+        .bind(
+            update
+                .tags
+                .as_ref()
+                .and_then(|t| serde_json::to_value(t).ok()),
+        )
+        .execute(&self.pool)
+        .await?;
+
+        self.get_for_tenant(id, tenant_id)
+            .await?
+            .ok_or_else(|| DbError::NotFound {
+                entity: "Incident".to_string(),
+                id: id.to_string(),
+            })
+    }
+
     async fn delete(&self, id: Uuid) -> Result<bool, DbError> {
         let result = sqlx::query("DELETE FROM incidents WHERE id = $1")
             .bind(id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn delete_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<bool, DbError> {
+        let result = sqlx::query("DELETE FROM incidents WHERE id = $1 AND tenant_id = $2")
+            .bind(id)
+            .bind(tenant_id)
             .execute(&self.pool)
             .await?;
 
@@ -660,6 +884,7 @@ pub fn create_incident_repository(pool: &DbPool) -> Box<dyn IncidentRepository> 
 #[derive(sqlx::FromRow)]
 struct IncidentRow {
     id: String,
+    tenant_id: String,
     source: String,
     severity: String,
     status: String,
@@ -685,6 +910,8 @@ impl TryFrom<IncidentRow> for Incident {
 
         Ok(Incident {
             id: Uuid::parse_str(&row.id).map_err(|e| DbError::Serialization(e.to_string()))?,
+            tenant_id: Uuid::parse_str(&row.tenant_id)
+                .map_err(|e| DbError::Serialization(e.to_string()))?,
             source: serde_json::from_str(&row.source)?,
             severity: serde_json::from_str(&severity_json)?,
             status: serde_json::from_str(&status_json)?,
@@ -710,6 +937,7 @@ impl TryFrom<IncidentRow> for Incident {
 #[derive(sqlx::FromRow)]
 struct PgIncidentRow {
     id: Uuid,
+    tenant_id: Uuid,
     source: String,
     severity: String,
     status: String,
@@ -766,6 +994,7 @@ impl TryFrom<PgIncidentRow> for Incident {
 
         Ok(Incident {
             id: row.id,
+            tenant_id: row.tenant_id,
             source: serde_json::from_str(&row.source)?,
             severity,
             status,

@@ -431,11 +431,32 @@ mod api_tests {
             .await
             .expect("Failed to create test pool");
 
+        // Create the tenants table first
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS tenants (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                slug TEXT NOT NULL UNIQUE,
+                settings TEXT NOT NULL DEFAULT '{}',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT OR IGNORE INTO tenants (id, name, slug, settings, enabled, created_at, updated_at)
+            VALUES ('00000000-0000-0000-0000-000000000001', 'Default', 'default', '{}', 1, datetime('now'), datetime('now'));
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("Failed to create tenants table");
+
         // Create the policies table manually
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS policies (
                 id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001' REFERENCES tenants(id),
                 name TEXT NOT NULL,
                 description TEXT,
                 condition TEXT NOT NULL,
@@ -445,7 +466,8 @@ mod api_tests {
                 enabled INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
-            )
+            );
+            CREATE INDEX IF NOT EXISTS idx_policies_tenant_id ON policies(tenant_id);
             "#,
         )
         .execute(&pool)

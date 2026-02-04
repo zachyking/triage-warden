@@ -9,6 +9,8 @@ use uuid::Uuid;
 /// Filter criteria for listing playbooks.
 #[derive(Debug, Clone, Default)]
 pub struct PlaybookFilter {
+    /// Filter by tenant ID.
+    pub tenant_id: Option<Uuid>,
     /// Filter by enabled status.
     pub enabled: Option<bool>,
     /// Filter by trigger type.
@@ -31,14 +33,24 @@ pub struct PlaybookUpdate {
 /// Repository trait for playbook persistence.
 #[async_trait]
 pub trait PlaybookRepository: Send + Sync {
-    /// Creates a new playbook.
-    async fn create(&self, playbook: &Playbook) -> Result<Playbook, DbError>;
+    /// Creates a new playbook for a specific tenant.
+    async fn create(&self, tenant_id: Uuid, playbook: &Playbook) -> Result<Playbook, DbError>;
 
     /// Gets a playbook by ID.
     async fn get(&self, id: Uuid) -> Result<Option<Playbook>, DbError>;
 
+    /// Gets a playbook by ID within a specific tenant (ensures tenant isolation).
+    async fn get_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<Option<Playbook>, DbError>;
+
     /// Gets a playbook by name.
     async fn get_by_name(&self, name: &str) -> Result<Option<Playbook>, DbError>;
+
+    /// Gets a playbook by name within a specific tenant (ensures tenant isolation).
+    async fn get_by_name_for_tenant(
+        &self,
+        name: &str,
+        tenant_id: Uuid,
+    ) -> Result<Option<Playbook>, DbError>;
 
     /// Lists playbooks with optional filtering.
     async fn list(&self, filter: &PlaybookFilter) -> Result<Vec<Playbook>, DbError>;
@@ -46,14 +58,39 @@ pub trait PlaybookRepository: Send + Sync {
     /// Updates a playbook.
     async fn update(&self, id: Uuid, update: &PlaybookUpdate) -> Result<Playbook, DbError>;
 
+    /// Updates a playbook within a specific tenant (ensures tenant isolation).
+    async fn update_for_tenant(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+        update: &PlaybookUpdate,
+    ) -> Result<Playbook, DbError>;
+
     /// Deletes a playbook.
     async fn delete(&self, id: Uuid) -> Result<bool, DbError>;
+
+    /// Deletes a playbook within a specific tenant (ensures tenant isolation).
+    async fn delete_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<bool, DbError>;
 
     /// Toggles the enabled status of a playbook.
     async fn toggle_enabled(&self, id: Uuid) -> Result<Playbook, DbError>;
 
+    /// Toggles the enabled status of a playbook within a specific tenant (ensures tenant isolation).
+    async fn toggle_enabled_for_tenant(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<Playbook, DbError>;
+
     /// Increments the execution count of a playbook.
     async fn increment_execution_count(&self, id: Uuid) -> Result<Playbook, DbError>;
+
+    /// Increments the execution count of a playbook within a specific tenant (ensures tenant isolation).
+    async fn increment_execution_count_for_tenant(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<Playbook, DbError>;
 }
 
 /// SQLite implementation of PlaybookRepository.
@@ -72,8 +109,9 @@ impl SqlitePlaybookRepository {
 #[cfg(feature = "database")]
 #[async_trait]
 impl PlaybookRepository for SqlitePlaybookRepository {
-    async fn create(&self, playbook: &Playbook) -> Result<Playbook, DbError> {
+    async fn create(&self, tenant_id: Uuid, playbook: &Playbook) -> Result<Playbook, DbError> {
         let id = playbook.id.to_string();
+        let tenant_id_str = tenant_id.to_string();
         let stages = serde_json::to_string(&playbook.stages)?;
         let enabled = if playbook.enabled { 1 } else { 0 };
         let created_at = playbook.created_at.to_rfc3339();
@@ -81,11 +119,12 @@ impl PlaybookRepository for SqlitePlaybookRepository {
 
         sqlx::query(
             r#"
-            INSERT INTO playbooks (id, name, description, trigger_type, trigger_condition, stages, enabled, execution_count, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO playbooks (id, tenant_id, name, description, trigger_type, trigger_condition, stages, enabled, execution_count, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&id)
+        .bind(&tenant_id_str)
         .bind(&playbook.name)
         .bind(&playbook.description)
         .bind(&playbook.trigger_type)
@@ -105,7 +144,7 @@ impl PlaybookRepository for SqlitePlaybookRepository {
         let id_str = id.to_string();
 
         let row: Option<PlaybookRow> = sqlx::query_as(
-            r#"SELECT id, name, description, trigger_type, trigger_condition, stages, enabled, execution_count, created_at, updated_at FROM playbooks WHERE id = ?"#,
+            r#"SELECT id, tenant_id, name, description, trigger_type, trigger_condition, stages, enabled, execution_count, created_at, updated_at FROM playbooks WHERE id = ?"#,
         )
         .bind(&id_str)
         .fetch_optional(&self.pool)
@@ -117,9 +156,27 @@ impl PlaybookRepository for SqlitePlaybookRepository {
         }
     }
 
+    async fn get_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<Option<Playbook>, DbError> {
+        let id_str = id.to_string();
+        let tenant_id_str = tenant_id.to_string();
+
+        let row: Option<PlaybookRow> = sqlx::query_as(
+            r#"SELECT id, tenant_id, name, description, trigger_type, trigger_condition, stages, enabled, execution_count, created_at, updated_at FROM playbooks WHERE id = ? AND tenant_id = ?"#,
+        )
+        .bind(&id_str)
+        .bind(&tenant_id_str)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            Some(row) => Ok(Some(row.try_into()?)),
+            None => Ok(None),
+        }
+    }
+
     async fn get_by_name(&self, name: &str) -> Result<Option<Playbook>, DbError> {
         let row: Option<PlaybookRow> = sqlx::query_as(
-            r#"SELECT id, name, description, trigger_type, trigger_condition, stages, enabled, execution_count, created_at, updated_at FROM playbooks WHERE name = ?"#,
+            r#"SELECT id, tenant_id, name, description, trigger_type, trigger_condition, stages, enabled, execution_count, created_at, updated_at FROM playbooks WHERE name = ?"#,
         )
         .bind(name)
         .fetch_optional(&self.pool)
@@ -131,10 +188,35 @@ impl PlaybookRepository for SqlitePlaybookRepository {
         }
     }
 
+    async fn get_by_name_for_tenant(
+        &self,
+        name: &str,
+        tenant_id: Uuid,
+    ) -> Result<Option<Playbook>, DbError> {
+        let tenant_id_str = tenant_id.to_string();
+
+        let row: Option<PlaybookRow> = sqlx::query_as(
+            r#"SELECT id, tenant_id, name, description, trigger_type, trigger_condition, stages, enabled, execution_count, created_at, updated_at FROM playbooks WHERE name = ? AND tenant_id = ?"#,
+        )
+        .bind(name)
+        .bind(&tenant_id_str)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            Some(row) => Ok(Some(row.try_into()?)),
+            None => Ok(None),
+        }
+    }
+
     async fn list(&self, filter: &PlaybookFilter) -> Result<Vec<Playbook>, DbError> {
         let mut query = String::from(
-            "SELECT id, name, description, trigger_type, trigger_condition, stages, enabled, execution_count, created_at, updated_at FROM playbooks WHERE 1=1",
+            "SELECT id, tenant_id, name, description, trigger_type, trigger_condition, stages, enabled, execution_count, created_at, updated_at FROM playbooks WHERE 1=1",
         );
+
+        if filter.tenant_id.is_some() {
+            query.push_str(" AND tenant_id = ?");
+        }
 
         if filter.enabled.is_some() {
             query.push_str(" AND enabled = ?");
@@ -151,6 +233,10 @@ impl PlaybookRepository for SqlitePlaybookRepository {
         query.push_str(" ORDER BY created_at DESC");
 
         let mut query_builder = sqlx::query_as::<_, PlaybookRow>(&query);
+
+        if let Some(tenant_id) = &filter.tenant_id {
+            query_builder = query_builder.bind(tenant_id.to_string());
+        }
 
         if let Some(enabled) = filter.enabled {
             query_builder = query_builder.bind(if enabled { 1 } else { 0 });
@@ -231,11 +317,94 @@ impl PlaybookRepository for SqlitePlaybookRepository {
         })
     }
 
+    async fn update_for_tenant(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+        update: &PlaybookUpdate,
+    ) -> Result<Playbook, DbError> {
+        let id_str = id.to_string();
+        let tenant_id_str = tenant_id.to_string();
+        let now = Utc::now().to_rfc3339();
+
+        let mut set_clauses = vec!["updated_at = ?".to_string()];
+        let mut bindings: Vec<SqliteBinding> = vec![SqliteBinding::String(now)];
+
+        if let Some(name) = &update.name {
+            set_clauses.push("name = ?".to_string());
+            bindings.push(SqliteBinding::String(name.clone()));
+        }
+
+        if let Some(description) = &update.description {
+            set_clauses.push("description = ?".to_string());
+            bindings.push(SqliteBinding::OptionalString(description.clone()));
+        }
+
+        if let Some(trigger_type) = &update.trigger_type {
+            set_clauses.push("trigger_type = ?".to_string());
+            bindings.push(SqliteBinding::String(trigger_type.clone()));
+        }
+
+        if let Some(trigger_condition) = &update.trigger_condition {
+            set_clauses.push("trigger_condition = ?".to_string());
+            bindings.push(SqliteBinding::OptionalString(trigger_condition.clone()));
+        }
+
+        if let Some(stages) = &update.stages {
+            set_clauses.push("stages = ?".to_string());
+            bindings.push(SqliteBinding::String(serde_json::to_string(stages)?));
+        }
+
+        if let Some(enabled) = update.enabled {
+            set_clauses.push("enabled = ?".to_string());
+            bindings.push(SqliteBinding::Int(if enabled { 1 } else { 0 }));
+        }
+
+        let query = format!(
+            "UPDATE playbooks SET {} WHERE id = ? AND tenant_id = ?",
+            set_clauses.join(", ")
+        );
+
+        let mut query_builder = sqlx::query(&query);
+
+        for binding in bindings {
+            query_builder = match binding {
+                SqliteBinding::String(s) => query_builder.bind(s),
+                SqliteBinding::OptionalString(s) => query_builder.bind(s),
+                SqliteBinding::Int(i) => query_builder.bind(i),
+            };
+        }
+
+        query_builder = query_builder.bind(&id_str);
+        query_builder = query_builder.bind(&tenant_id_str);
+        query_builder.execute(&self.pool).await?;
+
+        self.get_for_tenant(id, tenant_id)
+            .await?
+            .ok_or_else(|| DbError::NotFound {
+                entity: "Playbook".to_string(),
+                id: id.to_string(),
+            })
+    }
+
     async fn delete(&self, id: Uuid) -> Result<bool, DbError> {
         let id_str = id.to_string();
 
         let result = sqlx::query("DELETE FROM playbooks WHERE id = ?")
             .bind(&id_str)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn delete_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<bool, DbError> {
+        let id_str = id.to_string();
+        let tenant_id_str = tenant_id.to_string();
+
+        let result = sqlx::query("DELETE FROM playbooks WHERE id = ? AND tenant_id = ?")
+            .bind(&id_str)
+            .bind(&tenant_id_str)
             .execute(&self.pool)
             .await?;
 
@@ -258,6 +427,32 @@ impl PlaybookRepository for SqlitePlaybookRepository {
         })
     }
 
+    async fn toggle_enabled_for_tenant(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<Playbook, DbError> {
+        let id_str = id.to_string();
+        let tenant_id_str = tenant_id.to_string();
+        let now = Utc::now().to_rfc3339();
+
+        sqlx::query(
+            r#"UPDATE playbooks SET enabled = NOT enabled, updated_at = ? WHERE id = ? AND tenant_id = ?"#,
+        )
+        .bind(&now)
+        .bind(&id_str)
+        .bind(&tenant_id_str)
+        .execute(&self.pool)
+        .await?;
+
+        self.get_for_tenant(id, tenant_id)
+            .await?
+            .ok_or_else(|| DbError::NotFound {
+                entity: "Playbook".to_string(),
+                id: id.to_string(),
+            })
+    }
+
     async fn increment_execution_count(&self, id: Uuid) -> Result<Playbook, DbError> {
         let id_str = id.to_string();
         let now = Utc::now().to_rfc3339();
@@ -274,6 +469,32 @@ impl PlaybookRepository for SqlitePlaybookRepository {
             entity: "Playbook".to_string(),
             id: id.to_string(),
         })
+    }
+
+    async fn increment_execution_count_for_tenant(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<Playbook, DbError> {
+        let id_str = id.to_string();
+        let tenant_id_str = tenant_id.to_string();
+        let now = Utc::now().to_rfc3339();
+
+        sqlx::query(
+            r#"UPDATE playbooks SET execution_count = execution_count + 1, updated_at = ? WHERE id = ? AND tenant_id = ?"#,
+        )
+        .bind(&now)
+        .bind(&id_str)
+        .bind(&tenant_id_str)
+        .execute(&self.pool)
+        .await?;
+
+        self.get_for_tenant(id, tenant_id)
+            .await?
+            .ok_or_else(|| DbError::NotFound {
+                entity: "Playbook".to_string(),
+                id: id.to_string(),
+            })
     }
 }
 
@@ -293,16 +514,17 @@ impl PgPlaybookRepository {
 #[cfg(feature = "database")]
 #[async_trait]
 impl PlaybookRepository for PgPlaybookRepository {
-    async fn create(&self, playbook: &Playbook) -> Result<Playbook, DbError> {
+    async fn create(&self, tenant_id: Uuid, playbook: &Playbook) -> Result<Playbook, DbError> {
         let stages = serde_json::to_value(&playbook.stages)?;
 
         sqlx::query(
             r#"
-            INSERT INTO playbooks (id, name, description, trigger_type, trigger_condition, stages, enabled, execution_count, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            INSERT INTO playbooks (id, tenant_id, name, description, trigger_type, trigger_condition, stages, enabled, execution_count, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             "#,
         )
         .bind(playbook.id)
+        .bind(tenant_id)
         .bind(&playbook.name)
         .bind(&playbook.description)
         .bind(&playbook.trigger_type)
@@ -320,7 +542,7 @@ impl PlaybookRepository for PgPlaybookRepository {
 
     async fn get(&self, id: Uuid) -> Result<Option<Playbook>, DbError> {
         let row: Option<PgPlaybookRow> = sqlx::query_as(
-            r#"SELECT id, name, description, trigger_type, trigger_condition, stages, enabled, execution_count, created_at, updated_at FROM playbooks WHERE id = $1"#,
+            r#"SELECT id, tenant_id, name, description, trigger_type, trigger_condition, stages, enabled, execution_count, created_at, updated_at FROM playbooks WHERE id = $1"#,
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -332,9 +554,24 @@ impl PlaybookRepository for PgPlaybookRepository {
         }
     }
 
+    async fn get_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<Option<Playbook>, DbError> {
+        let row: Option<PgPlaybookRow> = sqlx::query_as(
+            r#"SELECT id, tenant_id, name, description, trigger_type, trigger_condition, stages, enabled, execution_count, created_at, updated_at FROM playbooks WHERE id = $1 AND tenant_id = $2"#,
+        )
+        .bind(id)
+        .bind(tenant_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            Some(row) => Ok(Some(row.try_into()?)),
+            None => Ok(None),
+        }
+    }
+
     async fn get_by_name(&self, name: &str) -> Result<Option<Playbook>, DbError> {
         let row: Option<PgPlaybookRow> = sqlx::query_as(
-            r#"SELECT id, name, description, trigger_type, trigger_condition, stages, enabled, execution_count, created_at, updated_at FROM playbooks WHERE name = $1"#,
+            r#"SELECT id, tenant_id, name, description, trigger_type, trigger_condition, stages, enabled, execution_count, created_at, updated_at FROM playbooks WHERE name = $1"#,
         )
         .bind(name)
         .fetch_optional(&self.pool)
@@ -346,22 +583,88 @@ impl PlaybookRepository for PgPlaybookRepository {
         }
     }
 
-    async fn list(&self, filter: &PlaybookFilter) -> Result<Vec<Playbook>, DbError> {
-        let rows: Vec<PgPlaybookRow> = sqlx::query_as(
-            r#"
-            SELECT id, name, description, trigger_type, trigger_condition, stages, enabled, execution_count, created_at, updated_at
-            FROM playbooks
-            WHERE ($1::boolean IS NULL OR enabled = $1)
-              AND ($2::text IS NULL OR trigger_type = $2)
-              AND ($3::text IS NULL OR name ILIKE '%' || $3 || '%')
-            ORDER BY created_at DESC
-            "#,
+    async fn get_by_name_for_tenant(
+        &self,
+        name: &str,
+        tenant_id: Uuid,
+    ) -> Result<Option<Playbook>, DbError> {
+        let row: Option<PgPlaybookRow> = sqlx::query_as(
+            r#"SELECT id, tenant_id, name, description, trigger_type, trigger_condition, stages, enabled, execution_count, created_at, updated_at FROM playbooks WHERE name = $1 AND tenant_id = $2"#,
         )
-        .bind(filter.enabled)
-        .bind(&filter.trigger_type)
-        .bind(&filter.name_contains)
-        .fetch_all(&self.pool)
+        .bind(name)
+        .bind(tenant_id)
+        .fetch_optional(&self.pool)
         .await?;
+
+        match row {
+            Some(row) => Ok(Some(row.try_into()?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn list(&self, filter: &PlaybookFilter) -> Result<Vec<Playbook>, DbError> {
+        let rows: Vec<PgPlaybookRow> = if filter.tenant_id.is_some()
+            || filter.enabled.is_some()
+            || filter.trigger_type.is_some()
+            || filter.name_contains.is_some()
+        {
+            let mut conditions = vec!["1=1".to_string()];
+            let mut param_idx = 1;
+
+            if filter.tenant_id.is_some() {
+                conditions.push(format!("tenant_id = ${}", param_idx));
+                param_idx += 1;
+            }
+
+            if filter.enabled.is_some() {
+                conditions.push(format!("enabled = ${}", param_idx));
+                param_idx += 1;
+            }
+
+            if filter.trigger_type.is_some() {
+                conditions.push(format!("trigger_type = ${}", param_idx));
+                param_idx += 1;
+            }
+
+            if filter.name_contains.is_some() {
+                conditions.push(format!("name ILIKE '%' || ${} || '%'", param_idx));
+            }
+
+            let query = format!(
+                "SELECT id, tenant_id, name, description, trigger_type, trigger_condition, stages, enabled, execution_count, created_at, updated_at FROM playbooks WHERE {} ORDER BY created_at DESC",
+                conditions.join(" AND ")
+            );
+
+            let mut sqlx_query = sqlx::query_as::<_, PgPlaybookRow>(&query);
+
+            if let Some(tenant_id) = filter.tenant_id {
+                sqlx_query = sqlx_query.bind(tenant_id);
+            }
+
+            if let Some(enabled) = filter.enabled {
+                sqlx_query = sqlx_query.bind(enabled);
+            }
+
+            if let Some(trigger_type) = &filter.trigger_type {
+                sqlx_query = sqlx_query.bind(trigger_type);
+            }
+
+            if let Some(name_contains) = &filter.name_contains {
+                sqlx_query = sqlx_query.bind(name_contains);
+            }
+
+            sqlx_query.fetch_all(&self.pool).await?
+        } else {
+            sqlx::query_as(
+                r#"
+                SELECT id, tenant_id, name, description, trigger_type, trigger_condition, stages, enabled, execution_count, created_at, updated_at
+                FROM playbooks
+                ORDER BY created_at DESC
+                "#,
+            )
+            .fetch_all(&self.pool)
+            .await?
+        };
 
         rows.into_iter().map(|r| r.try_into()).collect()
     }
@@ -404,9 +707,65 @@ impl PlaybookRepository for PgPlaybookRepository {
         })
     }
 
+    async fn update_for_tenant(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+        update: &PlaybookUpdate,
+    ) -> Result<Playbook, DbError> {
+        let stages_json = update
+            .stages
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()?;
+
+        sqlx::query(
+            r#"
+            UPDATE playbooks SET
+                name = COALESCE($2, name),
+                description = CASE WHEN $3::boolean THEN $4 ELSE description END,
+                trigger_type = COALESCE($5, trigger_type),
+                trigger_condition = CASE WHEN $6::boolean THEN $7 ELSE trigger_condition END,
+                stages = COALESCE($8, stages),
+                enabled = COALESCE($9, enabled),
+                updated_at = NOW()
+            WHERE id = $1 AND tenant_id = $10
+            "#,
+        )
+        .bind(id)
+        .bind(&update.name)
+        .bind(update.description.is_some())
+        .bind(update.description.as_ref().and_then(|d| d.clone()))
+        .bind(&update.trigger_type)
+        .bind(update.trigger_condition.is_some())
+        .bind(update.trigger_condition.as_ref().and_then(|c| c.clone()))
+        .bind(&stages_json)
+        .bind(update.enabled)
+        .bind(tenant_id)
+        .execute(&self.pool)
+        .await?;
+
+        self.get_for_tenant(id, tenant_id)
+            .await?
+            .ok_or_else(|| DbError::NotFound {
+                entity: "Playbook".to_string(),
+                id: id.to_string(),
+            })
+    }
+
     async fn delete(&self, id: Uuid) -> Result<bool, DbError> {
         let result = sqlx::query("DELETE FROM playbooks WHERE id = $1")
             .bind(id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn delete_for_tenant(&self, id: Uuid, tenant_id: Uuid) -> Result<bool, DbError> {
+        let result = sqlx::query("DELETE FROM playbooks WHERE id = $1 AND tenant_id = $2")
+            .bind(id)
+            .bind(tenant_id)
             .execute(&self.pool)
             .await?;
 
@@ -427,6 +786,27 @@ impl PlaybookRepository for PgPlaybookRepository {
         })
     }
 
+    async fn toggle_enabled_for_tenant(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<Playbook, DbError> {
+        sqlx::query(
+            r#"UPDATE playbooks SET enabled = NOT enabled, updated_at = NOW() WHERE id = $1 AND tenant_id = $2"#,
+        )
+        .bind(id)
+        .bind(tenant_id)
+        .execute(&self.pool)
+        .await?;
+
+        self.get_for_tenant(id, tenant_id)
+            .await?
+            .ok_or_else(|| DbError::NotFound {
+                entity: "Playbook".to_string(),
+                id: id.to_string(),
+            })
+    }
+
     async fn increment_execution_count(&self, id: Uuid) -> Result<Playbook, DbError> {
         sqlx::query(
             r#"UPDATE playbooks SET execution_count = execution_count + 1, updated_at = NOW() WHERE id = $1"#,
@@ -439,6 +819,27 @@ impl PlaybookRepository for PgPlaybookRepository {
             entity: "Playbook".to_string(),
             id: id.to_string(),
         })
+    }
+
+    async fn increment_execution_count_for_tenant(
+        &self,
+        id: Uuid,
+        tenant_id: Uuid,
+    ) -> Result<Playbook, DbError> {
+        sqlx::query(
+            r#"UPDATE playbooks SET execution_count = execution_count + 1, updated_at = NOW() WHERE id = $1 AND tenant_id = $2"#,
+        )
+        .bind(id)
+        .bind(tenant_id)
+        .execute(&self.pool)
+        .await?;
+
+        self.get_for_tenant(id, tenant_id)
+            .await?
+            .ok_or_else(|| DbError::NotFound {
+                entity: "Playbook".to_string(),
+                id: id.to_string(),
+            })
     }
 }
 
@@ -465,6 +866,8 @@ enum SqliteBinding {
 #[derive(sqlx::FromRow)]
 struct PlaybookRow {
     id: String,
+    #[allow(dead_code)]
+    tenant_id: String,
     name: String,
     description: Option<String>,
     trigger_type: String,
@@ -504,6 +907,8 @@ impl TryFrom<PlaybookRow> for Playbook {
 #[derive(sqlx::FromRow)]
 struct PgPlaybookRow {
     id: Uuid,
+    #[allow(dead_code)]
+    tenant_id: Uuid,
     name: String,
     description: Option<String>,
     trigger_type: String,
@@ -542,6 +947,7 @@ mod tests {
     #[test]
     fn test_playbook_filter_default() {
         let f = PlaybookFilter::default();
+        assert!(f.tenant_id.is_none());
         assert!(f.enabled.is_none());
         assert!(f.trigger_type.is_none());
         assert!(f.name_contains.is_none());
