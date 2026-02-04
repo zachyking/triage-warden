@@ -10,13 +10,13 @@ An ADR is a document that captures an important architectural decision made alon
 
 | Number | Title | Status | Date |
 |--------|-------|--------|------|
-| [001](001-event-bus-architecture.md) | Event Bus Architecture | Accepted | 2024-01 |
-| [002](002-dual-database-support.md) | Dual Database Support (SQLite + PostgreSQL) | Accepted | 2024-01 |
-| [003](003-credential-encryption.md) | Credential Encryption at Rest | Accepted | 2024-01 |
-| [004](004-session-management.md) | Session Management Strategy | Accepted | 2024-01 |
-| [005](005-api-key-format.md) | API Key Format and Security | Accepted | 2024-01 |
-| [006](006-operation-modes.md) | Operation Modes (Supervised/Autonomous) | Accepted | 2024-01 |
-| [007](007-kill-switch-design.md) | Kill Switch Design | Accepted | 2024-01 |
+| [001](001-event-bus-architecture.md) | Event Bus Architecture | Accepted | 2026-02 |
+| [002](002-dual-database-support.md) | Dual Database Support (SQLite + PostgreSQL) | Accepted | 2026-02 |
+| [003](003-credential-encryption.md) | Credential Encryption at Rest | Accepted | 2026-02 |
+| [004](004-session-management.md) | Session Management Strategy | Accepted | 2026-02 |
+| [005](005-api-key-format.md) | API Key Format and Security | Accepted | 2026-02 |
+| [006](006-operation-modes.md) | Operation Modes (Supervised/Autonomous) | Accepted | 2026-02 |
+| [007](007-kill-switch-design.md) | Kill Switch Design | Accepted | 2026-02 |
 
 ## ADR Template
 
