@@ -1,0 +1,59 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "triage-warden.configMapName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "triage-warden.labels" . | nindent 4 }}
+data:
+  # Server configuration
+  TW_BIND_ADDRESS: "0.0.0.0:8080"
+  {{- if .Values.config.baseUrl }}
+  TW_BASE_URL: {{ .Values.config.baseUrl | quote }}
+  {{- end }}
+  TW_TRUSTED_PROXIES: {{ .Values.config.trustedProxies | quote }}
+
+  # Database configuration
+  {{- if not .Values.postgresql.existingSecret }}
+  DATABASE_URL: {{ include "triage-warden.databaseUrl" . | quote }}
+  {{- end }}
+  DATABASE_MAX_CONNECTIONS: {{ .Values.postgresql.maxConnections | quote }}
+  DATABASE_MIN_CONNECTIONS: {{ .Values.postgresql.minConnections | quote }}
+  DATABASE_CONNECT_TIMEOUT: {{ .Values.postgresql.connectTimeout | quote }}
+
+  {{- if .Values.redis.enabled }}
+  # Redis configuration
+  REDIS_URL: {{ include "triage-warden.redisUrl" . | quote }}
+  {{- end }}
+
+  # LLM configuration
+  TW_LLM_PROVIDER: {{ .Values.llm.provider | quote }}
+  TW_LLM_MODEL: {{ .Values.llm.model | quote }}
+  TW_LLM_TEMPERATURE: {{ .Values.llm.temperature | quote }}
+  TW_LLM_MAX_TOKENS: {{ .Values.llm.maxTokens | quote }}
+
+  # Logging
+  RUST_LOG: {{ .Values.config.logLevel | quote }}
+  TW_LOG_FORMAT: {{ .Values.config.logFormat | quote }}
+
+  # Security settings
+  TW_COOKIE_SECURE: {{ .Values.config.secureCookies | quote }}
+  TW_COOKIE_SAME_SITE: {{ .Values.config.cookieSameSite | quote }}
+  TW_CSRF_ENABLED: {{ .Values.config.csrfEnabled | quote }}
+  TW_SESSION_EXPIRY_SECONDS: {{ .Values.config.sessionExpiry | quote }}
+  TW_REQUEST_TIMEOUT: {{ .Values.config.requestTimeout | quote }}
+  TW_ENABLE_SWAGGER: {{ .Values.config.enableSwagger | quote }}
+
+  # Metrics
+  TW_METRICS_ENABLED: {{ .Values.config.metricsEnabled | quote }}
+  TW_METRICS_PATH: {{ .Values.config.metricsPath | quote }}
+
+  # Rate limiting
+  TW_RATE_LIMIT_ENABLED: {{ .Values.config.rateLimit.enabled | quote }}
+  TW_RATE_LIMIT_REQUESTS: {{ .Values.config.rateLimit.requestsPerWindow | quote }}
+  TW_RATE_LIMIT_WINDOW: {{ .Values.config.rateLimit.windowDuration | quote }}
+
+  # Feature flags
+  TW_FEATURE_PLAYBOOKS: {{ .Values.config.features.playbooks | quote }}
+  TW_FEATURE_AUTO_ENRICH: {{ .Values.config.features.autoEnrich | quote }}
+  TW_FEATURE_API_KEYS: {{ .Values.config.features.apiKeys | quote }}

@@ -1,0 +1,82 @@
+# Triage Warden - Development Values
+# ====================================
+# Single-instance deployment for development and testing.
+#
+# Usage:
+#   helm install triage-warden ./helm/triage-warden -f values-dev.yaml \
+#     --set postgresql.host=postgres.default.svc.cluster.local \
+#     --set secrets.encryptionKey="$(openssl rand -base64 32)" \
+#     --set secrets.jwtSecret="$(openssl rand -hex 32)" \
+#     --set secrets.sessionSecret="$(openssl rand -hex 32)"
+
+# Single instance for development
+api:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+orchestrator:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# Disable high availability features
+autoscaling:
+  enabled: false
+
+podDisruptionBudget:
+  enabled: false
+
+# Development configuration
+config:
+  logLevel: "debug"
+  logFormat: "text"
+  enableSwagger: true
+  secureCookies: false
+  csrfEnabled: false
+  rateLimit:
+    enabled: false
+    requestsPerWindow: 1000
+    windowDuration: "1m"
+
+# External PostgreSQL - must be configured
+postgresql:
+  host: ""  # Set via --set or in your own values file
+  port: 5432
+  database: "triage_warden"
+  username: "triage"
+  password: ""  # Set via --set
+  sslMode: "disable"  # No SSL for development
+
+# Redis not needed for single-instance development
+redis:
+  enabled: false
+
+# No ingress for development (use port-forward)
+ingress:
+  enabled: false
+
+# NodePort service for easier access
+service:
+  type: NodePort
+  nodePort: 30080
+
+# Disable monitoring for development
+serviceMonitor:
+  enabled: false
+
+prometheusRules:
+  enabled: false
+
+networkPolicy:
+  enabled: false

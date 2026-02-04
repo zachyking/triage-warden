@@ -1,0 +1,77 @@
+# Prometheus Configuration for Triage Warden HA Setup
+#
+# This configuration file scrapes metrics from all Triage Warden instances
+# and supporting services in the HA Docker Compose deployment.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'triage-warden-ha-local'
+    environment: 'development'
+
+# Alerting configuration (optional, requires Alertmanager)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#             - alertmanager:9093
+
+# Rule files for alerting
+rule_files:
+  # - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Triage Warden API instances
+  - job_name: 'triage-warden-api'
+    static_configs:
+      - targets:
+          - 'api-1:8080'
+          - 'api-2:8080'
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '([^:]+):.*'
+        target_label: instance
+        replacement: '${1}'
+    metrics_path: /metrics
+    scrape_interval: 10s
+    scrape_timeout: 5s
+
+  # Triage Warden Orchestrator instances
+  - job_name: 'triage-warden-orchestrator'
+    static_configs:
+      - targets:
+          - 'orchestrator-1:8080'
+          - 'orchestrator-2:8080'
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '([^:]+):.*'
+        target_label: instance
+        replacement: '${1}'
+    metrics_path: /metrics
+    scrape_interval: 10s
+    scrape_timeout: 5s
+
+  # Traefik reverse proxy metrics
+  - job_name: 'traefik'
+    static_configs:
+      - targets: ['traefik:8082']
+    metrics_path: /metrics
+    scrape_interval: 15s
+
+  # Redis metrics (requires redis-exporter sidecar)
+  # Uncomment if you add redis-exporter to your setup
+  # - job_name: 'redis'
+  #   static_configs:
+  #     - targets: ['redis-exporter:9121']
+
+  # PostgreSQL metrics (requires postgres-exporter sidecar)
+  # Uncomment if you add postgres-exporter to your setup
+  # - job_name: 'postgres'
+  #   static_configs:
+  #     - targets: ['postgres-exporter:9187']

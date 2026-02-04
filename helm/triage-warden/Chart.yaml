@@ -1,0 +1,45 @@
+apiVersion: v2
+name: triage-warden
+description: A Helm chart for deploying Triage Warden security automation platform to Kubernetes
+type: application
+
+# Chart version - follows SemVer 2.0
+version: 0.1.0
+
+# Application version - matches the Triage Warden release version
+appVersion: "0.1.0"
+
+# Kubernetes version compatibility
+kubeVersion: ">=1.25.0-0"
+
+# Chart metadata
+home: https://github.com/triage-warden/triage-warden
+icon: https://raw.githubusercontent.com/triage-warden/triage-warden/main/docs/logo.png
+sources:
+  - https://github.com/triage-warden/triage-warden
+
+maintainers:
+  - name: Triage Warden Team
+    email: team@triage-warden.io
+    url: https://github.com/triage-warden
+
+keywords:
+  - security
+  - automation
+  - triage
+  - incident-response
+  - soar
+  - siem
+
+annotations:
+  # Artifact Hub annotations
+  artifacthub.io/license: MIT
+  artifacthub.io/operator: "false"
+  artifacthub.io/prerelease: "true"
+  artifacthub.io/containsSecurityUpdates: "false"
+  artifacthub.io/changes: |
+    - kind: added
+      description: Initial Helm chart release
+  artifacthub.io/recommendations: |
+    - url: https://artifacthub.io/packages/helm/bitnami/postgresql
+    - url: https://artifacthub.io/packages/helm/bitnami/redis

@@ -1,0 +1,182 @@
+# Triage Warden - Production Values
+# ===================================
+# Multi-instance deployment with high availability settings.
+#
+# Prerequisites:
+# 1. Create namespace: kubectl create namespace triage-warden
+# 2. Create secrets externally or use external secrets manager
+# 3. Configure external PostgreSQL and optionally Redis
+# 4. Configure ingress with TLS certificates
+#
+# Usage:
+#   helm install triage-warden ./helm/triage-warden \
+#     --namespace triage-warden \
+#     -f values-prod.yaml \
+#     -f values-prod-secrets.yaml  # Your own secrets file (don't commit!)
+
+image:
+  pullPolicy: IfNotPresent
+
+# Multiple API instances for high availability
+api:
+  replicas: 3
+  podAntiAffinityPreset: soft
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+# Single orchestrator with leader election
+orchestrator:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+# Production configuration
+config:
+  baseUrl: ""  # Set to your production URL
+  logLevel: "info"
+  logFormat: "json"
+  enableSwagger: false
+  secureCookies: true
+  csrfEnabled: true
+  cookieSameSite: "strict"
+  metricsEnabled: true
+  rateLimit:
+    enabled: true
+    requestsPerWindow: 200
+    windowDuration: "1m"
+  features:
+    playbooks: true
+    autoEnrich: true
+    apiKeys: true
+
+# External PostgreSQL - REQUIRED
+postgresql:
+  host: ""  # Set to your PostgreSQL host
+  port: 5432
+  database: "triage_warden"
+  username: "triage"
+  existingSecret: "postgresql-credentials"  # Create this secret separately
+  sslMode: "require"
+  maxConnections: 50
+  minConnections: 10
+  connectTimeout: 30
+
+# Redis for distributed deployment
+redis:
+  enabled: true
+  host: ""  # Set to your Redis host
+  port: 6379
+  existingSecret: "redis-credentials"  # Create this secret separately
+  tls: true
+
+# Use external secrets manager
+secrets:
+  create: false
+  existingSecret: "triage-warden-secrets"
+
+# Ingress with TLS
+ingress:
+  enabled: true
+  className: nginx
+  nginx:
+    enabled: true
+    sslRedirect: true
+    proxyBodySize: "10m"
+    proxyReadTimeout: "60"
+    proxySendTimeout: "60"
+    limitRps: "50"
+    limitConnections: "20"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: triage.example.com  # Change to your domain
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: triage-warden-tls
+      hosts:
+        - triage.example.com  # Change to your domain
+
+# Service
+service:
+  type: ClusterIP
+  port: 80
+
+# Autoscaling
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 10
+          periodSeconds: 60
+      selectPolicy: Min
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+        - type: Pods
+          value: 4
+          periodSeconds: 15
+      selectPolicy: Max
+
+# Pod Disruption Budget for HA
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Network policies
+networkPolicy:
+  enabled: true
+  allowIngressNamespace: "ingress-nginx"
+  allowMonitoringNamespace: "monitoring"
+
+# ServiceAccount with minimal permissions
+serviceAccount:
+  create: true
+  automountServiceAccountToken: true
+
+# RBAC
+rbac:
+  create: true
+
+# Prometheus monitoring
+serviceMonitor:
+  enabled: true
+  labels:
+    release: prometheus
+  interval: "15s"
+  scrapeTimeout: "10s"
+
+# Alerting rules
+prometheusRules:
+  enabled: true
+  labels:
+    release: prometheus
+
+# LLM configuration
+llm:
+  provider: "anthropic"
+  model: "claude-3-sonnet-20240229"
+  temperature: "0.2"
+  maxTokens: "4096"
+  existingSecret: "llm-api-key"  # Create this secret separately

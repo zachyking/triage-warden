@@ -1,0 +1,96 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "triage-warden.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "triage-warden.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "triage-warden.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # Allow from ingress controller
+    {{- if .Values.networkPolicy.allowIngressNamespace }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: {{ .Values.networkPolicy.allowIngressNamespace }}
+      ports:
+        - protocol: TCP
+          port: 8080
+    {{- end }}
+
+    # Allow from monitoring namespace (Prometheus)
+    {{- if .Values.networkPolicy.allowMonitoringNamespace }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: {{ .Values.networkPolicy.allowMonitoringNamespace }}
+      ports:
+        - protocol: TCP
+          port: 8080
+    {{- end }}
+
+    # Allow intra-namespace communication
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080
+
+    {{- with .Values.networkPolicy.ingressRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # Allow to PostgreSQL
+    {{- if .Values.postgresql.host }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: {{ .Values.postgresql.port }}
+    {{- end }}
+
+    # Allow to Redis
+    {{- if .Values.redis.enabled }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: {{ .Values.redis.port }}
+    {{- end }}
+
+    # Allow to LLM APIs (external HTTPS)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+
+    {{- with .Values.networkPolicy.egressRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

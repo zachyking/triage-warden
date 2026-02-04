@@ -1,0 +1,20 @@
+{{- if and .Values.api.enabled .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "triage-warden.fullname" . }}-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "triage-warden.api.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  {{- else if .Values.podDisruptionBudget.maxUnavailable }}
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  {{- else }}
+  minAvailable: 1
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "triage-warden.api.selectorLabels" . | nindent 6 }}
+{{- end }}

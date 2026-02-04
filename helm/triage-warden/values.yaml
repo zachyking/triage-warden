@@ -1,0 +1,521 @@
+# Triage Warden Helm Chart Values
+# ================================
+# This file contains all configurable options for deploying Triage Warden.
+# Override these values using --set or -f with your own values file.
+
+# -- Global settings
+global:
+  # -- Image pull secrets for private registries
+  imagePullSecrets: []
+  # -- Override the name of the chart
+  nameOverride: ""
+  # -- Override the full name of resources
+  fullnameOverride: ""
+
+# -- Container image configuration
+image:
+  # -- Container image repository
+  repository: ghcr.io/triage-warden/triage-warden
+  # -- Image pull policy (Always, Never, IfNotPresent)
+  pullPolicy: IfNotPresent
+  # -- Image tag (defaults to Chart.appVersion)
+  tag: ""
+
+# =============================================================================
+# API Server Configuration
+# =============================================================================
+api:
+  # -- Enable API server deployment
+  enabled: true
+  # -- Number of API server replicas (ignored when autoscaling.enabled=true)
+  replicas: 2
+
+  # -- Resource requests and limits
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # -- Node selector for pod scheduling
+  nodeSelector: {}
+
+  # -- Tolerations for pod scheduling
+  tolerations: []
+
+  # -- Affinity rules for pod scheduling
+  affinity: {}
+
+  # -- Pod anti-affinity preset (soft, hard, or custom with affinity above)
+  # soft: prefer to spread across nodes/zones
+  # hard: require spreading across nodes/zones
+  podAntiAffinityPreset: soft
+
+  # -- Topology spread constraints
+  topologySpreadConstraints: []
+
+  # -- Additional pod annotations
+  podAnnotations: {}
+
+  # -- Additional pod labels
+  podLabels: {}
+
+  # -- Security context for the pod
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+
+  # -- Security context for the container
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+  # -- Liveness probe configuration
+  livenessProbe:
+    httpGet:
+      path: /live
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+    successThreshold: 1
+
+  # -- Readiness probe configuration
+  readinessProbe:
+    httpGet:
+      path: /ready
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+    successThreshold: 1
+
+  # -- Startup probe configuration (for slow-starting containers)
+  startupProbe:
+    httpGet:
+      path: /live
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 30
+    successThreshold: 1
+
+  # -- Additional environment variables for API pods
+  extraEnv: []
+  # - name: EXTRA_VAR
+  #   value: "value"
+
+  # -- Additional environment variables from ConfigMaps/Secrets
+  extraEnvFrom: []
+  # - configMapRef:
+  #     name: extra-config
+
+  # -- Additional volume mounts
+  extraVolumeMounts: []
+
+  # -- Additional volumes
+  extraVolumes: []
+
+# =============================================================================
+# Orchestrator Configuration
+# =============================================================================
+orchestrator:
+  # -- Enable Orchestrator deployment
+  enabled: true
+  # -- Number of Orchestrator replicas (typically 1 due to leader election)
+  replicas: 1
+
+  # -- Resource requests and limits
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # -- Node selector for pod scheduling
+  nodeSelector: {}
+
+  # -- Tolerations for pod scheduling
+  tolerations: []
+
+  # -- Affinity rules for pod scheduling
+  affinity: {}
+
+  # -- Additional pod annotations
+  podAnnotations: {}
+
+  # -- Additional pod labels
+  podLabels: {}
+
+  # -- Pod security context
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+
+  # -- Container security context
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+  # -- Liveness probe configuration
+  livenessProbe:
+    httpGet:
+      path: /live
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+    successThreshold: 1
+
+  # -- Readiness probe configuration
+  readinessProbe:
+    httpGet:
+      path: /ready
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+    successThreshold: 1
+
+  # -- Additional environment variables
+  extraEnv: []
+
+  # -- Additional environment variables from ConfigMaps/Secrets
+  extraEnvFrom: []
+
+# =============================================================================
+# Service Configuration
+# =============================================================================
+service:
+  # -- Service type (ClusterIP, NodePort, LoadBalancer)
+  type: ClusterIP
+  # -- Service port
+  port: 80
+  # -- Container port (should match application port)
+  targetPort: 8080
+  # -- Node port (only used when type is NodePort)
+  nodePort: ""
+  # -- Load balancer IP (only used when type is LoadBalancer)
+  loadBalancerIP: ""
+  # -- Load balancer source ranges (only used when type is LoadBalancer)
+  loadBalancerSourceRanges: []
+  # -- Service annotations
+  annotations: {}
+  # -- Enable headless service for direct pod access
+  headless:
+    enabled: false
+
+# =============================================================================
+# Ingress Configuration
+# =============================================================================
+ingress:
+  # -- Enable ingress
+  enabled: false
+  # -- Ingress class name (nginx, traefik, alb, etc.)
+  className: nginx
+  # -- Ingress annotations
+  annotations: {}
+    # nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  # -- Nginx-specific annotations (applied when className is nginx)
+  nginx:
+    enabled: true
+    sslRedirect: true
+    proxyBodySize: "10m"
+    proxyReadTimeout: "60"
+    proxySendTimeout: "60"
+    limitRps: "50"
+    limitConnections: "20"
+  # -- Traefik-specific annotations (applied when className is traefik)
+  traefik:
+    enabled: false
+    entryPoints: "websecure"
+    tlsResolver: "letsencrypt"
+  # -- Ingress hosts configuration
+  hosts: []
+    # - host: triage.example.com
+    #   paths:
+    #     - path: /
+    #       pathType: Prefix
+  # -- TLS configuration
+  tls: []
+    # - secretName: triage-warden-tls
+    #   hosts:
+    #     - triage.example.com
+
+# =============================================================================
+# PostgreSQL Configuration (External)
+# =============================================================================
+# NOTE: This chart does NOT bundle PostgreSQL. Configure connection to your
+# existing PostgreSQL instance here.
+postgresql:
+  # -- PostgreSQL host (required)
+  host: ""
+  # -- PostgreSQL port
+  port: 5432
+  # -- Database name
+  database: "triage_warden"
+  # -- Database username
+  username: "triage"
+  # -- Existing secret with PostgreSQL password (key: postgresql-password)
+  existingSecret: ""
+  # -- Password (only used if existingSecret is not set, not recommended)
+  password: ""
+  # -- SSL mode (disable, require, verify-ca, verify-full)
+  sslMode: "require"
+  # -- Maximum database connections in pool
+  maxConnections: 25
+  # -- Minimum database connections in pool
+  minConnections: 5
+  # -- Connection timeout in seconds
+  connectTimeout: 30
+
+# =============================================================================
+# Redis Configuration (External)
+# =============================================================================
+# NOTE: This chart does NOT bundle Redis. Configure connection to your
+# existing Redis instance here (optional - required for distributed deployment).
+redis:
+  # -- Enable Redis integration
+  enabled: false
+  # -- Redis host
+  host: ""
+  # -- Redis port
+  port: 6379
+  # -- Redis database number
+  database: 0
+  # -- Existing secret with Redis password (key: redis-password)
+  existingSecret: ""
+  # -- Password (only used if existingSecret is not set)
+  password: ""
+  # -- Enable TLS for Redis connection
+  tls: false
+
+# =============================================================================
+# Application Configuration
+# =============================================================================
+config:
+  # -- Application base URL (required for webhooks, email links, etc.)
+  baseUrl: ""
+  # -- Trusted proxies CIDR ranges (comma-separated)
+  trustedProxies: "10.0.0.0/8,172.16.0.0/12"
+  # -- Log level (trace, debug, info, warn, error)
+  logLevel: "info"
+  # -- Log format (text, json)
+  logFormat: "json"
+  # -- Enable Swagger UI (disable in production)
+  enableSwagger: false
+  # -- Request timeout in seconds
+  requestTimeout: 30
+  # -- Session expiry in seconds
+  sessionExpiry: 86400
+  # -- Enable CSRF protection
+  csrfEnabled: true
+  # -- Enable secure cookies (should be true when using HTTPS)
+  secureCookies: true
+  # -- Cookie same-site policy (strict, lax, none)
+  cookieSameSite: "strict"
+  # -- Enable Prometheus metrics
+  metricsEnabled: true
+  # -- Metrics endpoint path
+  metricsPath: "/metrics"
+  # -- Rate limiting configuration
+  rateLimit:
+    enabled: true
+    requestsPerWindow: 200
+    windowDuration: "1m"
+  # -- Feature flags
+  features:
+    playbooks: true
+    autoEnrich: true
+    apiKeys: true
+
+# =============================================================================
+# LLM Configuration
+# =============================================================================
+llm:
+  # -- LLM provider (anthropic, openai, azure)
+  provider: "anthropic"
+  # -- Model name/ID
+  model: "claude-3-sonnet-20240229"
+  # -- Temperature for generation (0.0-1.0)
+  temperature: "0.2"
+  # -- Maximum tokens for response
+  maxTokens: "4096"
+  # -- Existing secret with LLM API key (key: api-key)
+  existingSecret: ""
+
+# =============================================================================
+# Secrets Configuration
+# =============================================================================
+secrets:
+  # -- Create secrets (disable if using external secrets manager)
+  create: true
+  # -- Existing secret with all credentials (overrides individual secrets)
+  # Required keys: encryption-key, jwt-secret, session-secret, database-url
+  existingSecret: ""
+  # -- Encryption key for credentials (32-byte base64)
+  # Generate with: openssl rand -base64 32
+  encryptionKey: ""
+  # -- JWT signing secret (min 32 characters)
+  jwtSecret: ""
+  # -- Session encryption secret (min 32 characters)
+  sessionSecret: ""
+  # -- Annotations for the secret
+  annotations: {}
+    # External secrets operator annotations
+    # kubernetes.io/service-account.name: external-secrets
+
+# =============================================================================
+# ServiceAccount Configuration
+# =============================================================================
+serviceAccount:
+  # -- Create a service account
+  create: true
+  # -- Service account name (generated if not set)
+  name: ""
+  # -- Annotations for the service account
+  annotations: {}
+    # AWS IRSA annotation example:
+    # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/triage-warden-role
+  # -- Whether pods should automount the service account token
+  automountServiceAccountToken: true
+
+# =============================================================================
+# RBAC Configuration
+# =============================================================================
+rbac:
+  # -- Create RBAC resources
+  create: true
+  # -- Additional rules for the ClusterRole/Role
+  rules: []
+
+# =============================================================================
+# Horizontal Pod Autoscaler Configuration
+# =============================================================================
+autoscaling:
+  # -- Enable HPA for API pods
+  enabled: false
+  # -- Minimum number of replicas
+  minReplicas: 2
+  # -- Maximum number of replicas
+  maxReplicas: 10
+  # -- Target CPU utilization percentage
+  targetCPUUtilizationPercentage: 80
+  # -- Target memory utilization percentage (optional)
+  targetMemoryUtilizationPercentage: ""
+  # -- Custom metrics for scaling
+  customMetrics: []
+  # -- Scale-down behavior
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 10
+          periodSeconds: 60
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+      selectPolicy: Min
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+        - type: Pods
+          value: 4
+          periodSeconds: 15
+      selectPolicy: Max
+
+# =============================================================================
+# Pod Disruption Budget Configuration
+# =============================================================================
+podDisruptionBudget:
+  # -- Enable PDB for API pods
+  enabled: true
+  # -- Minimum number of available pods
+  minAvailable: 1
+  # -- Maximum number of unavailable pods (alternative to minAvailable)
+  maxUnavailable: ""
+
+# =============================================================================
+# Network Policy Configuration
+# =============================================================================
+networkPolicy:
+  # -- Enable network policies
+  enabled: false
+  # -- Additional ingress rules
+  ingressRules: []
+  # -- Additional egress rules
+  egressRules: []
+  # -- Allow ingress from ingress controller namespace
+  allowIngressNamespace: "ingress-nginx"
+  # -- Allow ingress from monitoring namespace
+  allowMonitoringNamespace: "monitoring"
+
+# =============================================================================
+# Prometheus ServiceMonitor Configuration
+# =============================================================================
+serviceMonitor:
+  # -- Enable ServiceMonitor (requires prometheus-operator CRDs)
+  enabled: false
+  # -- ServiceMonitor namespace (defaults to release namespace)
+  namespace: ""
+  # -- Additional labels for ServiceMonitor
+  labels: {}
+    # release: prometheus
+  # -- Scrape interval
+  interval: "15s"
+  # -- Scrape timeout
+  scrapeTimeout: "10s"
+  # -- Metric relabeling configs
+  metricRelabelings: []
+  # -- Relabeling configs
+  relabelings: []
+
+# =============================================================================
+# Prometheus Rules Configuration
+# =============================================================================
+prometheusRules:
+  # -- Enable PrometheusRule (requires prometheus-operator CRDs)
+  enabled: false
+  # -- Additional labels for PrometheusRule
+  labels: {}
+    # release: prometheus
+  # -- Additional alert rules
+  additionalRules: []
+
+# =============================================================================
+# Init Containers Configuration
+# =============================================================================
+initContainers: []
+  # - name: wait-for-db
+  #   image: busybox:1.36
+  #   command: ['sh', '-c', 'until nc -z $DB_HOST $DB_PORT; do echo waiting for db; sleep 2; done']
+
+# =============================================================================
+# Sidecar Containers Configuration
+# =============================================================================
+sidecars: []
+  # - name: log-shipper
+  #   image: fluent/fluent-bit:latest

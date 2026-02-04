@@ -1,0 +1,109 @@
+
+Triage Warden has been deployed!
+
+==============================================================================
+                          DEPLOYMENT SUMMARY
+==============================================================================
+
+Release Name:     {{ .Release.Name }}
+Namespace:        {{ .Release.Namespace }}
+Chart Version:    {{ .Chart.Version }}
+App Version:      {{ .Chart.AppVersion }}
+
+------------------------------------------------------------------------------
+COMPONENTS
+------------------------------------------------------------------------------
+{{- if .Values.api.enabled }}
+API Server:       Enabled ({{ .Values.api.replicas }} replica(s))
+{{- else }}
+API Server:       Disabled
+{{- end }}
+{{- if .Values.orchestrator.enabled }}
+Orchestrator:     Enabled ({{ .Values.orchestrator.replicas }} replica(s))
+{{- else }}
+Orchestrator:     Disabled
+{{- end }}
+
+------------------------------------------------------------------------------
+ACCESSING THE APPLICATION
+------------------------------------------------------------------------------
+{{- if .Values.ingress.enabled }}
+{{- range $host := .Values.ingress.hosts }}
+  {{- range .paths }}
+  https://{{ $host.host }}{{ .path }}
+  {{- end }}
+{{- end }}
+{{- else if contains "NodePort" .Values.service.type }}
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "triage-warden.fullname" . }})
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo "Application URL: http://${NODE_IP}:${NODE_PORT}"
+{{- else if contains "LoadBalancer" .Values.service.type }}
+  NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+  Watch the status:
+    kubectl get --namespace {{ .Release.Namespace }} svc -w {{ include "triage-warden.fullname" . }}
+
+  Once available:
+    export SERVICE_IP=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ include "triage-warden.fullname" . }} --template "{{"{{ range (index .status.loadBalancer.ingress 0) }}{{.}}{{ end }}"}}")
+    echo "Application URL: http://${SERVICE_IP}:{{ .Values.service.port }}"
+{{- else if contains "ClusterIP" .Values.service.type }}
+  kubectl port-forward --namespace {{ .Release.Namespace }} svc/{{ include "triage-warden.fullname" . }} 8080:{{ .Values.service.port }}
+
+  Then access: http://localhost:8080
+{{- end }}
+
+------------------------------------------------------------------------------
+HEALTH ENDPOINTS
+------------------------------------------------------------------------------
+  Health:    /health
+  Detailed:  /health/detailed
+  Readiness: /ready
+  Liveness:  /live
+{{- if .Values.config.metricsEnabled }}
+  Metrics:   {{ .Values.config.metricsPath }}
+{{- end }}
+
+------------------------------------------------------------------------------
+MONITORING
+------------------------------------------------------------------------------
+{{- if .Values.serviceMonitor.enabled }}
+ServiceMonitor:   Enabled (Prometheus will auto-discover)
+{{- else }}
+ServiceMonitor:   Disabled
+  To enable Prometheus monitoring, set serviceMonitor.enabled=true
+{{- end }}
+{{- if .Values.prometheusRules.enabled }}
+PrometheusRules:  Enabled
+{{- else }}
+PrometheusRules:  Disabled
+{{- end }}
+
+------------------------------------------------------------------------------
+IMPORTANT NOTES
+------------------------------------------------------------------------------
+{{- if not .Values.postgresql.host }}
+WARNING: PostgreSQL host is not configured!
+  Set postgresql.host to your PostgreSQL server address.
+{{- end }}
+
+{{- if and (not .Values.secrets.existingSecret) (or (not .Values.secrets.encryptionKey) (not .Values.secrets.jwtSecret) (not .Values.secrets.sessionSecret)) }}
+WARNING: Secrets may not be properly configured!
+  Ensure you have set:
+  - secrets.encryptionKey (or use secrets.existingSecret)
+  - secrets.jwtSecret
+  - secrets.sessionSecret
+{{- end }}
+
+{{- if and .Values.config.secureCookies (not .Values.ingress.enabled) }}
+NOTE: secureCookies is enabled but ingress is disabled.
+  Ensure you're accessing the application over HTTPS.
+{{- end }}
+
+{{- if and .Values.autoscaling.enabled (lt (int .Values.autoscaling.minReplicas) 2) }}
+WARNING: HPA minReplicas is less than 2.
+  For production, consider setting autoscaling.minReplicas >= 2 for high availability.
+{{- end }}
+
+For more information, see:
+  https://github.com/triage-warden/triage-warden/blob/main/helm/triage-warden/README.md
+
+==============================================================================

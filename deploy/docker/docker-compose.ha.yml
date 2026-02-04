@@ -1,0 +1,466 @@
+# Triage Warden - High Availability Docker Compose
+#
+# This configuration runs multiple API server and orchestrator instances for
+# local HA testing before deploying to Kubernetes.
+#
+# Features:
+# - 2 API server instances behind Traefik load balancer
+# - 2 Orchestrator instances with leader election
+# - Redis for message queue and cache
+# - PostgreSQL database with persistent storage
+# - Health checks on all services
+# - Realistic resource limits
+#
+# Prerequisites:
+#   1. Generate secrets: openssl rand -base64 32
+#   2. Copy .env.example to .env and configure values
+#   3. Build the image: docker-compose -f docker-compose.ha.yml build
+#
+# Usage:
+#   docker-compose -f docker-compose.ha.yml up -d
+#   docker-compose -f docker-compose.ha.yml logs -f
+#   docker-compose -f docker-compose.ha.yml down
+#
+# Access:
+#   - API (load balanced): http://localhost:8080
+#   - Traefik Dashboard: http://localhost:8081
+#   - Prometheus: http://localhost:9090
+#   - Grafana: http://localhost:3000 (admin/admin)
+#
+# Environment Variables:
+#   TW_ENCRYPTION_KEY    - 32-byte base64 key for credential encryption (required)
+#   TW_JWT_SECRET        - Secret for JWT signing, min 32 chars (required)
+#   TW_SESSION_SECRET    - Secret for session signing, min 32 chars (required)
+#   POSTGRES_PASSWORD    - PostgreSQL password (required)
+#   TW_LLM_PROVIDER      - LLM provider: anthropic, openai, azure (optional)
+#   ANTHROPIC_API_KEY    - Anthropic API key if using claude (optional)
+#   OPENAI_API_KEY       - OpenAI API key if using openai (optional)
+
+version: '3.8'
+
+x-triage-warden-common: &tw-common
+  image: triage-warden:latest
+  build:
+    context: ../..
+    dockerfile: deploy/docker/Dockerfile
+  environment: &tw-env
+    # Database connection - shared PostgreSQL
+    DATABASE_URL: postgres://triage:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/triage_warden
+    DATABASE_MAX_CONNECTIONS: "15"
+    DATABASE_MIN_CONNECTIONS: "2"
+
+    # Redis for distributed coordination
+    REDIS_URL: redis://redis:6379
+    TW_MESSAGE_QUEUE_ENABLED: "true"
+    TW_CACHE_ENABLED: "true"
+    TW_LEADER_ELECTION_ENABLED: "true"
+
+    # Security - REQUIRED
+    TW_ENCRYPTION_KEY: ${TW_ENCRYPTION_KEY:?TW_ENCRYPTION_KEY is required}
+    TW_JWT_SECRET: ${TW_JWT_SECRET:?TW_JWT_SECRET is required}
+    TW_SESSION_SECRET: ${TW_SESSION_SECRET:?TW_SESSION_SECRET is required}
+
+    # Server configuration
+    TW_ENV: production
+    TW_BASE_URL: http://localhost:8080
+    TW_BIND_ADDRESS: "0.0.0.0:8080"
+    TW_TRUSTED_PROXIES: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+
+    # LLM Configuration (optional)
+    TW_LLM_PROVIDER: ${TW_LLM_PROVIDER:-}
+    TW_LLM_MODEL: ${TW_LLM_MODEL:-}
+    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+
+    # Logging
+    RUST_LOG: info,triage_warden=info,tw_api=info,tw_core=info
+    TW_LOG_FORMAT: json
+
+    # Metrics
+    TW_METRICS_ENABLED: "true"
+    TW_METRICS_PATH: /metrics
+
+    # Security settings
+    TW_COOKIE_SECURE: "false"
+    TW_COOKIE_SAME_SITE: lax
+    TW_CSRF_ENABLED: "true"
+
+    # Rate limiting
+    TW_RATE_LIMIT_ENABLED: "true"
+    TW_RATE_LIMIT_REQUESTS: "200"
+    TW_RATE_LIMIT_WINDOW: "1m"
+
+    # Feature flags
+    TW_FEATURE_PLAYBOOKS: "true"
+    TW_FEATURE_AUTO_ENRICH: "true"
+    TW_FEATURE_API_KEYS: "true"
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+  networks:
+    - triage-warden-ha
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "50m"
+      max-file: "3"
+
+services:
+  # ============================================
+  # Load Balancer - Traefik
+  # ============================================
+  traefik:
+    image: traefik:v2.10
+    container_name: tw-traefik
+    command:
+      # Traefik static configuration
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=triage-warden-ha"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.metrics.address=:8082"
+      # Health check configuration
+      - "--ping=true"
+      - "--ping.entryPoint=web"
+      # Access logs
+      - "--accesslog=true"
+      - "--accesslog.format=json"
+      # Enable Prometheus metrics
+      - "--metrics.prometheus=true"
+      - "--metrics.prometheus.entryPoint=metrics"
+    ports:
+      # HTTP (load balanced API)
+      - "8080:80"
+      # Traefik Dashboard
+      - "8081:8080"
+      # Traefik Metrics
+      - "8082:8082"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - triage-warden-ha
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+
+  # ============================================
+  # API Servers (2 instances, load balanced)
+  # ============================================
+  api-1:
+    <<: *tw-common
+    container_name: tw-api-1
+    command: ["triage-warden", "serve"]
+    environment:
+      <<: *tw-env
+      TW_INSTANCE_ID: api-1
+      TW_INSTANCE_TYPE: api
+    labels:
+      # Traefik routing
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.api.entrypoints=web"
+      - "traefik.http.services.api.loadbalancer.server.port=8080"
+      - "traefik.http.services.api.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.api.loadbalancer.healthcheck.interval=5s"
+      - "traefik.http.services.api.loadbalancer.healthcheck.timeout=3s"
+      # Sticky sessions for WebSocket/SSE connections
+      - "traefik.http.services.api.loadbalancer.sticky.cookie.name=tw_server"
+      - "traefik.http.services.api.loadbalancer.sticky.cookie.httpOnly=true"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  api-2:
+    <<: *tw-common
+    container_name: tw-api-2
+    command: ["triage-warden", "serve"]
+    environment:
+      <<: *tw-env
+      TW_INSTANCE_ID: api-2
+      TW_INSTANCE_TYPE: api
+    labels:
+      # Traefik routing (same service as api-1 for load balancing)
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.api.entrypoints=web"
+      - "traefik.http.services.api.loadbalancer.server.port=8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # ============================================
+  # Orchestrator Instances (2 instances with leader election)
+  # ============================================
+  orchestrator-1:
+    <<: *tw-common
+    container_name: tw-orchestrator-1
+    command: ["triage-warden", "start", "--foreground"]
+    environment:
+      <<: *tw-env
+      TW_INSTANCE_ID: orchestrator-1
+      TW_INSTANCE_TYPE: orchestrator
+      # Orchestrator-specific settings
+      TW_OPERATION_MODE: supervised
+      TW_AUTO_APPROVE_LOW_RISK: "false"
+      TW_MAX_CONCURRENT_INCIDENTS: "50"
+      TW_ENRICHMENT_TIMEOUT_SECONDS: "60"
+      TW_ANALYSIS_TIMEOUT_SECONDS: "120"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  orchestrator-2:
+    <<: *tw-common
+    container_name: tw-orchestrator-2
+    command: ["triage-warden", "start", "--foreground"]
+    environment:
+      <<: *tw-env
+      TW_INSTANCE_ID: orchestrator-2
+      TW_INSTANCE_TYPE: orchestrator
+      TW_OPERATION_MODE: supervised
+      TW_AUTO_APPROVE_LOW_RISK: "false"
+      TW_MAX_CONCURRENT_INCIDENTS: "50"
+      TW_ENRICHMENT_TIMEOUT_SECONDS: "60"
+      TW_ANALYSIS_TIMEOUT_SECONDS: "120"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # ============================================
+  # Redis - Message Queue & Cache
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    container_name: tw-redis
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - "256mb"
+      - --maxmemory-policy
+      - "allkeys-lru"
+      # Enable key expiration notifications (for leader election)
+      - --notify-keyspace-events
+      - "Ex"
+    ports:
+      # Expose for debugging (remove in production)
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - triage-warden-ha
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+  # ============================================
+  # PostgreSQL - Primary Database
+  # ============================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: tw-postgres
+    environment:
+      POSTGRES_USER: triage
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: triage_warden
+      # Performance tuning for local testing
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
+    command:
+      - postgres
+      - -c
+      - max_connections=100
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=768MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - checkpoint_completion_target=0.9
+      - -c
+      - wal_buffers=16MB
+      - -c
+      - default_statistics_target=100
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - effective_io_concurrency=200
+      - -c
+      - log_statement=none
+      - -c
+      - log_min_duration_statement=1000
+    ports:
+      # Expose for debugging (remove in production)
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U triage -d triage_warden"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - triage-warden-ha
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # ============================================
+  # Monitoring Stack (Optional)
+  # ============================================
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    container_name: tw-prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-lifecycle"
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - triage-warden-ha
+    profiles:
+      - monitoring
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  grafana:
+    image: grafana/grafana:10.0.0
+    container_name: tw-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-piechart-panel
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - triage-warden-ha
+    profiles:
+      - monitoring
+    depends_on:
+      - prometheus
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  triage-warden-ha:
+    name: triage-warden-ha
+    driver: bridge

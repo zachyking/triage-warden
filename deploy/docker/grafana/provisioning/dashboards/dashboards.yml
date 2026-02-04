@@ -1,0 +1,15 @@
+# Grafana Dashboard Provisioning for Triage Warden HA Setup
+
+apiVersion: 1
+
+providers:
+  - name: 'Triage Warden'
+    orgId: 1
+    folder: 'Triage Warden'
+    folderUid: 'triage-warden'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

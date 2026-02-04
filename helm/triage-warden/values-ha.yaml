@@ -1,0 +1,232 @@
+# Triage Warden - High Availability Values
+# =========================================
+# Maximum availability configuration with zone spreading and strict anti-affinity.
+#
+# Requirements:
+# - Multi-zone Kubernetes cluster (3+ zones recommended)
+# - External PostgreSQL with HA (RDS Multi-AZ, Cloud SQL HA, etc.)
+# - External Redis with HA (ElastiCache, Memorystore, etc.)
+#
+# Usage:
+#   helm install triage-warden ./helm/triage-warden \
+#     --namespace triage-warden \
+#     -f values-ha.yaml \
+#     -f values-prod-secrets.yaml
+
+image:
+  pullPolicy: Always  # Always pull for latest security patches
+
+# High availability API configuration
+api:
+  replicas: 5
+  podAntiAffinityPreset: hard  # Require spreading across nodes
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/component: api
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/component: api
+  resources:
+    requests:
+      cpu: 1000m
+      memory: 1Gi
+    limits:
+      cpu: 4000m
+      memory: 4Gi
+  # Stricter probes for HA
+  livenessProbe:
+    httpGet:
+      path: /live
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 2
+    successThreshold: 1
+  readinessProbe:
+    httpGet:
+      path: /ready
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 3
+    timeoutSeconds: 2
+    failureThreshold: 2
+    successThreshold: 1
+
+# Orchestrator with standby replicas
+orchestrator:
+  replicas: 2  # One active, one standby for leader election
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+# Production configuration
+config:
+  baseUrl: ""  # Set to your production URL
+  logLevel: "info"
+  logFormat: "json"
+  enableSwagger: false
+  secureCookies: true
+  csrfEnabled: true
+  cookieSameSite: "strict"
+  metricsEnabled: true
+  rateLimit:
+    enabled: true
+    requestsPerWindow: 500
+    windowDuration: "1m"
+
+# External PostgreSQL with HA
+postgresql:
+  host: ""  # Set to your HA PostgreSQL endpoint
+  port: 5432
+  database: "triage_warden"
+  username: "triage"
+  existingSecret: "postgresql-credentials"
+  sslMode: "verify-full"  # Strictest SSL mode
+  maxConnections: 100
+  minConnections: 20
+  connectTimeout: 10  # Shorter timeout for faster failover detection
+
+# Redis for distributed deployment
+redis:
+  enabled: true
+  host: ""  # Set to your HA Redis endpoint
+  port: 6379
+  existingSecret: "redis-credentials"
+  tls: true
+
+# Use external secrets manager
+secrets:
+  create: false
+  existingSecret: "triage-warden-secrets"
+
+# Ingress with TLS
+ingress:
+  enabled: true
+  className: nginx
+  nginx:
+    enabled: true
+    sslRedirect: true
+    proxyBodySize: "10m"
+    proxyReadTimeout: "30"  # Shorter timeout
+    proxySendTimeout: "30"
+    limitRps: "100"
+    limitConnections: "50"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/affinity: "cookie"  # Session affinity
+    nginx.ingress.kubernetes.io/affinity-mode: "balanced"
+  hosts:
+    - host: triage.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: triage-warden-tls
+      hosts:
+        - triage.example.com
+
+# Aggressive autoscaling for HA
+autoscaling:
+  enabled: true
+  minReplicas: 3  # Minimum 3 for quorum
+  maxReplicas: 20
+  targetCPUUtilizationPercentage: 70  # Scale earlier
+  targetMemoryUtilizationPercentage: 70
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 600  # Longer stabilization for HA
+      policies:
+        - type: Percent
+          value: 5
+          periodSeconds: 120
+      selectPolicy: Min
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 200
+          periodSeconds: 15
+        - type: Pods
+          value: 5
+          periodSeconds: 15
+      selectPolicy: Max
+
+# Strict PDB for HA
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2  # Always keep at least 2 pods running
+
+# Network policies
+networkPolicy:
+  enabled: true
+  allowIngressNamespace: "ingress-nginx"
+  allowMonitoringNamespace: "monitoring"
+
+# ServiceAccount
+serviceAccount:
+  create: true
+  automountServiceAccountToken: true
+
+# RBAC
+rbac:
+  create: true
+
+# Prometheus monitoring
+serviceMonitor:
+  enabled: true
+  labels:
+    release: prometheus
+  interval: "10s"  # More frequent scraping for HA
+  scrapeTimeout: "5s"
+
+# Alerting rules
+prometheusRules:
+  enabled: true
+  labels:
+    release: prometheus
+  additionalRules:
+    - alert: TriageWardenReplicasMismatch
+      expr: |
+        kube_deployment_spec_replicas{deployment=~".*triage-warden-api.*"}
+        !=
+        kube_deployment_status_replicas_available{deployment=~".*triage-warden-api.*"}
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "API replicas mismatch"
+        description: "Not all API replicas are available."
+
+    - alert: TriageWardenZoneImbalance
+      expr: |
+        max(count by (topology_kubernetes_io_zone) (
+          kube_pod_info{pod=~".*triage-warden-api.*"}
+        )) - min(count by (topology_kubernetes_io_zone) (
+          kube_pod_info{pod=~".*triage-warden-api.*"}
+        )) > 2
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "API pods not balanced across zones"
+        description: "API pods are not evenly distributed across availability zones."
+
+# LLM configuration
+llm:
+  provider: "anthropic"
+  model: "claude-3-sonnet-20240229"
+  temperature: "0.2"
+  maxTokens: "4096"
+  existingSecret: "llm-api-key"
