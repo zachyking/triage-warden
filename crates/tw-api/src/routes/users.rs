@@ -52,7 +52,7 @@ fn default_page() -> u32 {
 }
 
 fn default_per_page() -> u32 {
-    50
+    tw_core::db::DEFAULT_PAGE_SIZE
 }
 
 /// Response for a user (excludes sensitive fields).
@@ -133,7 +133,7 @@ pub struct PaginatedUsersResponse {
 }
 
 /// Maximum allowed items per page.
-const MAX_PER_PAGE: u32 = 100;
+const MAX_PER_PAGE: u32 = tw_core::db::MAX_PAGE_SIZE;
 
 /// Lists all users with pagination.
 async fn list_users(

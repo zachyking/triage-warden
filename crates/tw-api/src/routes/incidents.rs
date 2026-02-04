@@ -22,7 +22,7 @@ use crate::state::AppState;
 use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::db::{
     create_audit_repository, create_incident_repository, AuditRepository, IncidentFilter,
-    IncidentRepository, Pagination,
+    IncidentRepository, Pagination, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE,
 };
 use tw_core::incident::{
     ApprovalStatus, AuditAction, AuditEntry, Incident, IncidentStatus, ProposedAction, Severity,
@@ -83,10 +83,13 @@ async fn list_incidents(
         query: query.q,
     };
 
-    let pagination = Pagination {
-        page: query.page.unwrap_or(1),
-        per_page: query.per_page.unwrap_or(20),
-    };
+    let pagination = Pagination::new(
+        query.page.unwrap_or(1),
+        query
+            .per_page
+            .unwrap_or(DEFAULT_PAGE_SIZE)
+            .min(MAX_PAGE_SIZE),
+    );
 
     // Get incidents and count
     let incidents: Vec<Incident> = repo.list(&filter, &pagination).await?;
@@ -1176,7 +1179,7 @@ mod tests {
         assert_eq!(result.data.len(), 0);
         assert_eq!(result.pagination.total_items, 0);
         assert_eq!(result.pagination.page, 1);
-        assert_eq!(result.pagination.per_page, 20);
+        assert_eq!(result.pagination.per_page, DEFAULT_PAGE_SIZE);
     }
 
     #[tokio::test]
@@ -1323,11 +1326,11 @@ mod tests {
     async fn test_list_incidents_per_page_exceeds_max() {
         let (app, _state) = create_test_router().await;
 
-        // per_page 101 is invalid (max is 100)
+        // per_page 201 is invalid (max is 200)
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/incidents?per_page=101")
+                    .uri("/api/incidents?per_page=201")
                     .body(Body::empty())
                     .unwrap(),
             )

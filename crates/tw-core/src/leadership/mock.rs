@@ -15,9 +15,9 @@ use tokio::sync::RwLock;
 
 /// Internal state for a held lease.
 #[derive(Debug, Clone)]
-struct LeaseState {
+pub(crate) struct LeaseState {
     /// The current lease.
-    lease: LeaderLease,
+    pub(crate) lease: LeaderLease,
 }
 
 /// A mock implementation of `LeaderElector` for testing.
@@ -50,18 +50,18 @@ struct LeaseState {
 #[derive(Debug)]
 pub struct MockLeaderElector {
     /// Configuration for this elector.
-    config: LeaderElectorConfig,
+    pub(crate) config: LeaderElectorConfig,
 
     /// Currently held leases, keyed by resource name.
-    leases: Arc<RwLock<HashMap<String, LeaseState>>>,
+    pub(crate) leases: Arc<RwLock<HashMap<String, LeaseState>>>,
 
     /// Global fencing token counter per resource.
     /// Monotonically increasing to ensure uniqueness across all acquisitions.
-    fencing_tokens: Arc<RwLock<HashMap<String, AtomicU64>>>,
+    pub(crate) fencing_tokens: Arc<RwLock<HashMap<String, AtomicU64>>>,
 
     /// Optional time override for testing.
     /// If set, this is used instead of Utc::now() for expiration checks.
-    time_override: Arc<RwLock<Option<DateTime<Utc>>>>,
+    pub(crate) time_override: Arc<RwLock<Option<DateTime<Utc>>>>,
 }
 
 impl MockLeaderElector {

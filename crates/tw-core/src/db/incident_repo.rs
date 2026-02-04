@@ -1,5 +1,6 @@
 //! Incident repository for database operations.
 
+use super::pagination::Pagination;
 use super::{DbError, DbPool};
 use crate::incident::{Incident, IncidentStatus, Severity};
 use async_trait::async_trait;
@@ -25,36 +26,6 @@ pub struct IncidentFilter {
     pub has_ticket: Option<bool>,
     /// Full-text search query (searches alert_data, ticket_id, tags).
     pub query: Option<String>,
-}
-
-/// Pagination options.
-#[derive(Debug, Clone)]
-pub struct Pagination {
-    /// Page number (1-indexed).
-    pub page: u32,
-    /// Items per page.
-    pub per_page: u32,
-}
-
-impl Default for Pagination {
-    fn default() -> Self {
-        Self {
-            page: 1,
-            per_page: 20,
-        }
-    }
-}
-
-impl Pagination {
-    /// Calculate SQL offset.
-    pub fn offset(&self) -> u32 {
-        (self.page.saturating_sub(1)) * self.per_page
-    }
-
-    /// Get limit (per_page).
-    pub fn limit(&self) -> u32 {
-        self.per_page
-    }
 }
 
 /// Partial update for an incident.
@@ -1015,21 +986,30 @@ impl TryFrom<PgIncidentRow> for Incident {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::pagination::{DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE};
 
     #[test]
     fn test_pagination() {
         let p = Pagination::default();
         assert_eq!(p.page, 1);
-        assert_eq!(p.per_page, 20);
+        assert_eq!(p.per_page, DEFAULT_PAGE_SIZE);
         assert_eq!(p.offset(), 0);
-        assert_eq!(p.limit(), 20);
+        assert_eq!(p.limit(), DEFAULT_PAGE_SIZE);
 
-        let p = Pagination {
-            page: 3,
-            per_page: 10,
-        };
+        let p = Pagination::new(3, 10);
         assert_eq!(p.offset(), 20);
         assert_eq!(p.limit(), 10);
+    }
+
+    #[test]
+    fn test_pagination_clamping() {
+        // per_page should be clamped to MAX_PAGE_SIZE
+        let p = Pagination::new(1, 500);
+        assert_eq!(p.per_page, MAX_PAGE_SIZE);
+
+        // page 0 should become 1
+        let p = Pagination::new(0, 50);
+        assert_eq!(p.page, 1);
     }
 
     #[test]

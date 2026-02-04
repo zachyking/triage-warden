@@ -9,6 +9,7 @@ pub mod auth;
 pub mod cache;
 pub mod connector;
 pub mod crypto;
+pub mod enrichment;
 pub mod events;
 pub mod features;
 pub mod incident;
@@ -26,7 +27,10 @@ pub mod workflow;
 pub mod db;
 
 pub use connector::{ConnectorConfig, ConnectorStatus, ConnectorType};
-pub use events::{EventBus, TriageEvent};
+pub use events::{
+    EventBus, EventBusBuilder, EventBusError, EventBusMetrics, EventBusMetricsSnapshot,
+    EventEnvelope, TriageEvent, EVENT_SCHEMA_VERSION, TRIAGE_EVENTS_TOPIC,
+};
 pub use incident::{
     Alert, AlertSource, AuditEntry, Enrichment, Incident, IncidentStatus, ProposedAction, Severity,
     TriageAnalysis,
@@ -85,4 +89,10 @@ pub use tenant::{Tenant, TenantContext, TenantError, TenantSettings, TenantStatu
 // Feature flag exports
 pub use features::{
     FeatureFlag, FeatureFlagError, FeatureFlagStore, FeatureFlags, InMemoryFeatureFlagStore,
+};
+
+// Enrichment exports
+pub use enrichment::{
+    CachedEnrichment, CachedEnrichmentStats, EnrichmentCacheOptions, EnrichmentConfig,
+    EnrichmentError, EnrichmentResult, ThreatIntelRequest, ENRICHMENT_CACHE_FLAG,
 };

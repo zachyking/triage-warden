@@ -386,11 +386,11 @@ pub struct ListIncidentsQuery {
     pub until: Option<DateTime<Utc>>,
     /// Full-text search query (searches alert_data, ticket_id, tags).
     pub q: Option<String>,
-    /// Page number (1-indexed).
+    /// Page number (1-indexed). Defaults to 1.
     #[validate(range(min = 1))]
     pub page: Option<u32>,
-    /// Items per page.
-    #[validate(range(min = 1, max = 100))]
+    /// Items per page. Defaults to 50, maximum 200.
+    #[validate(range(min = 1, max = 200))]
     pub per_page: Option<u32>,
 }
 

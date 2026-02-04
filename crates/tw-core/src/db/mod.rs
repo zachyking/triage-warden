@@ -10,6 +10,7 @@
 
 mod error;
 pub mod mocks;
+pub mod pagination;
 mod pool;
 pub mod retry;
 mod schema;
@@ -41,11 +42,14 @@ pub use schema::run_migrations;
 pub use api_key_repo::{ApiKeyFilter, ApiKeyRepository};
 pub use audit_repo::AuditRepository;
 pub use connector_repo::{ConnectorFilter, ConnectorRepository, ConnectorUpdate};
-pub use incident_repo::{IncidentFilter, IncidentRepository, IncidentUpdate, Pagination};
+pub use incident_repo::{IncidentFilter, IncidentRepository, IncidentUpdate};
 pub use metrics_repo::{
     ActionMetricsData, IncidentMetricsData, MetricsRepository, PerformanceMetricsData,
 };
 pub use notification_repo::{NotificationChannelFilter, NotificationChannelRepository};
+pub use pagination::{
+    AuditLogFilter, PaginatedResult, Pagination, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE,
+};
 pub use playbook_repo::{PlaybookFilter, PlaybookRepository, PlaybookUpdate};
 pub use policy_repo::{PolicyFilter, PolicyRepository, PolicyUpdate};
 pub use settings_repo::{GeneralSettings, LlmSettings, RateLimits, SettingsRepository};

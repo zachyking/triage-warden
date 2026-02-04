@@ -1,5 +1,6 @@
 //! Audit log repository for database operations.
 
+use super::pagination::{AuditLogFilter, PaginatedResult, Pagination};
 use super::{DbError, DbPool};
 use crate::incident::AuditEntry;
 use async_trait::async_trait;
@@ -46,6 +47,17 @@ pub trait AuditRepository: Send + Sync {
         actor: &str,
         limit: u32,
     ) -> Result<Vec<(Uuid, AuditEntry)>, DbError>;
+
+    /// Lists audit entries with filtering and pagination.
+    /// Returns a tuple of (incident_id, audit_entry) for each entry.
+    async fn list_paginated(
+        &self,
+        filter: &AuditLogFilter,
+        pagination: &Pagination,
+    ) -> Result<PaginatedResult<(Uuid, AuditEntry)>, DbError>;
+
+    /// Counts audit entries matching the filter.
+    async fn count(&self, filter: &AuditLogFilter) -> Result<u64, DbError>;
 }
 
 /// SQLite implementation of AuditRepository.
@@ -228,6 +240,131 @@ impl AuditRepository for SqliteAuditRepository {
             })
             .collect()
     }
+
+    async fn list_paginated(
+        &self,
+        filter: &AuditLogFilter,
+        pagination: &Pagination,
+    ) -> Result<PaginatedResult<(Uuid, AuditEntry)>, DbError> {
+        // Build dynamic query with filters
+        let mut query = String::from(
+            "SELECT id, tenant_id, incident_id, action, actor, details, created_at FROM audit_logs WHERE 1=1",
+        );
+
+        if filter.tenant_id.is_some() {
+            query.push_str(" AND tenant_id = ?");
+        }
+
+        if filter.incident_id.is_some() {
+            query.push_str(" AND incident_id = ?");
+        }
+
+        if filter.actor.is_some() {
+            query.push_str(" AND actor = ?");
+        }
+
+        if filter.since.is_some() {
+            query.push_str(" AND created_at >= ?");
+        }
+
+        if filter.until.is_some() {
+            query.push_str(" AND created_at <= ?");
+        }
+
+        query.push_str(" ORDER BY created_at DESC LIMIT ? OFFSET ?");
+
+        let mut query_builder = sqlx::query_as::<_, AuditLogRow>(&query);
+
+        if let Some(tenant_id) = filter.tenant_id {
+            query_builder = query_builder.bind(tenant_id.to_string());
+        }
+
+        if let Some(incident_id) = filter.incident_id {
+            query_builder = query_builder.bind(incident_id.to_string());
+        }
+
+        if let Some(actor) = &filter.actor {
+            query_builder = query_builder.bind(actor.clone());
+        }
+
+        if let Some(since) = &filter.since {
+            query_builder = query_builder.bind(since.to_rfc3339());
+        }
+
+        if let Some(until) = &filter.until {
+            query_builder = query_builder.bind(until.to_rfc3339());
+        }
+
+        query_builder = query_builder
+            .bind(pagination.limit() as i64)
+            .bind(pagination.offset() as i64);
+
+        let rows: Vec<AuditLogRow> = query_builder.fetch_all(&self.pool).await?;
+
+        let items: Result<Vec<(Uuid, AuditEntry)>, DbError> = rows
+            .into_iter()
+            .map(|r| {
+                let incident_id = Uuid::parse_str(&r.incident_id)
+                    .map_err(|e| DbError::Serialization(e.to_string()))?;
+                let entry: AuditEntry = r.try_into()?;
+                Ok((incident_id, entry))
+            })
+            .collect();
+
+        let total = self.count(filter).await?;
+
+        Ok(PaginatedResult::new(items?, total, pagination))
+    }
+
+    async fn count(&self, filter: &AuditLogFilter) -> Result<u64, DbError> {
+        let mut query = String::from("SELECT COUNT(*) as count FROM audit_logs WHERE 1=1");
+
+        if filter.tenant_id.is_some() {
+            query.push_str(" AND tenant_id = ?");
+        }
+
+        if filter.incident_id.is_some() {
+            query.push_str(" AND incident_id = ?");
+        }
+
+        if filter.actor.is_some() {
+            query.push_str(" AND actor = ?");
+        }
+
+        if filter.since.is_some() {
+            query.push_str(" AND created_at >= ?");
+        }
+
+        if filter.until.is_some() {
+            query.push_str(" AND created_at <= ?");
+        }
+
+        let mut query_builder = sqlx::query_scalar::<_, i64>(&query);
+
+        if let Some(tenant_id) = filter.tenant_id {
+            query_builder = query_builder.bind(tenant_id.to_string());
+        }
+
+        if let Some(incident_id) = filter.incident_id {
+            query_builder = query_builder.bind(incident_id.to_string());
+        }
+
+        if let Some(actor) = &filter.actor {
+            query_builder = query_builder.bind(actor.clone());
+        }
+
+        if let Some(since) = &filter.since {
+            query_builder = query_builder.bind(since.to_rfc3339());
+        }
+
+        if let Some(until) = &filter.until {
+            query_builder = query_builder.bind(until.to_rfc3339());
+        }
+
+        let count: i64 = query_builder.fetch_one(&self.pool).await?;
+
+        Ok(count as u64)
+    }
 }
 
 /// PostgreSQL implementation of AuditRepository.
@@ -382,6 +519,71 @@ impl AuditRepository for PgAuditRepository {
                 Ok((incident_id, entry))
             })
             .collect()
+    }
+
+    async fn list_paginated(
+        &self,
+        filter: &AuditLogFilter,
+        pagination: &Pagination,
+    ) -> Result<PaginatedResult<(Uuid, AuditEntry)>, DbError> {
+        let rows: Vec<PgAuditLogRow> = sqlx::query_as(
+            r#"
+            SELECT id, tenant_id, incident_id, action, actor, details, created_at
+            FROM audit_logs
+            WHERE ($1::uuid IS NULL OR tenant_id = $1)
+              AND ($2::uuid IS NULL OR incident_id = $2)
+              AND ($3::text IS NULL OR actor = $3)
+              AND ($4::timestamptz IS NULL OR created_at >= $4)
+              AND ($5::timestamptz IS NULL OR created_at <= $5)
+            ORDER BY created_at DESC
+            LIMIT $6 OFFSET $7
+            "#,
+        )
+        .bind(filter.tenant_id)
+        .bind(filter.incident_id)
+        .bind(&filter.actor)
+        .bind(filter.since)
+        .bind(filter.until)
+        .bind(pagination.limit() as i64)
+        .bind(pagination.offset() as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let items: Result<Vec<(Uuid, AuditEntry)>, DbError> = rows
+            .into_iter()
+            .map(|r| {
+                let incident_id = r.incident_id;
+                let entry: AuditEntry = r.try_into()?;
+                Ok((incident_id, entry))
+            })
+            .collect();
+
+        let total = self.count(filter).await?;
+
+        Ok(PaginatedResult::new(items?, total, pagination))
+    }
+
+    async fn count(&self, filter: &AuditLogFilter) -> Result<u64, DbError> {
+        let count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM audit_logs
+            WHERE ($1::uuid IS NULL OR tenant_id = $1)
+              AND ($2::uuid IS NULL OR incident_id = $2)
+              AND ($3::text IS NULL OR actor = $3)
+              AND ($4::timestamptz IS NULL OR created_at >= $4)
+              AND ($5::timestamptz IS NULL OR created_at <= $5)
+            "#,
+        )
+        .bind(filter.tenant_id)
+        .bind(filter.incident_id)
+        .bind(&filter.actor)
+        .bind(filter.since)
+        .bind(filter.until)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(count as u64)
     }
 }
 
