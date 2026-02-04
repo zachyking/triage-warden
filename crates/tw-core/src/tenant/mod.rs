@@ -382,8 +382,10 @@ mod tests {
         // Small delay to ensure timestamp changes
         std::thread::sleep(std::time::Duration::from_millis(10));
 
-        let mut new_settings = TenantSettings::default();
-        new_settings.concurrency_limit = 50;
+        let new_settings = TenantSettings {
+            concurrency_limit: 50,
+            ..TenantSettings::default()
+        };
         tenant.update_settings(new_settings);
 
         assert_eq!(tenant.settings.concurrency_limit, 50);

@@ -152,6 +152,42 @@ impl MockLeaderElector {
         let mut leases = self.leases.write().await;
         leases.clear();
     }
+
+    /// Creates a peer elector that shares the same state but has a different instance ID.
+    ///
+    /// This is useful for simulating multiple orchestrator instances in tests.
+    /// The returned elector will compete for the same resources and see the same
+    /// lease state as the original.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use tw_core::leadership::{MockLeaderElector, LeaderElectorConfig, LeaderElector};
+    /// use std::time::Duration;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let elector1 = MockLeaderElector::new(LeaderElectorConfig::new("instance-1"));
+    /// let elector2 = elector1.create_peer("instance-2");
+    ///
+    /// // Instance 1 acquires leadership
+    /// let lease1 = elector1.try_acquire("resource", Duration::from_secs(30)).await?.unwrap();
+    ///
+    /// // Instance 2 cannot acquire while instance 1 holds it
+    /// let lease2 = elector2.try_acquire("resource", Duration::from_secs(30)).await?;
+    /// assert!(lease2.is_none());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn create_peer(&self, instance_id: &str) -> Self {
+        Self {
+            config: LeaderElectorConfig::new(instance_id)
+                .with_default_ttl(self.config.default_ttl)
+                .with_renew_interval(self.config.renew_interval),
+            leases: Arc::clone(&self.leases),
+            fencing_tokens: Arc::clone(&self.fencing_tokens),
+            time_override: Arc::clone(&self.time_override),
+        }
+    }
 }
 
 #[async_trait]

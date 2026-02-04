@@ -1947,7 +1947,7 @@ mod tests {
             .await;
 
         // Wait for all tasks to complete
-        while let Some(_) = tasks.join_next().await {}
+        while (tasks.join_next().await).is_some() {}
 
         // Most or all operations should have been blocked
         // (exact number depends on timing, but kill switch should have immediate effect)

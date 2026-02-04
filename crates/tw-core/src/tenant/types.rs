@@ -137,9 +137,11 @@ mod tests {
 
     #[test]
     fn test_tenant_settings_serialization() {
-        let mut settings = TenantSettings::default();
-        settings.llm_provider = Some("anthropic".to_string());
-        settings.concurrency_limit = 20;
+        let mut settings = TenantSettings {
+            llm_provider: Some("anthropic".to_string()),
+            concurrency_limit: 20,
+            ..TenantSettings::default()
+        };
         settings
             .feature_overrides
             .insert("new_ui".to_string(), true);
