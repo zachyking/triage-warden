@@ -67,6 +67,10 @@ class RAGConfig(BaseModel):
         default="threat_intelligence",
         description="Collection for threat intelligence indicators",
     )
+    examples_collection: str = Field(
+        default="few_shot_examples",
+        description="Collection for few-shot learning examples (Stage 2.4.2)",
+    )
 
     # Query settings
     default_top_k: int = Field(
@@ -101,5 +105,9 @@ class RAGConfig(BaseModel):
             "threat_intel": CollectionConfig(
                 name=self.threat_intel_collection,
                 description="Threat intelligence indicators",
+            ),
+            "examples": CollectionConfig(
+                name=self.examples_collection,
+                description="Few-shot learning examples for prompts",
             ),
         }

@@ -46,3 +46,8 @@ data:
   TW_FEATURE_PLAYBOOKS: "true"
   TW_FEATURE_AUTO_ENRICH: "true"
   TW_FEATURE_API_KEYS: "true"
+  TW_FEATURE_VECTOR_STORE: "true"
+
+  # Vector database (Qdrant)
+  QDRANT_URL: "http://qdrant:6334"
+  QDRANT_TIMEOUT_SECS: "30"

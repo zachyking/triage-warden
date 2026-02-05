@@ -76,6 +76,10 @@ pub enum ApiError {
     /// Account is disabled.
     #[error("Account disabled")]
     AccountDisabled,
+
+    /// Feature not implemented.
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
 }
 
 /// Details for field-level validation errors.
@@ -180,6 +184,7 @@ impl ApiError {
             ApiError::SessionExpired => StatusCode::UNAUTHORIZED,
             ApiError::CsrfValidationFailed => StatusCode::FORBIDDEN,
             ApiError::AccountDisabled => StatusCode::FORBIDDEN,
+            ApiError::NotImplemented(_) => StatusCode::NOT_IMPLEMENTED,
         }
     }
 
@@ -202,6 +207,7 @@ impl ApiError {
             ApiError::SessionExpired => "SESSION_EXPIRED",
             ApiError::CsrfValidationFailed => "CSRF_VALIDATION_FAILED",
             ApiError::AccountDisabled => "ACCOUNT_DISABLED",
+            ApiError::NotImplemented(_) => "NOT_IMPLEMENTED",
         }
     }
 
@@ -231,7 +237,8 @@ impl IntoResponse for ApiError {
             | ApiError::InvalidCredentials
             | ApiError::SessionExpired
             | ApiError::CsrfValidationFailed
-            | ApiError::AccountDisabled => (self.to_string(), None),
+            | ApiError::AccountDisabled
+            | ApiError::NotImplemented(_) => (self.to_string(), None),
 
             // Errors that need sanitization in production
             ApiError::BadRequest(msg) => {

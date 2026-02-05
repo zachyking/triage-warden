@@ -109,9 +109,19 @@ class _MockLLMBase:
             return True
 
 
-# Install mock modules before importing from tw_ai
-sys.modules["tw_ai.llm.base"] = _MockLLMBase
-sys.modules["tw_ai.llm"] = MagicMock()
+# Check if we are specifically running e2e tests by checking pytest args
+# This prevents polluting sys.modules when running non-e2e tests
+import os
+_running_e2e = False
+if "pytest" in sys.modules:
+    # Check if we're running e2e tests specifically
+    _running_e2e = any("e2e" in str(arg) for arg in sys.argv[1:]) or \
+                   os.environ.get("TW_RUN_E2E_TESTS") == "1"
+
+# Only install mocks when explicitly running e2e tests
+if _running_e2e:
+    sys.modules["tw_ai.llm.base"] = _MockLLMBase
+    sys.modules["tw_ai.llm"] = MagicMock()
 
 
 # =============================================================================
@@ -195,7 +205,8 @@ class _MockModels:
     RecommendedAction = MockRecommendedAction
 
 
-sys.modules["tw_ai.agents.models"] = _MockModels
+if _running_e2e:
+    sys.modules["tw_ai.agents.models"] = _MockModels
 
 
 # =============================================================================
@@ -233,7 +244,8 @@ class _MockOutputParser:
     parse_triage_analysis = staticmethod(mock_parse_triage_analysis)
 
 
-sys.modules["tw_ai.agents.output_parser"] = _MockOutputParser
+if _running_e2e:
+    sys.modules["tw_ai.agents.output_parser"] = _MockOutputParser
 
 
 # =============================================================================
@@ -361,7 +373,8 @@ class _MockTools:
     _mock_approval_requests = _mock_approval_requests
 
 
-sys.modules["tw_ai.agents.tools"] = _MockTools
+if _running_e2e:
+    sys.modules["tw_ai.agents.tools"] = _MockTools
 
 
 # =============================================================================
@@ -383,17 +396,25 @@ def _load_module(name: str, file_path: Path):
     return module
 
 
-# Load sanitization module first (it has no dependencies on react.py)
-_sanitization = _load_module("tw_ai.sanitization", _base_path_sanitization / "sanitization.py")
+# Only load mocked modules for e2e tests
+if _running_e2e:
+    # Load sanitization module first (it has no dependencies on react.py)
+    _sanitization = _load_module("tw_ai.sanitization", _base_path_sanitization / "sanitization.py")
 
-# Mock the tw_ai package to prevent circular imports
-sys.modules["tw_ai"] = MagicMock()
+    # Mock the tw_ai package to prevent circular imports
+    sys.modules["tw_ai"] = MagicMock()
 
-_react = _load_module("tw_ai.agents.react", _base_path / "react.py")
-ReActAgent = _react.ReActAgent
-AgentResult = _react.AgentResult
-TriageRequest = _react.TriageRequest
-StepType = _react.StepType
+    _react = _load_module("tw_ai.agents.react", _base_path / "react.py")
+    ReActAgent = _react.ReActAgent
+    AgentResult = _react.AgentResult
+    TriageRequest = _react.TriageRequest
+    StepType = _react.StepType
+else:
+    # When not running e2e tests, import real modules
+    ReActAgent = None
+    AgentResult = None
+    TriageRequest = None
+    StepType = None
 
 
 # =============================================================================

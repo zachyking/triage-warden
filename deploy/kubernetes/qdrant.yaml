@@ -1,0 +1,226 @@
+# Qdrant Vector Database for RAG System
+#
+# Qdrant provides high-performance vector similarity search for:
+# - Similar incident retrieval
+# - Knowledge base (runbooks, threat intel) search
+# - Security playbook matching
+#
+# For production deployments, consider using Qdrant Cloud or
+# the official Helm chart for high availability.
+
+---
+# Qdrant StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: qdrant
+  namespace: triage-warden
+  labels:
+    app.kubernetes.io/name: qdrant
+    app.kubernetes.io/component: vector-database
+    app.kubernetes.io/part-of: triage-warden
+spec:
+  serviceName: qdrant-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: qdrant
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: qdrant
+        app.kubernetes.io/component: vector-database
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+
+      containers:
+        - name: qdrant
+          image: qdrant/qdrant:v1.12.4
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 6333
+              protocol: TCP
+            - name: grpc
+              containerPort: 6334
+              protocol: TCP
+            - name: internal
+              containerPort: 6335
+              protocol: TCP
+
+          env:
+            - name: QDRANT__SERVICE__GRPC_PORT
+              value: "6334"
+            - name: QDRANT__SERVICE__HTTP_PORT
+              value: "6333"
+            - name: QDRANT__CLUSTER__ENABLED
+              value: "false"
+            - name: QDRANT__STORAGE__STORAGE_PATH
+              value: "/qdrant/storage"
+            - name: QDRANT__STORAGE__ON_DISK_PAYLOAD
+              value: "true"
+            # API key from secret (optional but recommended for production)
+            - name: QDRANT__SERVICE__API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: qdrant-secrets
+                  key: api-key
+                  optional: true
+
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2000m"
+              memory: "4Gi"
+
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false  # Qdrant needs to write to storage
+            capabilities:
+              drop:
+                - ALL
+
+          volumeMounts:
+            - name: qdrant-storage
+              mountPath: /qdrant/storage
+            - name: qdrant-snapshots
+              mountPath: /qdrant/snapshots
+
+  volumeClaimTemplates:
+    - metadata:
+        name: qdrant-storage
+        labels:
+          app.kubernetes.io/name: qdrant
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+        # Uncomment and adjust for your storage class
+        # storageClassName: fast-ssd
+    - metadata:
+        name: qdrant-snapshots
+        labels:
+          app.kubernetes.io/name: qdrant
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+
+---
+# Qdrant Headless Service (for StatefulSet)
+apiVersion: v1
+kind: Service
+metadata:
+  name: qdrant-headless
+  namespace: triage-warden
+  labels:
+    app.kubernetes.io/name: qdrant
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - name: http
+      port: 6333
+      targetPort: http
+    - name: grpc
+      port: 6334
+      targetPort: grpc
+  selector:
+    app.kubernetes.io/name: qdrant
+
+---
+# Qdrant Service (for client access)
+apiVersion: v1
+kind: Service
+metadata:
+  name: qdrant
+  namespace: triage-warden
+  labels:
+    app.kubernetes.io/name: qdrant
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 6333
+      targetPort: http
+      protocol: TCP
+    - name: grpc
+      port: 6334
+      targetPort: grpc
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: qdrant
+
+---
+# Qdrant Secrets (API key for authentication)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: qdrant-secrets
+  namespace: triage-warden
+  labels:
+    app.kubernetes.io/name: qdrant
+type: Opaque
+data:
+  # Generate with: openssl rand -base64 32 | base64
+  # This is a placeholder - replace with actual secret in production
+  api-key: ""
+
+---
+# Pod Disruption Budget
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: qdrant
+  namespace: triage-warden
+  labels:
+    app.kubernetes.io/name: qdrant
+spec:
+  minAvailable: 0  # Allow disruption for single-replica setup
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: qdrant
+
+---
+# ServiceMonitor for Prometheus (if using Prometheus Operator)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: qdrant
+  namespace: triage-warden
+  labels:
+    app.kubernetes.io/name: qdrant
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: qdrant
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s

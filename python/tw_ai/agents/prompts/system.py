@@ -151,10 +151,147 @@ OUTPUT_SCHEMA = {
 }
 
 
-def format_output_schema() -> str:
-    """Format the output schema as a string for inclusion in prompts."""
+# =============================================================================
+# Evidence-Enhanced Output Schema (Stage 2.1.2)
+# =============================================================================
+
+EVIDENCE_SCHEMA = {
+    "evidence": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "source_type": {
+                    "type": "string",
+                    "enum": [
+                        "threat_intel",
+                        "siem",
+                        "edr",
+                        "email",
+                        "enrichment",
+                        "alert_data",
+                        "manual",
+                        "cloud",
+                        "identity_provider",
+                    ],
+                    "description": "Category of evidence source",
+                },
+                "source_name": {
+                    "type": "string",
+                    "description": "Specific source (e.g., 'VirusTotal', 'Splunk')",
+                },
+                "data_type": {
+                    "type": "string",
+                    "enum": [
+                        "network_activity",
+                        "file_artifact",
+                        "process_execution",
+                        "user_behavior",
+                        "email_content",
+                        "threat_intel_match",
+                        "mitre_observation",
+                        "system_change",
+                        "dns_activity",
+                        "web_activity",
+                        "cloud_activity",
+                        "authentication_event",
+                        "data_access",
+                        "malware_indicator",
+                    ],
+                    "description": "Type of evidence data",
+                },
+                "value": {
+                    "type": "object",
+                    "description": "The actual evidence data/values",
+                },
+                "finding": {
+                    "type": "string",
+                    "description": "What this evidence shows or indicates",
+                },
+                "relevance": {
+                    "type": "string",
+                    "description": "How this evidence supports the verdict",
+                },
+                "confidence": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100,
+                    "description": "Confidence in this evidence (0-100)",
+                },
+                "link": {
+                    "type": "string",
+                    "description": "Optional deep link to source system",
+                },
+            },
+            "required": [
+                "source_type",
+                "source_name",
+                "data_type",
+                "value",
+                "finding",
+                "relevance",
+                "confidence",
+            ],
+        },
+        "description": "List of evidence items supporting the verdict",
+    },
+    "investigation_steps": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "order": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Step order (1-indexed)",
+                },
+                "action": {
+                    "type": "string",
+                    "description": "Action taken in this step",
+                },
+                "result": {
+                    "type": "string",
+                    "description": "Result of this step",
+                },
+                "tool": {
+                    "type": "string",
+                    "description": "Tool used (optional)",
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["completed", "failed", "skipped"],
+                    "description": "Step completion status",
+                },
+            },
+            "required": ["order", "action", "result", "status"],
+        },
+        "description": "Ordered list of investigation steps taken",
+    },
+}
+
+
+def get_evidence_enhanced_schema() -> dict[str, Any]:
+    """Get the complete output schema including evidence fields.
+
+    Returns:
+        Combined schema dictionary with all fields including evidence.
+    """
+    return {**OUTPUT_SCHEMA, **EVIDENCE_SCHEMA}
+
+
+def format_output_schema(include_evidence: bool = False) -> str:
+    """Format the output schema as a string for inclusion in prompts.
+
+    Args:
+        include_evidence: If True, include evidence collection fields.
+
+    Returns:
+        JSON schema string.
+    """
     import json
 
+    if include_evidence:
+        return json.dumps(get_evidence_enhanced_schema(), indent=2)
     return json.dumps(OUTPUT_SCHEMA, indent=2)
 
 

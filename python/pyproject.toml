@@ -43,6 +43,10 @@ dev = [
     "mypy>=1.0.0",
     "ruff>=0.1.0",
     "black>=23.0.0",
+    "testcontainers[postgres,redis]>=4.0.0",
+    "psycopg2-binary>=2.9.0",
+    "qdrant-client>=1.7.0",
+    "respx>=0.21.0",
 ]
 local = [
     "vllm>=0.3.0",
@@ -77,6 +81,10 @@ select = ["E", "F", "I", "N", "W", "UP"]
 [tool.ruff.lint.per-file-ignores]
 # Prompt files contain JSON examples that are naturally long
 "tw_ai/agents/prompts/*.py" = ["E501"]
+# Benchmark files contain test data with long descriptions
+"tw_ai/benchmarks/datasets.py" = ["E501"]
+"tw_ai/benchmarks/tasks.py" = ["E501"]
+"tw_ai/benchmarks/metrics.py" = ["E501"]
 
 [tool.black]
 line-length = 100

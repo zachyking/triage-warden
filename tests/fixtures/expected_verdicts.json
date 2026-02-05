@@ -1,0 +1,80 @@
+{
+  "_description": "Expected verdicts and analysis results for sample alerts. Used for validation in both Rust and Python tests.",
+  "phishing_typosquat": {
+    "expected_verdict": "true_positive",
+    "expected_severity": "high",
+    "min_confidence": 85,
+    "expected_mitre_techniques": ["T1566.002"],
+    "expected_indicators": {
+      "malicious_domains": ["paypa1.com", "paypa1-verify.com"],
+      "malicious_urls": ["http://paypa1-verify.com/login"]
+    },
+    "expected_actions": ["quarantine_email", "block_sender_domain", "block_url"]
+  },
+  "phishing_legitimate": {
+    "expected_verdict": "false_positive",
+    "expected_severity": "informational",
+    "min_confidence": 80,
+    "expected_mitre_techniques": [],
+    "expected_indicators": {
+      "benign_domains": ["company.com", "sharepoint.company.com"]
+    },
+    "expected_actions": ["release_email", "tune_detection_rule"]
+  },
+  "malware_eicar": {
+    "expected_verdict": "true_positive",
+    "expected_severity": "critical",
+    "min_confidence": 90,
+    "expected_mitre_techniques": ["T1059.001", "T1027"],
+    "expected_indicators": {
+      "malicious_hashes": ["44d88612fea8a8f36de82e1278abb02f"],
+      "malicious_processes": ["powershell.exe"]
+    },
+    "expected_actions": ["isolate_host", "block_hash", "acquire_memory_dump", "reset_credentials"]
+  },
+  "malware_lsass_access": {
+    "expected_verdict": "true_positive",
+    "expected_severity": "critical",
+    "min_confidence": 95,
+    "expected_mitre_techniques": ["T1003.001", "T1055.012"],
+    "expected_indicators": {
+      "suspicious_processes": ["notepad.exe"],
+      "target_processes": ["lsass.exe"]
+    },
+    "expected_actions": ["isolate_host", "disable_account", "force_password_reset"]
+  },
+  "auth_impossible_travel": {
+    "expected_verdict": "true_positive",
+    "expected_severity": "critical",
+    "min_confidence": 90,
+    "expected_mitre_techniques": ["T1078.004", "T1539"],
+    "expected_indicators": {
+      "malicious_ips": ["185.234.72.15"],
+      "suspicious_geolocations": ["Moscow, Russia"]
+    },
+    "expected_actions": ["force_signout", "reset_password_mfa", "lock_account", "review_activity"]
+  },
+  "auth_brute_force": {
+    "expected_verdict": "true_positive",
+    "expected_severity": "critical",
+    "min_confidence": 95,
+    "expected_mitre_techniques": ["T1110.003", "T1078.002"],
+    "expected_indicators": {
+      "malicious_ips": ["185.234.72.10", "185.234.72.11", "185.234.72.12"],
+      "compromised_accounts": [
+        "legacy.service@company.com",
+        "temp.contractor@company.com",
+        "old.admin@company.com"
+      ]
+    },
+    "expected_actions": ["reset_compromised_passwords", "lock_accounts", "block_ip_range"]
+  },
+  "auth_normal_login": {
+    "expected_verdict": "false_positive",
+    "expected_severity": "informational",
+    "min_confidence": 80,
+    "expected_mitre_techniques": [],
+    "expected_indicators": {},
+    "expected_actions": ["close_alert"]
+  }
+}

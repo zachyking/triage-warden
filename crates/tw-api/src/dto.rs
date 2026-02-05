@@ -321,7 +321,16 @@ pub struct EnrichmentResponse {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct AnalysisResponse {
     pub verdict: String,
+    /// Raw confidence score from the AI (0.0 - 1.0).
     pub confidence: f64,
+    /// Calibrated confidence score (Stage 2.2.4).
+    /// This represents the expected accuracy based on historical feedback.
+    /// When calibrated_confidence is 0.9, the AI is correct ~90% of the time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calibrated_confidence: Option<f64>,
+    /// Whether this analysis has been calibrated.
+    #[serde(default)]
+    pub is_calibrated: bool,
     pub risk_score: u8,
     pub summary: String,
     pub reasoning: String,
@@ -330,6 +339,58 @@ pub struct AnalysisResponse {
     pub iocs: Vec<IoCResponse>,
     pub analyzed_by: String,
     pub timestamp: DateTime<Utc>,
+    /// Evidence supporting the verdict (Stage 2.1.1).
+    #[serde(default)]
+    pub evidence: Vec<EvidenceResponse>,
+    /// Steps taken during the investigation (Stage 2.1.1).
+    #[serde(default)]
+    pub investigation_steps: Vec<InvestigationStepResponse>,
+}
+
+/// Evidence data in response (Stage 2.1.1).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct EvidenceResponse {
+    /// Unique identifier for this evidence item.
+    pub id: Uuid,
+    /// Source of the evidence (serialized source details).
+    pub source: serde_json::Value,
+    /// Human-readable source description.
+    pub source_display: String,
+    /// Type of evidence data.
+    pub data_type: String,
+    /// The actual evidence value/data.
+    pub value: serde_json::Value,
+    /// Explanation of why this evidence is relevant.
+    pub relevance: String,
+    /// Confidence in this evidence (0.0 - 1.0).
+    pub confidence: f64,
+    /// Deep link to view this evidence in its source system.
+    pub link: Option<String>,
+    /// Timestamp when this evidence was collected.
+    pub collected_at: DateTime<Utc>,
+}
+
+/// Investigation step data in response (Stage 2.1.1).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct InvestigationStepResponse {
+    /// Unique identifier for this step.
+    pub id: Uuid,
+    /// Order of this step in the investigation (1-indexed).
+    pub order: u32,
+    /// Description of the action taken.
+    pub action: String,
+    /// Result or output of this step.
+    pub result: String,
+    /// Status of this step.
+    pub status: String,
+    /// Tool or system used for this step.
+    pub tool: Option<String>,
+    /// IDs of evidence gathered in this step.
+    pub evidence_ids: Vec<Uuid>,
+    /// Timestamp when this step was executed.
+    pub timestamp: DateTime<Utc>,
+    /// Duration of this step in milliseconds.
+    pub duration_ms: Option<u64>,
 }
 
 /// MITRE technique in response.
@@ -728,6 +789,166 @@ pub struct PerformanceMetrics {
 }
 
 // ============================================================================
+// Calibration DTOs (Stage 2.2.4)
+// ============================================================================
+
+/// Request to train a new calibration model.
+#[derive(Debug, Deserialize, Validate, ToSchema)]
+pub struct TrainCalibrationRequest {
+    /// Minimum number of samples required for training.
+    #[validate(range(min = 20, max = 100000))]
+    pub min_samples: Option<usize>,
+    /// Whether to create stratified calibration curves per incident type.
+    pub use_stratification: Option<bool>,
+    /// Type of calibration method to use.
+    pub calibration_method: Option<String>,
+    /// Number of bins for histogram binning (if using that method).
+    #[validate(range(min = 5, max = 100))]
+    pub num_bins: Option<usize>,
+    /// Optional date range filter for training data.
+    pub since: Option<DateTime<Utc>>,
+    /// Optional end date for training data range.
+    pub until: Option<DateTime<Utc>>,
+}
+
+/// Response containing a calibration model.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct CalibrationModelResponse {
+    /// Unique identifier for this model.
+    pub id: Uuid,
+    /// Tenant this model belongs to.
+    pub tenant_id: Uuid,
+    /// Type of calibration method used.
+    pub calibration_type: String,
+    /// Model version string.
+    pub version: String,
+    /// Human-readable name.
+    pub name: Option<String>,
+    /// Description of the model.
+    pub description: Option<String>,
+    /// Total samples used in training.
+    pub total_samples: usize,
+    /// Expected Calibration Error (lower is better).
+    pub ece_score: Option<f64>,
+    /// Brier Score (lower is better).
+    pub brier_score: Option<f64>,
+    /// Qualitative calibration quality assessment.
+    pub quality: String,
+    /// Training data date range start.
+    pub training_start_date: Option<DateTime<Utc>>,
+    /// Training data date range end.
+    pub training_end_date: Option<DateTime<Utc>>,
+    /// Timestamp when this model was created.
+    pub created_at: DateTime<Utc>,
+    /// Whether this is the active model.
+    pub is_active: bool,
+    /// List of stratification keys available.
+    pub stratification_keys: Vec<String>,
+}
+
+/// Response containing calibration metrics.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct CalibrationMetricsResponse {
+    /// Expected Calibration Error (lower is better, < 0.05 is excellent).
+    pub expected_calibration_error: f64,
+    /// Maximum Calibration Error (worst-case per-bucket error).
+    pub max_calibration_error: f64,
+    /// Brier Score (mean squared error of predictions).
+    pub brier_score: f64,
+    /// Brier Score before calibration was applied.
+    pub brier_score_before: f64,
+    /// Overall accuracy.
+    pub accuracy: f64,
+    /// Total samples evaluated.
+    pub sample_count: usize,
+    /// Calibration improvement (positive = improved).
+    pub ece_improvement: f64,
+    /// Qualitative quality assessment.
+    pub quality: String,
+    /// Reliability diagram points for visualization.
+    pub reliability_diagram: Vec<ReliabilityPointResponse>,
+    /// Detailed bucket statistics.
+    pub buckets: Vec<CalibrationBucketResponse>,
+}
+
+/// A point on the reliability diagram.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ReliabilityPointResponse {
+    /// Mean predicted confidence at this point.
+    pub mean_confidence: f64,
+    /// Observed accuracy at this confidence level.
+    pub accuracy: f64,
+    /// Number of samples.
+    pub count: usize,
+}
+
+/// Statistics for a confidence bucket.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct CalibrationBucketResponse {
+    /// Lower bound of the bucket (inclusive).
+    pub lower: f64,
+    /// Upper bound of the bucket (exclusive).
+    pub upper: f64,
+    /// Mean confidence in this bucket.
+    pub mean_confidence: f64,
+    /// Actual accuracy in this bucket.
+    pub actual_accuracy: f64,
+    /// Number of samples in this bucket.
+    pub count: usize,
+    /// Calibration gap (positive = overconfident).
+    pub calibration_gap: f64,
+}
+
+/// Request to calibrate a specific confidence value.
+#[derive(Debug, Deserialize, Validate, ToSchema)]
+pub struct CalibrateConfidenceRequest {
+    /// The raw confidence value to calibrate (0.0 - 1.0).
+    #[validate(range(min = 0.0, max = 1.0))]
+    pub raw_confidence: f64,
+    /// Optional incident type for stratified calibration.
+    pub incident_type: Option<String>,
+    /// Optional verdict type for stratified calibration.
+    pub verdict_type: Option<String>,
+}
+
+/// Response with calibrated confidence.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct CalibrateConfidenceResponse {
+    /// The original raw confidence.
+    pub raw_confidence: f64,
+    /// The calibrated confidence.
+    pub calibrated_confidence: f64,
+    /// Which stratification key was used.
+    pub stratification_key: String,
+    /// Whether this used a stratified curve or fell back to global.
+    pub used_stratified_curve: bool,
+}
+
+/// Summary of calibration curve points.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct CalibrationCurveResponse {
+    /// Stratification key this curve applies to.
+    pub stratification_key: String,
+    /// Type of calibration.
+    pub calibration_type: String,
+    /// Input/output point pairs for the curve.
+    pub points: Vec<CalibrationPointResponse>,
+    /// Number of samples used to train this curve.
+    pub sample_count: usize,
+    /// When this curve was created.
+    pub created_at: DateTime<Utc>,
+}
+
+/// A single point on a calibration curve.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct CalibrationPointResponse {
+    /// Input (raw) confidence.
+    pub input: f64,
+    /// Output (calibrated) confidence.
+    pub output: f64,
+}
+
+// ============================================================================
 // Playbook DTOs
 // ============================================================================
 
@@ -805,6 +1026,190 @@ pub struct UpdatePlaybookRequest {
     pub enabled: Option<bool>,
     /// Stages as JSON string.
     pub stages: Option<String>,
+}
+
+// ============================================================================
+// Feedback DTOs (Task 2.2.2)
+// ============================================================================
+
+/// Response for a single feedback entry.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct FeedbackResponse {
+    pub id: Uuid,
+    pub incident_id: Uuid,
+    pub analyst_id: Uuid,
+    pub original_verdict: String,
+    pub corrected_verdict: Option<String>,
+    pub original_severity: String,
+    pub corrected_severity: Option<String>,
+    pub original_confidence: f64,
+    pub feedback_type: String,
+    pub notes: Option<String>,
+    pub original_mitre_techniques: Vec<String>,
+    pub corrected_mitre_techniques: Option<Vec<String>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Request to create feedback on an incident.
+#[derive(Debug, Deserialize, Validate, ToSchema)]
+pub struct CreateFeedbackRequest {
+    /// Type of feedback being provided.
+    #[validate(length(min = 1, max = 50))]
+    pub feedback_type: String,
+    /// Corrected verdict if the AI was wrong.
+    pub corrected_verdict: Option<String>,
+    /// Corrected severity if the AI was wrong.
+    pub corrected_severity: Option<String>,
+    /// Corrected MITRE ATT&CK technique IDs.
+    pub corrected_mitre_techniques: Option<Vec<String>>,
+    /// Optional notes explaining the feedback.
+    #[validate(length(max = 2000))]
+    pub notes: Option<String>,
+}
+
+/// Request to update an existing feedback entry.
+#[derive(Debug, Deserialize, Validate, ToSchema)]
+pub struct UpdateFeedbackRequest {
+    /// Updated corrected verdict.
+    pub corrected_verdict: Option<Option<String>>,
+    /// Updated corrected severity.
+    pub corrected_severity: Option<Option<String>>,
+    /// Updated feedback type.
+    pub feedback_type: Option<String>,
+    /// Updated notes.
+    #[validate(length(max = 2000))]
+    pub notes: Option<Option<String>>,
+    /// Updated corrected MITRE techniques.
+    pub corrected_mitre_techniques: Option<Option<Vec<String>>>,
+}
+
+/// Query parameters for listing feedback.
+#[derive(Debug, Deserialize, Validate, ToSchema)]
+pub struct ListFeedbackQuery {
+    /// Filter by feedback type.
+    pub feedback_type: Option<String>,
+    /// Filter by analyst ID.
+    pub analyst_id: Option<Uuid>,
+    /// Filter by original verdict.
+    pub original_verdict: Option<String>,
+    /// Filter by whether a correction was made.
+    pub has_correction: Option<bool>,
+    /// Filter by minimum created_at timestamp.
+    pub since: Option<DateTime<Utc>>,
+    /// Filter by maximum created_at timestamp.
+    pub until: Option<DateTime<Utc>>,
+    /// Page number (1-indexed). Defaults to 1.
+    #[validate(range(min = 1))]
+    pub page: Option<u32>,
+    /// Items per page. Defaults to 50, maximum 200.
+    #[validate(range(min = 1, max = 200))]
+    pub per_page: Option<u32>,
+}
+
+/// Response containing aggregate feedback statistics.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct FeedbackStatsResponse {
+    /// Total number of feedback entries.
+    pub total_feedback: u64,
+    /// Number of entries where the AI was correct.
+    pub correct_count: u64,
+    /// Number of entries with incorrect verdict.
+    pub incorrect_verdict_count: u64,
+    /// Number of entries with incorrect severity.
+    pub incorrect_severity_count: u64,
+    /// Number of entries with missing context.
+    pub missing_context_count: u64,
+    /// Number of entries with incorrect MITRE mapping.
+    pub incorrect_mitre_count: u64,
+    /// Number of entries with other issues.
+    pub other_count: u64,
+    /// Overall accuracy rate (0.0 - 1.0).
+    pub accuracy_rate: f64,
+    /// Verdict-specific accuracy rate.
+    pub verdict_accuracy_rate: f64,
+    /// Severity-specific accuracy rate.
+    pub severity_accuracy_rate: f64,
+    /// Calibration metrics (if available).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calibration_metrics: Option<FeedbackCalibrationMetricsResponse>,
+}
+
+/// Response containing calibration metrics for feedback.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct FeedbackCalibrationMetricsResponse {
+    /// Mean raw confidence across all feedback entries.
+    pub mean_raw_confidence: f64,
+    /// Mean accuracy (fraction correct) across all feedback entries.
+    pub mean_accuracy: f64,
+    /// Expected Calibration Error (lower is better).
+    pub expected_calibration_error: f64,
+    /// Brier Score (lower is better).
+    pub brier_score: f64,
+    /// Overconfidence rate.
+    pub overconfidence_rate: f64,
+    /// Underconfidence rate.
+    pub underconfidence_rate: f64,
+    /// Number of samples used for calibration calculation.
+    pub sample_count: u64,
+    /// Qualitative calibration quality assessment.
+    pub quality: String,
+}
+
+/// Query parameters for feedback stats.
+#[derive(Debug, Deserialize, Validate, ToSchema)]
+pub struct FeedbackStatsQuery {
+    /// Filter by minimum created_at timestamp.
+    pub since: Option<DateTime<Utc>>,
+    /// Filter by maximum created_at timestamp.
+    pub until: Option<DateTime<Utc>>,
+}
+
+/// Response containing accuracy breakdown by dimension.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct AccuracyByDimensionResponse {
+    /// Accuracy breakdown items.
+    pub items: Vec<AccuracyBreakdownItem>,
+}
+
+/// A single item in the accuracy breakdown.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct AccuracyBreakdownItem {
+    /// The dimension value (e.g., incident type, verdict type).
+    pub dimension: String,
+    /// Statistics for this dimension.
+    pub stats: FeedbackStatsResponse,
+}
+
+/// Response containing accuracy trend data.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct AccuracyTrendResponse {
+    /// Trend data points.
+    pub trends: Vec<TrendDataPoint>,
+}
+
+/// A single point in the accuracy trend.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct TrendDataPoint {
+    /// Time period (e.g., "2024-03", "2024-W12").
+    pub period: String,
+    /// Accuracy rate for this period.
+    pub accuracy_rate: f64,
+    /// Verdict accuracy rate for this period.
+    pub verdict_accuracy_rate: f64,
+    /// Number of feedback entries in this period.
+    pub count: u64,
+}
+
+/// Query parameters for accuracy trends.
+#[derive(Debug, Deserialize, Validate, ToSchema)]
+pub struct AccuracyTrendQuery {
+    /// Granularity of the trend data (day, week, month).
+    pub granularity: Option<String>,
+    /// Filter by minimum created_at timestamp.
+    pub since: Option<DateTime<Utc>>,
+    /// Filter by maximum created_at timestamp.
+    pub until: Option<DateTime<Utc>>,
 }
 
 // ============================================================================

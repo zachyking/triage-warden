@@ -4,14 +4,18 @@ pub mod api_keys;
 pub mod auth;
 pub mod connectors;
 pub mod features;
+pub mod feedback;
 pub mod health;
 pub mod incidents;
 pub mod kill_switch;
+pub mod knowledge;
 pub mod metrics;
 pub mod notifications;
 pub mod playbooks;
 pub mod policies;
+pub mod reports;
 pub mod settings;
+pub mod training;
 pub mod users;
 pub mod webhooks;
 
@@ -38,11 +42,18 @@ fn api_routes() -> Router<AppState> {
         .nest("/admin/features", features::routes())
         .nest("/api-keys", api_keys::routes())
         .nest("/connectors", connectors::routes())
+        .nest("/feedback", feedback::routes())
         .nest("/incidents", incidents::routes())
+        .nest(
+            "/incidents/:incident_id/feedback",
+            feedback::incident_feedback_routes(),
+        )
         .nest("/kill-switch", kill_switch::routes())
         .nest("/notifications", notifications::routes())
         .nest("/playbooks", playbooks::routes())
         .nest("/policies", policies::routes())
         .nest("/settings", settings::routes())
+        .nest("/training", training::routes())
+        .nest("/knowledge", knowledge::routes())
         .nest("/webhooks", webhooks::routes())
 }

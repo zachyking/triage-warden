@@ -13,6 +13,7 @@ redis-cache = ["dep:redis", "dep:deadpool-redis"]  # Redis cache support
 redis-streams = ["dep:redis", "dep:deadpool-redis"]  # Redis Streams message queue support
 redis-full = ["redis-cache", "redis-streams"]  # Enable all Redis features
 mx-validation = []  # Optional MX record validation for email addresses
+vector-store = ["dep:qdrant-client"]  # Qdrant vector store support for RAG
 
 [dependencies]
 tokio.workspace = true
@@ -50,9 +51,15 @@ zeroize = { version = "1.8", features = ["derive"] }
 hostname = "0.4"
 humantime-serde = "1.1"
 
+# PII masking for training data export
+regex = "1.10"
+
 # Redis (optional)
 redis = { workspace = true, optional = true }
 deadpool-redis = { workspace = true, optional = true }
+
+# Vector store (optional)
+qdrant-client = { version = "1.12", optional = true }
 
 [dev-dependencies]
 mockall.workspace = true

@@ -13,9 +13,9 @@ use validator::Validate;
 use crate::auth::RequireAnalyst;
 use crate::dto::{
     ActionExecutionResponse, ActionResponse, AnalysisResponse, ApproveActionRequest,
-    AuditEntryResponse, DismissRequest, EnrichmentResponse, ExecuteActionRequest,
-    IncidentDetailResponse, IncidentResponse, IoCResponse, ListIncidentsQuery,
-    MitreTechniqueResponse, PaginatedResponse, PaginationInfo, ResolveRequest,
+    AuditEntryResponse, DismissRequest, EnrichmentResponse, EvidenceResponse, ExecuteActionRequest,
+    IncidentDetailResponse, IncidentResponse, InvestigationStepResponse, IoCResponse,
+    ListIncidentsQuery, MitreTechniqueResponse, PaginatedResponse, PaginationInfo, ResolveRequest,
 };
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -39,6 +39,7 @@ pub fn routes() -> Router<AppState> {
         .route("/:id/dismiss", post(dismiss_incident))
         .route("/:id/resolve", post(resolve_incident))
         .route("/:id/enrich", post(enrich_incident))
+        .merge(super::reports::routes())
 }
 
 /// List incidents with filtering and pagination.
@@ -755,6 +756,8 @@ fn incident_to_detail_response(
     let analysis = incident.analysis.map(|a| AnalysisResponse {
         verdict: format!("{:?}", a.verdict).to_lowercase(),
         confidence: a.confidence,
+        calibrated_confidence: a.calibrated_confidence,
+        is_calibrated: a.is_calibrated(),
         risk_score: a.risk_score,
         summary: a.summary,
         reasoning: a.reasoning,
@@ -781,6 +784,36 @@ fn incident_to_detail_response(
             .collect(),
         analyzed_by: a.analyzed_by,
         timestamp: a.timestamp,
+        evidence: a
+            .evidence
+            .into_iter()
+            .map(|e| EvidenceResponse {
+                id: e.id,
+                source: serde_json::to_value(&e.source).unwrap_or_default(),
+                source_display: format!("{}", e.source),
+                data_type: format!("{}", e.data_type),
+                value: e.value,
+                relevance: e.relevance,
+                confidence: e.confidence,
+                link: e.link,
+                collected_at: e.collected_at,
+            })
+            .collect(),
+        investigation_steps: a
+            .investigation_steps
+            .into_iter()
+            .map(|s| InvestigationStepResponse {
+                id: s.id,
+                order: s.order,
+                action: s.action,
+                result: s.result,
+                status: format!("{:?}", s.status).to_lowercase(),
+                tool: s.tool,
+                evidence_ids: s.evidence_ids,
+                timestamp: s.timestamp,
+                duration_ms: s.duration_ms,
+            })
+            .collect(),
     });
 
     let proposed_actions: Vec<ActionResponse> = incident

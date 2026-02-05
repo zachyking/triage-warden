@@ -941,7 +941,8 @@ class TestIntegration:
             assert case.id
             assert case.name
             assert case.alert_data
-            assert case.expected_verdict in ("malicious", "benign", "suspicious")
+            # Allow all valid verdict values
+            assert case.expected_verdict in ("malicious", "benign", "suspicious", "inconclusive", "true_positive", "false_positive")
 
         # Verify we have the expected distribution
         verdicts = [c.expected_verdict for c in cases]

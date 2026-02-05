@@ -27,6 +27,16 @@ from tw_ai.rag.models import (
     QueryResult,
     ThreatIntelDocument,
 )
+from tw_ai.rag.monitoring import (
+    AggregatedMetrics,
+    AnalysisMetrics,
+    ExperimentVariant,
+    MetricType,
+    RAGMonitor,
+    RetrievalMetrics,
+    get_rag_monitor,
+    reset_rag_monitor,
+)
 from tw_ai.rag.retrieval import RetrievalService
 from tw_ai.rag.tools import create_rag_tools, register_rag_tools
 from tw_ai.rag.vector_store import VectorStore
@@ -55,6 +65,15 @@ __all__ = [
     "QueryRequest",
     "QueryResult",
     "QueryResponse",
+    # Monitoring (Stage 2.3.5)
+    "RAGMonitor",
+    "AnalysisMetrics",
+    "RetrievalMetrics",
+    "AggregatedMetrics",
+    "MetricType",
+    "ExperimentVariant",
+    "get_rag_monitor",
+    "reset_rag_monitor",
 ]
 
 

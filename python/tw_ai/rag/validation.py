@@ -171,6 +171,34 @@ DEFAULT_COLLECTION_SCHEMAS: dict[str, CollectionSchema] = {
             "created_at": str,
         },
     ),
+    # Few-shot examples collection (Stage 2.4.2)
+    "few_shot_examples": CollectionSchema(
+        name="few_shot_examples",
+        allowed_filter_keys=frozenset(
+            {
+                "quality",
+                "labeled",
+                "alert_type",
+                "verdict",
+                "severity",
+                "confidence_min",
+                "confidence_max",
+                "technique_ids",
+                "created_at",
+            }
+        ),
+        key_types={
+            "quality": str,
+            "labeled": bool,
+            "alert_type": str,
+            "verdict": str,
+            "severity": str,
+            "confidence_min": (int, float),
+            "confidence_max": (int, float),
+            "technique_ids": str,
+            "created_at": str,
+        },
+    ),
 }
 
 

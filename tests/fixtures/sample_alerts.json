@@ -1,0 +1,103 @@
+{
+  "phishing_typosquat": {
+    "type": "email_security",
+    "subject": "Urgent: Your account has been compromised",
+    "sender": "support@paypa1.com",
+    "urls": ["http://paypa1-verify.com/login"],
+    "recipient": "user@company.com",
+    "received_time": "2024-01-15T09:30:00Z",
+    "spf_result": "fail",
+    "dkim_result": "none",
+    "dmarc_result": "fail",
+    "headers": {
+      "X-Originating-IP": "185.234.72.10",
+      "X-Spam-Status": "Yes, score=8.5"
+    }
+  },
+  "phishing_legitimate": {
+    "type": "email_security",
+    "subject": "Monthly Report - December 2024",
+    "sender": "reports@company.com",
+    "urls": ["https://sharepoint.company.com/reports/december"],
+    "recipient": "user@company.com",
+    "received_time": "2024-01-15T10:00:00Z",
+    "spf_result": "pass",
+    "dkim_result": "pass",
+    "dmarc_result": "pass"
+  },
+  "malware_eicar": {
+    "type": "edr_detection",
+    "hostname": "workstation-001",
+    "process": "powershell.exe",
+    "command_line": "-enc SGVsbG8gV29ybGQ=",
+    "file_hash": "44d88612fea8a8f36de82e1278abb02f",
+    "parent_process": "cmd.exe",
+    "user": "DOMAIN\\jsmith",
+    "detection_time": "2024-01-15T14:30:00Z",
+    "file_path": "C:\\Users\\jsmith\\Downloads\\invoice.pdf.exe"
+  },
+  "malware_lsass_access": {
+    "type": "edr_detection",
+    "hostname": "workstation-002",
+    "process": "notepad.exe",
+    "command_line": "notepad.exe",
+    "file_hash": "unknown_hash_12345",
+    "parent_process": "powershell.exe",
+    "target_process": "lsass.exe",
+    "access_mask": "0x1fffff",
+    "user": "DOMAIN\\svc_account",
+    "detection_time": "2024-01-15T15:00:00Z"
+  },
+  "auth_impossible_travel": {
+    "type": "authentication",
+    "user": "jsmith@company.com",
+    "event_type": "successful_login",
+    "timestamp": "2024-01-15T14:30:00Z",
+    "source_ip": "185.234.72.15",
+    "geo_location": {
+      "country": "Russia",
+      "city": "Moscow"
+    },
+    "auth_method": "password_only",
+    "mfa_status": "not_challenged",
+    "previous_login": {
+      "timestamp": "2024-01-15T14:00:00Z",
+      "source_ip": "104.18.32.12",
+      "geo_location": {
+        "country": "US",
+        "city": "San Francisco"
+      }
+    }
+  },
+  "auth_brute_force": {
+    "type": "authentication",
+    "event_type": "aggregated_failures",
+    "timeframe": "2024-01-15T10:00:00Z to 2024-01-15T10:30:00Z",
+    "source_ips": ["185.234.72.10", "185.234.72.11", "185.234.72.12"],
+    "total_attempts": 847,
+    "unique_accounts": 423,
+    "successful_logins": 3,
+    "failure_reasons": {
+      "invalid_password": 812,
+      "account_locked": 32
+    },
+    "successful_accounts": [
+      "legacy.service@company.com",
+      "temp.contractor@company.com",
+      "old.admin@company.com"
+    ]
+  },
+  "auth_normal_login": {
+    "type": "authentication",
+    "user": "jdoe@company.com",
+    "event_type": "successful_login",
+    "timestamp": "2024-01-15T09:00:00Z",
+    "source_ip": "192.168.1.100",
+    "geo_location": {
+      "country": "US",
+      "city": "New York"
+    },
+    "auth_method": "password_mfa",
+    "mfa_status": "passed"
+  }
+}

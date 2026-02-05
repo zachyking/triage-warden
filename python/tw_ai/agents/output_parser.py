@@ -313,13 +313,14 @@ def parse_triage_analysis(text: str) -> TriageAnalysis:
     Parse and validate a triage analysis from LLM response.
 
     This function extracts JSON from the response and validates it
-    against the TriageAnalysis schema.
+    against the TriageAnalysis schema. It also handles evidence
+    parsing from both structured JSON and legacy [EVIDENCE] tags.
 
     Args:
         text: The raw LLM response text.
 
     Returns:
-        A validated TriageAnalysis object.
+        A validated TriageAnalysis object with evidence if present.
 
     Raises:
         ParseError: If parsing or validation fails.
@@ -338,6 +339,26 @@ def parse_triage_analysis(text: str) -> TriageAnalysis:
         data["recommended_actions"] = []
     if "reasoning" not in data:
         data["reasoning"] = ""
+
+    # Stage 2.1.2: Handle evidence and investigation_steps fields
+    if "evidence" not in data:
+        data["evidence"] = []
+    if "investigation_steps" not in data:
+        data["investigation_steps"] = []
+
+    # Try to extract evidence from legacy [EVIDENCE] tags in reasoning
+    # if no structured evidence was provided
+    if not data["evidence"] and data.get("reasoning"):
+        from tw_ai.agents.evidence_parser import parse_evidence_from_text
+
+        legacy_evidence = parse_evidence_from_text(data["reasoning"])
+        if legacy_evidence:
+            # Convert EvidenceItem objects to dicts for validation
+            data["evidence"] = [e.model_dump() for e in legacy_evidence]
+            logger.info(
+                "Extracted evidence from legacy tags",
+                extra={"evidence_count": len(legacy_evidence)},
+            )
 
     # Validate with Pydantic
     try:
@@ -371,3 +392,139 @@ def parse_triage_analysis(text: str) -> TriageAnalysis:
             cause=e,
             error_code=ErrorCode.VALIDATION_FAILED,
         ) from e
+
+
+def parse_triage_analysis_with_evidence_validation(
+    text: str,
+    require_evidence: bool = False,
+    min_evidence_items: int = 3,
+) -> tuple[TriageAnalysis, dict[str, Any]]:
+    """
+    Parse triage analysis and validate evidence quality.
+
+    This is an enhanced version of parse_triage_analysis that also
+    validates the quality of collected evidence.
+
+    Args:
+        text: The raw LLM response text.
+        require_evidence: If True, raise error if evidence is insufficient.
+        min_evidence_items: Minimum evidence items required.
+
+    Returns:
+        Tuple of (TriageAnalysis, evidence_quality_report).
+
+    Raises:
+        ParseError: If parsing fails or evidence is required but insufficient.
+    """
+    from tw_ai.agents.evidence_parser import validate_evidence_quality
+
+    analysis = parse_triage_analysis(text)
+
+    # Validate evidence quality
+    evidence_report = validate_evidence_quality(
+        analysis.evidence,
+        min_items=min_evidence_items,
+    )
+
+    if require_evidence and not evidence_report["valid"]:
+        raise ParseError(
+            _sanitize_error_message(
+                ErrorCode.VALIDATION_FAILED,
+                f"Insufficient evidence: {evidence_report['recommendations']}",
+                "Analysis requires more supporting evidence",
+            ),
+            raw_text=text,
+            error_code=ErrorCode.VALIDATION_FAILED,
+        )
+
+    return analysis, evidence_report
+
+
+def parse_triage_analysis_with_hallucination_detection(
+    text: str,
+    incident_data: dict[str, Any] | str,
+    rag_context: dict[str, Any] | None = None,
+    require_evidence: bool = False,
+    min_evidence_items: int = 3,
+    flag_for_review_on_hallucination: bool = True,
+) -> tuple[TriageAnalysis, dict[str, Any]]:
+    """
+    Parse triage analysis with full validation including hallucination detection.
+
+    This is the most comprehensive parsing function that:
+    1. Parses and validates the JSON structure
+    2. Validates evidence quality
+    3. Checks for hallucinations against incident data
+    4. Optionally flags analyses for human review
+
+    Args:
+        text: The raw LLM response text.
+        incident_data: The raw incident/alert data to check against.
+        rag_context: Optional RAG context that was provided to the LLM.
+        require_evidence: If True, raise error if evidence is insufficient.
+        min_evidence_items: Minimum evidence items required.
+        flag_for_review_on_hallucination: If True, include review flag in result.
+
+    Returns:
+        Tuple of (TriageAnalysis, validation_report).
+        The validation_report includes:
+        - evidence: Evidence quality report
+        - hallucination: Hallucination detection result
+        - flagged_for_review: Whether human review is recommended
+
+    Raises:
+        ParseError: If parsing fails or evidence is required but insufficient.
+    """
+    from tw_ai.agents.evidence_parser import validate_evidence_quality
+    from tw_ai.validation.hallucination import check_for_hallucinations
+
+    analysis = parse_triage_analysis(text)
+
+    # Validate evidence quality
+    evidence_report = validate_evidence_quality(
+        analysis.evidence,
+        min_items=min_evidence_items,
+    )
+
+    if require_evidence and not evidence_report["valid"]:
+        raise ParseError(
+            _sanitize_error_message(
+                ErrorCode.VALIDATION_FAILED,
+                f"Insufficient evidence: {evidence_report['recommendations']}",
+                "Analysis requires more supporting evidence",
+            ),
+            raw_text=text,
+            error_code=ErrorCode.VALIDATION_FAILED,
+        )
+
+    # Run hallucination detection
+    hallucination_result = check_for_hallucinations(
+        analysis,
+        incident_data,
+        rag_context,
+    )
+
+    # Build comprehensive validation report
+    validation_report: dict[str, Any] = {
+        "evidence": evidence_report,
+        "hallucination": hallucination_result.get_summary(),
+        "hallucination_warnings": [w.to_audit_dict() for w in hallucination_result.warnings],
+        "flagged_for_review": (
+            flag_for_review_on_hallucination and hallucination_result.should_flag_for_review
+        ),
+    }
+
+    # Log if flagged for review
+    if validation_report["flagged_for_review"]:
+        logger.warning(
+            "Analysis flagged for review due to potential hallucinations",
+            extra={
+                "warning_count": len(hallucination_result.warnings),
+                "critical_warnings": hallucination_result.critical_count,
+                "high_warnings": hallucination_result.high_count,
+                "verdict": analysis.verdict,
+                "severity": analysis.severity,
+            },
+        )
+
+    return analysis, validation_report

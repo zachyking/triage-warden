@@ -1,0 +1,267 @@
+{% extends "base.html" %}
+
+{% block content %}
+<header>
+    <h1>Investigation Report</h1>
+    <div class="metadata">
+        <div class="metadata-item">
+            <span class="metadata-label">Incident ID:</span>
+            <span class="metadata-value">{{ report.metadata.incident_id }}</span>
+        </div>
+        <div class="metadata-item">
+            <span class="metadata-label">Alert Source:</span>
+            <span class="metadata-value">{{ report.alert.source }}</span>
+        </div>
+        {% if report.alert.alert_type %}
+        <div class="metadata-item">
+            <span class="metadata-label">Alert Type:</span>
+            <span class="metadata-value">{{ report.alert.alert_type }}</span>
+        </div>
+        {% endif %}
+        {% if report.alert.created_at %}
+        <div class="metadata-item">
+            <span class="metadata-label">Incident Created:</span>
+            <span class="metadata-value">{{ report.alert.created_at.strftime('%Y-%m-%d %H:%M UTC') }}</span>
+        </div>
+        {% endif %}
+        {% if report.metadata.tenant_id %}
+        <div class="metadata-item">
+            <span class="metadata-label">Tenant ID:</span>
+            <span class="metadata-value">{{ report.metadata.tenant_id }}</span>
+        </div>
+        {% endif %}
+    </div>
+</header>
+
+<section>
+    <h2>Executive Summary</h2>
+    <div class="executive-summary">
+        {{ report.executive_summary }}
+    </div>
+
+    <div class="verdict-card">
+        <div>
+            <span class="verdict-badge verdict-{{ report.verdict.verdict }}">
+                {{ report.verdict.verdict_display }}
+            </span>
+        </div>
+        <div>
+            <span class="severity-badge severity-{{ report.verdict.severity }}">
+                {{ report.verdict.severity_display }} Severity
+            </span>
+        </div>
+        <div class="confidence-meter">
+            <span>Confidence:</span>
+            <div class="confidence-bar">
+                {% set conf_class = 'confidence-high' if report.verdict.confidence >= 75 else ('confidence-medium' if report.verdict.confidence >= 50 else 'confidence-low') %}
+                <div class="confidence-fill {{ conf_class }}" style="width: {{ report.verdict.confidence }}%"></div>
+            </div>
+            <span><strong>{{ report.verdict.confidence }}%</strong></span>
+            {% if report.verdict.calibrated_confidence %}
+            <span class="text-muted">(calibrated: {{ report.verdict.calibrated_confidence }}%)</span>
+            {% endif %}
+        </div>
+    </div>
+</section>
+
+{% if report.timeline %}
+<section>
+    <h2>Investigation Timeline</h2>
+    <div class="timeline">
+        {% for step in report.timeline %}
+        <div class="timeline-item status-{{ step.status }}">
+            <div>
+                <span class="timeline-order">Step {{ step.order }}</span>
+                {% if step.tool %}
+                <span class="timeline-tool">{{ step.tool }}</span>
+                {% endif %}
+            </div>
+            <h3>{{ step.action }}</h3>
+            <p>{{ step.result }}</p>
+            {% if step.duration_ms %}
+            <p class="text-muted" style="font-size: 11px; margin-top: 5px;">Duration: {{ step.duration_ms }}ms</p>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{% if report.evidence %}
+<section>
+    <h2>Evidence</h2>
+
+    <div class="evidence-summary">
+        <div class="summary-stat">
+            <div class="summary-stat-value">{{ report.evidence_summary.total_evidence }}</div>
+            <div class="summary-stat-label">Total Evidence Items</div>
+        </div>
+        <div class="summary-stat">
+            <div class="summary-stat-value">{{ report.evidence_summary.average_confidence }}%</div>
+            <div class="summary-stat-label">Average Confidence</div>
+        </div>
+        <div class="summary-stat">
+            <div class="summary-stat-value">{{ report.evidence_summary.high_confidence_count }}</div>
+            <div class="summary-stat-label">High Confidence Items</div>
+        </div>
+        <div class="summary-stat">
+            <div class="summary-stat-value">{{ report.evidence_summary.sources_used | length }}</div>
+            <div class="summary-stat-label">Sources Used</div>
+        </div>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Source</th>
+                <th>Type</th>
+                <th>Finding</th>
+                <th>Relevance</th>
+                <th>Confidence</th>
+                <th>Link</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in report.evidence %}
+            <tr>
+                <td>{{ item.order }}</td>
+                <td>
+                    <strong>{{ item.source_name }}</strong><br>
+                    <span style="font-size: 11px; color: var(--text-muted);">{{ item.source_type }}</span>
+                </td>
+                <td>{{ item.data_type | replace('_', ' ') | title }}</td>
+                <td>{{ item.finding }}</td>
+                <td>{{ item.relevance }}</td>
+                <td>
+                    <div class="evidence-confidence">
+                        {% set conf_color = '#38a169' if item.confidence >= 80 else ('#dd6b20' if item.confidence >= 50 else '#e53e3e') %}
+                        <span class="confidence-dot" style="background: {{ conf_color }}"></span>
+                        {{ item.confidence }}%
+                    </div>
+                </td>
+                <td>
+                    {% if item.link %}
+                    <a href="{{ item.link }}" class="link" target="_blank">View</a>
+                    {% else %}
+                    -
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+
+{% if report.mitre_techniques %}
+<section>
+    <h2>MITRE ATT&CK Techniques</h2>
+    {% for technique in report.mitre_techniques %}
+    <div class="mitre-card">
+        <div>
+            <span class="mitre-id">{{ technique.technique_id }}</span>
+            <span class="mitre-tactic">{{ technique.tactic }}</span>
+        </div>
+        <h3 style="margin: 10px 0 5px;">{{ technique.name }}</h3>
+        <p>{{ technique.relevance }}</p>
+        <a href="{{ technique.url }}" class="link" target="_blank" style="font-size: 12px;">View on MITRE ATT&CK</a>
+    </div>
+    {% endfor %}
+</section>
+{% endif %}
+
+{% if report.indicators %}
+<section>
+    <h2>Indicators of Compromise (IOCs)</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Type</th>
+                <th>Value</th>
+                <th>Verdict</th>
+                <th>Context</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for ioc in report.indicators %}
+            <tr>
+                <td><span class="indicator-type">{{ ioc.indicator_type | upper }}</span></td>
+                <td style="font-family: monospace;">{{ ioc.value }}</td>
+                <td>
+                    {% set verdict_class = 'indicator-malicious' if ioc.verdict == 'malicious' else ('indicator-suspicious' if ioc.verdict == 'suspicious' else 'indicator-benign') %}
+                    <span class="indicator-verdict {{ verdict_class }}">{{ ioc.verdict | title }}</span>
+                </td>
+                <td>{{ ioc.context or '-' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+
+{% if report.recommended_actions %}
+<section>
+    <h2>Recommended Actions</h2>
+    {% for action in report.recommended_actions %}
+    <div class="action-card">
+        <span class="action-priority priority-{{ action.priority }}">{{ action.priority }}</span>
+        <div>
+            <h3>
+                {{ action.action }}
+                {% if action.requires_approval %}
+                <span class="approval-required">Requires Approval</span>
+                {% endif %}
+            </h3>
+            <p style="color: var(--text-muted); margin-top: 5px;">{{ action.reason }}</p>
+        </div>
+    </div>
+    {% endfor %}
+</section>
+{% endif %}
+
+{% if report.reasoning %}
+<section>
+    <h2>Detailed Analysis Reasoning</h2>
+    <div class="reasoning">{{ report.reasoning }}</div>
+</section>
+{% endif %}
+
+<section class="appendix">
+    <h2>Appendix</h2>
+
+    {% if report.audit_log %}
+    <h3>Audit Log</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Timestamp</th>
+                <th>Action</th>
+                <th>Actor</th>
+                <th>Details</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for entry in report.audit_log %}
+            <tr>
+                <td>{{ entry.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                <td>{{ entry.action | replace('_', ' ') | title }}</td>
+                <td>{{ entry.actor }}</td>
+                <td>{{ entry.details or '-' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+
+    {% if report.raw_alert_data %}
+    <h3>Raw Alert Data</h3>
+    <pre>{{ report.raw_alert_data | tojson(indent=2) }}</pre>
+    {% endif %}
+
+    {% if report.enrichments %}
+    <h3>Enrichment Data</h3>
+    <pre>{{ report.enrichments | tojson(indent=2) }}</pre>
+    {% endif %}
+</section>
+{% endblock %}

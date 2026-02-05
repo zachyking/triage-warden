@@ -23,6 +23,16 @@ from tw_ai.analysis.phishing import (
     detect_credential_request,
     detect_urgency_language,
 )
+from tw_ai.analysis.rag_analyzer import (
+    ContextSource,
+    ContextSourceType,
+    RAGAnalysisConfig,
+    RAGAnalysisResult,
+    RAGContext,
+    RAGContextBuilder,
+    RAGEnhancedAnalyzer,
+    create_rag_analyzer,
+)
 from tw_ai.analysis.security import (
     calculate_severity,
     extract_indicators,
@@ -52,4 +62,13 @@ __all__ = [
     "calculate_risk_score",
     "PhishingIndicators",
     "TyposquatMatch",
+    # RAG-enhanced analysis (Stage 2.3.4)
+    "RAGEnhancedAnalyzer",
+    "RAGAnalysisResult",
+    "RAGAnalysisConfig",
+    "RAGContext",
+    "ContextSource",
+    "ContextSourceType",
+    "RAGContextBuilder",
+    "create_rag_analyzer",
 ]

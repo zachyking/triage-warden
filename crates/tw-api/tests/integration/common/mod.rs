@@ -83,15 +83,14 @@ async fn run_migrations(pool: &SqlitePool) {
     .expect("Failed to run auth tables migration");
 
     // Multi-tenancy migrations
-    for raw_statement in include_str!(
+    let tenants_sql: &str = include_str!(
         "../../../../tw-core/src/db/migrations/sqlite/20240215_000001_create_tenants.sql"
-    )
-    .split(';')
-    {
+    );
+    for raw_statement in tenants_sql.split(';') {
         let statement: String = raw_statement
             .lines()
-            .filter(|line| !line.trim().starts_with("--"))
-            .collect::<Vec<_>>()
+            .filter(|line: &&str| !line.trim().starts_with("--"))
+            .collect::<Vec<&str>>()
             .join("\n");
         let statement = statement.trim();
         if statement.is_empty() {
@@ -109,15 +108,14 @@ async fn run_migrations(pool: &SqlitePool) {
     }
 
     // Add tenant_id to all tables
-    for raw_statement in include_str!(
+    let tenant_id_sql: &str = include_str!(
         "../../../../tw-core/src/db/migrations/sqlite/20240215_000002_add_tenant_id_to_tables.sql"
-    )
-    .split(';')
-    {
+    );
+    for raw_statement in tenant_id_sql.split(';') {
         let statement: String = raw_statement
             .lines()
-            .filter(|line| !line.trim().starts_with("--"))
-            .collect::<Vec<_>>()
+            .filter(|line: &&str| !line.trim().starts_with("--"))
+            .collect::<Vec<&str>>()
             .join("\n");
         let statement = statement.trim();
         if statement.is_empty() {

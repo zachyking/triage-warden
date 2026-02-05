@@ -1,0 +1,52 @@
+{
+  "examples": [
+    {
+      "id": "phishing_high_001",
+      "alert_context": "**Alert ID**: ALERT-2024-001\n**Alert Type**: Potential Phishing Email\n**Reported By**: user.reporter@company.com\n\n**Email Headers**:\n```json\n{\n  \"from\": \"IT-Support <support@1t-helpdesk.com>\",\n  \"reply_to\": \"support@external-domain.xyz\",\n  \"subject\": \"URGENT: Password Expires in 24 Hours\",\n  \"x_originating_ip\": \"185.234.72.15\",\n  \"spf\": \"fail\",\n  \"dkim\": \"none\",\n  \"dmarc\": \"fail\"\n}\n```\n\n**Email Body**:\n```\nDear Employee,\n\nYour password will expire in 24 hours. To avoid service disruption, please verify your credentials immediately by clicking the link below:\n\nhttps://secure-update.1t-helpdesk.com/verify\n\nFailure to act will result in account suspension.\n\nIT Support Team\n```\n\n**Extracted URLs**:\n- https://secure-update.1t-helpdesk.com/verify",
+      "analysis_output": "{\n  \"verdict\": \"malicious\",\n  \"confidence\": 92,\n  \"severity\": \"high\",\n  \"summary\": \"Credential harvesting phishing attempt using typosquatted domain impersonating IT support. The sender domain '1t-helpdesk.com' is designed to look like 'it-helpdesk' and the reply-to points to an unrelated external domain.\",\n  \"indicators\": [\n    {\"type\": \"domain\", \"value\": \"1t-helpdesk.com\", \"verdict\": \"malicious - typosquatting\"},\n    {\"type\": \"domain\", \"value\": \"external-domain.xyz\", \"verdict\": \"suspicious - newly registered\"},\n    {\"type\": \"ip\", \"value\": \"185.234.72.15\", \"verdict\": \"malicious - known phishing infrastructure\"}\n  ],\n  \"mitre_techniques\": [\n    {\"id\": \"T1566.001\", \"name\": \"Spearphishing Attachment\", \"relevance\": \"Targeted phishing email to harvest credentials\"},\n    {\"id\": \"T1598.003\", \"name\": \"Spearphishing Link\", \"relevance\": \"Email contains credential harvesting link\"}\n  ],\n  \"recommended_actions\": [\n    {\"action\": \"Block sender domain at email gateway\", \"priority\": \"immediate\", \"reason\": \"Prevent further delivery from this phishing infrastructure\"},\n    {\"action\": \"Search for other recipients of this campaign\", \"priority\": \"high\", \"reason\": \"Identify scope of targeting\"},\n    {\"action\": \"Add domain to blocklist\", \"priority\": \"high\", \"reason\": \"Block access to phishing site\"},\n    {\"action\": \"User security awareness reminder\", \"priority\": \"medium\", \"reason\": \"Reinforce good reporting behavior\"}\n  ],\n  \"reasoning\": \"This is a credential harvesting phishing attempt. Multiple red flags: (1) Typosquatted sender domain using '1' instead of 'i' to impersonate IT support, (2) Reply-to address points to completely different domain with suspicious .xyz TLD, (3) Originating IP is associated with known phishing campaigns in threat intel, (4) Urgency-based subject line is classic social engineering. The combination of these indicators with high confidence threat intel hits makes this clearly malicious.\"\n}",
+      "reasoning_explanation": "This example demonstrates analysis of a classic credential harvesting phishing attempt. Key indicators include typosquatted domain (using '1' instead of 'i'), email authentication failures (SPF, DKIM, DMARC all fail), mismatched reply-to domain, urgency-based social engineering, and threat intel hits on the originating IP.",
+      "metadata": {
+        "quality": "high",
+        "labeled": true,
+        "curator": "security_team",
+        "alert_type": "phishing",
+        "verdict": "malicious",
+        "severity": "high",
+        "confidence_range": [85, 95],
+        "technique_ids": ["T1566.001", "T1598.003"]
+      }
+    },
+    {
+      "id": "phishing_high_002",
+      "alert_context": "**Alert ID**: ALERT-2024-002\n**Alert Type**: Potential Phishing Email\n**Reported By**: automated_gateway\n\n**Email Headers**:\n```json\n{\n  \"from\": \"John Smith <john.smith@partner-company.com>\",\n  \"subject\": \"Q4 Report - Please Review\",\n  \"spf\": \"pass\",\n  \"dkim\": \"pass\",\n  \"dmarc\": \"pass\"\n}\n```\n\n**Email Body**:\n```\nHi,\n\nPlease find attached the Q4 financial report for review before our meeting on Friday.\n\nThe document is available at: https://acme-sharepoint.sharepoint.com/sites/Finance/Q4Report.xlsx\n\nLet me know if you have any questions.\n\nRegards,\nJohn\n```\n\n**Extracted URLs**:\n- https://acme-sharepoint.sharepoint.com/sites/Finance/Q4Report.xlsx",
+      "analysis_output": "{\n  \"verdict\": \"benign\",\n  \"confidence\": 88,\n  \"severity\": \"info\",\n  \"summary\": \"Legitimate business communication from known partner. Email passes all authentication checks, sender domain has good reputation, and the linked document is hosted on legitimate Microsoft SharePoint.\",\n  \"indicators\": [\n    {\"type\": \"domain\", \"value\": \"partner-company.com\", \"verdict\": \"benign - known business partner\"},\n    {\"type\": \"url\", \"value\": \"https://acme-sharepoint.sharepoint.com/sites/Finance/Q4Report.xlsx\", \"verdict\": \"benign - legitimate SharePoint URL\"}\n  ],\n  \"mitre_techniques\": [],\n  \"recommended_actions\": [\n    {\"action\": \"Release email from quarantine\", \"priority\": \"high\", \"reason\": \"Legitimate business communication\"},\n    {\"action\": \"Tune detection rule\", \"priority\": \"medium\", \"reason\": \"Reduce false positives for partner domains\"}\n  ],\n  \"reasoning\": \"This appears to be legitimate business email. Evidence: (1) Sender domain is a known business partner with established communication history, (2) All email authentication passes (SPF, DKIM, DMARC), (3) Linked content is on Microsoft SharePoint, a legitimate file sharing platform, (4) Subject and content match normal business communication patterns. The alert triggered due to generic external link detection, which should be tuned for trusted partners.\"\n}",
+      "reasoning_explanation": "This example shows how to identify false positive phishing alerts. The email passes all authentication checks, comes from a known partner, and links to a legitimate SharePoint URL. The recommendation is to release the email and tune detection rules.",
+      "metadata": {
+        "quality": "high",
+        "labeled": true,
+        "curator": "security_team",
+        "alert_type": "phishing",
+        "verdict": "benign",
+        "severity": "info",
+        "confidence_range": [80, 95],
+        "technique_ids": []
+      }
+    },
+    {
+      "id": "phishing_high_003",
+      "alert_context": "**Alert ID**: ALERT-2024-003\n**Alert Type**: Potential Phishing Email\n**Reported By**: email_filter\n\n**Email Headers**:\n```json\n{\n  \"from\": \"Sales Team <sales@unknown-vendor.com>\",\n  \"subject\": \"Partnership Proposal - Action Required\",\n  \"spf\": \"pass\",\n  \"dkim\": \"none\",\n  \"dmarc\": \"none\"\n}\n```\n\n**Email Body**:\n```\nDear Procurement Team,\n\nWe are reaching out regarding a potential business partnership. Please review the attached proposal document.\n\nBest regards,\nSales Team\nUnknown Vendor Inc.\n```\n\n**Attachments**:\n```json\n[\n  {\n    \"filename\": \"Proposal_2024.docx\",\n    \"hash\": \"a1b2c3d4e5f6g7h8i9j0\",\n    \"size\": \"245KB\"\n  }\n]\n```",
+      "analysis_output": "{\n  \"verdict\": \"suspicious\",\n  \"confidence\": 55,\n  \"severity\": \"medium\",\n  \"summary\": \"Unsolicited email from unknown sender with document attachment. Not definitively malicious but warrants caution due to lack of prior relationship and missing DKIM/DMARC signatures.\",\n  \"indicators\": [\n    {\"type\": \"domain\", \"value\": \"unknown-vendor.com\", \"verdict\": \"unknown - no threat intel, registered 6 months ago\"},\n    {\"type\": \"hash\", \"value\": \"a1b2c3d4e5f6g7h8i9j0\", \"verdict\": \"unknown - not seen before\"}\n  ],\n  \"mitre_techniques\": [\n    {\"id\": \"T1566.001\", \"name\": \"Spearphishing Attachment\", \"relevance\": \"Potential vector if attachment is malicious\"}\n  ],\n  \"recommended_actions\": [\n    {\"action\": \"Sandbox the attachment\", \"priority\": \"high\", \"reason\": \"Determine if document contains malicious content\"},\n    {\"action\": \"Verify with recipient if expected\", \"priority\": \"high\", \"reason\": \"Confirm if this is legitimate business contact\"},\n    {\"action\": \"Hold email pending verification\", \"priority\": \"medium\", \"reason\": \"Prevent potential malware delivery\"}\n  ],\n  \"reasoning\": \"This email has mixed signals. Positive: SPF passes, domain is not flagged as malicious, no obvious phishing indicators in content. Concerning: No prior communication with this sender, DKIM not configured (many legitimate SMBs don't have DKIM), unsolicited attachment. The document hash is not in any threat intel database (clean but also unknown). Recommend sandbox analysis and recipient verification before delivery.\"\n}",
+      "reasoning_explanation": "This example demonstrates handling ambiguous cases where there isn't enough evidence for a definitive verdict. The recommended approach is to sandbox the attachment and verify with the recipient rather than making a premature judgment.",
+      "metadata": {
+        "quality": "high",
+        "labeled": true,
+        "curator": "security_team",
+        "alert_type": "phishing",
+        "verdict": "suspicious",
+        "severity": "medium",
+        "confidence_range": [45, 65],
+        "technique_ids": ["T1566.001"]
+      }
+    }
+  ]
+}

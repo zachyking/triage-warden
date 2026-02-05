@@ -224,6 +224,14 @@ pub enum TriageEvent {
         reason: String,
         activated_by: String,
     },
+
+    /// Analyst feedback has been received on an incident.
+    FeedbackReceived {
+        incident_id: Uuid,
+        feedback_id: Uuid,
+        feedback_type: String,
+        is_correction: bool,
+    },
 }
 
 impl TriageEvent {
@@ -764,6 +772,7 @@ impl TriageEvent {
             TriageEvent::EnrichmentRequested { incident_id } => Some(*incident_id),
             TriageEvent::SystemError { incident_id, .. } => *incident_id,
             TriageEvent::KillSwitchActivated { .. } => None,
+            TriageEvent::FeedbackReceived { incident_id, .. } => Some(*incident_id),
         }
     }
 
@@ -786,6 +795,7 @@ impl TriageEvent {
             TriageEvent::EnrichmentRequested { .. } => "enrichment_requested",
             TriageEvent::SystemError { .. } => "system_error",
             TriageEvent::KillSwitchActivated { .. } => "kill_switch_activated",
+            TriageEvent::FeedbackReceived { .. } => "feedback_received",
         }
     }
 }

@@ -730,7 +730,9 @@ impl WorkflowEngine {
             }
             TransitionCondition::ConfidenceThreshold(threshold) => {
                 if let Some(ref analysis) = incident.analysis {
-                    Ok(analysis.confidence >= *threshold)
+                    // Use calibrated confidence if available, otherwise fall back to raw
+                    // This ensures workflow decisions are based on calibrated expected accuracy
+                    Ok(analysis.effective_confidence() >= *threshold)
                 } else {
                     Ok(false)
                 }
@@ -1168,6 +1170,7 @@ mod tests {
         incident.set_analysis(crate::incident::TriageAnalysis {
             verdict: crate::incident::TriageVerdict::TruePositive,
             confidence: 0.9,
+            calibrated_confidence: None,
             summary: "Test".to_string(),
             reasoning: "Test".to_string(),
             mitre_techniques: vec![],
@@ -1176,6 +1179,8 @@ mod tests {
             risk_score: 80,
             analyzed_by: "test".to_string(),
             timestamp: Utc::now(),
+            evidence: vec![],
+            investigation_steps: vec![],
         });
         engine
             .transition(&mut incident, IncidentStatus::PendingReview, &analyst_ctx)
@@ -1219,6 +1224,7 @@ mod tests {
         incident.set_analysis(crate::incident::TriageAnalysis {
             verdict: crate::incident::TriageVerdict::TruePositive,
             confidence: 0.9,
+            calibrated_confidence: None,
             summary: "Test".to_string(),
             reasoning: "Test".to_string(),
             mitre_techniques: vec![],
@@ -1227,6 +1233,8 @@ mod tests {
             risk_score: 80,
             analyzed_by: "test".to_string(),
             timestamp: Utc::now(),
+            evidence: vec![],
+            investigation_steps: vec![],
         });
         engine
             .transition(&mut incident, IncidentStatus::PendingReview, &analyst_ctx)
@@ -1271,6 +1279,7 @@ mod tests {
         incident.set_analysis(crate::incident::TriageAnalysis {
             verdict: crate::incident::TriageVerdict::TruePositive,
             confidence: 0.9,
+            calibrated_confidence: None,
             summary: "Test".to_string(),
             reasoning: "Test".to_string(),
             mitre_techniques: vec![],
@@ -1279,6 +1288,8 @@ mod tests {
             risk_score: 80,
             analyzed_by: "test".to_string(),
             timestamp: Utc::now(),
+            evidence: vec![],
+            investigation_steps: vec![],
         });
         engine
             .transition(&mut incident, IncidentStatus::PendingReview, &admin_ctx)
@@ -1354,6 +1365,7 @@ mod tests {
         incident.set_analysis(crate::incident::TriageAnalysis {
             verdict: crate::incident::TriageVerdict::TruePositive,
             confidence: 0.9,
+            calibrated_confidence: None,
             summary: "Test".to_string(),
             reasoning: "Test".to_string(),
             mitre_techniques: vec![],
@@ -1362,6 +1374,8 @@ mod tests {
             risk_score: 80,
             analyzed_by: "test".to_string(),
             timestamp: Utc::now(),
+            evidence: vec![],
+            investigation_steps: vec![],
         });
         engine
             .transition(&mut incident, IncidentStatus::PendingReview, &analyst_ctx)

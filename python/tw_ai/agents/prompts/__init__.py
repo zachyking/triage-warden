@@ -6,11 +6,20 @@ including:
 - Base SOC analyst persona and capabilities
 - Specialized prompts for different threat categories (phishing, malware, suspicious logins)
 - Output schema definitions for consistent, structured responses
+- Evidence collection prompts for audit-ready investigation reports (Stage 2.1.2)
 
 All prompts follow the ReAct pattern and produce standardized JSON output
 for integration with the Triage Warden workflow engine.
 """
 
+from tw_ai.agents.prompts.evidence import (
+    EVIDENCE_COLLECTION_EXAMPLES,
+    EVIDENCE_COLLECTION_PROMPT,
+    EVIDENCE_OUTPUT_SCHEMA,
+    build_evidence_context,
+    format_evidence_output_schema,
+    get_evidence_enhanced_prompt,
+)
 from tw_ai.agents.prompts.malware import (
     MALWARE_EXAMPLES,
     MALWARE_INDICATORS,
@@ -33,10 +42,12 @@ from tw_ai.agents.prompts.system import (
     AVAILABLE_TOOLS,
     CHAIN_OF_THOUGHT_GUIDANCE,
     CONFIDENCE_SCORING_CRITERIA,
+    EVIDENCE_SCHEMA,
     OUTPUT_SCHEMA,
     SOC_ANALYST_PERSONA,
     format_output_schema,
     get_base_system_prompt,
+    get_evidence_enhanced_schema,
 )
 
 __all__ = [
@@ -48,6 +59,15 @@ __all__ = [
     "CONFIDENCE_SCORING_CRITERIA",
     "get_base_system_prompt",
     "format_output_schema",
+    # Evidence collection (Stage 2.1.2)
+    "EVIDENCE_COLLECTION_PROMPT",
+    "EVIDENCE_COLLECTION_EXAMPLES",
+    "EVIDENCE_OUTPUT_SCHEMA",
+    "EVIDENCE_SCHEMA",
+    "get_evidence_enhanced_prompt",
+    "get_evidence_enhanced_schema",
+    "format_evidence_output_schema",
+    "build_evidence_context",
     # Phishing
     "PHISHING_PROMPT",
     "PHISHING_INDICATORS",

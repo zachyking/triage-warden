@@ -1,0 +1,284 @@
+name: "Severity Rating Benchmark"
+task_type: severity_rating
+description: >
+  Evaluate AI models on their ability to accurately rate the severity of
+  security incidents as critical, high, medium, low, or informational.
+version: "1.0"
+metadata:
+  created: "2024-01-15"
+  source: "Triage Warden historical incidents"
+  severity_levels:
+    - critical
+    - high
+    - medium
+    - low
+    - informational
+
+examples:
+  # Critical Severity
+  - id: sr_crit_001
+    task_type: severity_rating
+    difficulty: easy
+    category: ransomware
+    tags: [encryption, active-attack, domain-compromise]
+    input:
+      alert_type: ransomware_detected
+      affected_systems: 15
+      encryption_started: true
+      encryption_progress_percent: 30
+      lateral_movement: true
+      domain_admin_compromised: true
+      backup_status: "accessible"
+      business_impact: "production servers affected"
+    expected:
+      severity: critical
+      justification: "Active ransomware with domain compromise and ongoing encryption"
+
+  - id: sr_crit_002
+    task_type: severity_rating
+    difficulty: medium
+    category: data-breach
+    tags: [exfiltration, pii, compliance]
+    input:
+      alert_type: data_exfiltration
+      data_volume_gb: 50
+      data_classification: "PII/PHI"
+      data_types:
+        - customer_records
+        - social_security_numbers
+        - medical_records
+      destination: "external_cloud_storage"
+      destination_geo: "Russia"
+      user: "compromised_admin@company.com"
+      regulatory_impact: ["HIPAA", "GDPR"]
+    expected:
+      severity: critical
+      justification: "Large-scale exfiltration of regulated PII/PHI data"
+
+  - id: sr_crit_003
+    task_type: severity_rating
+    difficulty: medium
+    category: credential-compromise
+    tags: [domain-admin, active-directory]
+    input:
+      alert_type: credential_compromise
+      account_type: "domain_admin"
+      account_name: "domain\\administrator"
+      compromise_method: "golden_ticket"
+      persistence_detected: true
+      affected_scope: "entire_domain"
+      attacker_activity: "active"
+    expected:
+      severity: critical
+      justification: "Domain administrator compromise with active attacker"
+
+  # High Severity
+  - id: sr_high_001
+    task_type: severity_rating
+    difficulty: easy
+    category: privilege-escalation
+    tags: [local-admin, workstation]
+    input:
+      alert_type: privilege_escalation
+      technique: "token_manipulation"
+      source_user: "standard_user"
+      target_privileges: "local_admin"
+      system_type: "workstation"
+      system_criticality: "standard"
+      lateral_movement_detected: false
+    expected:
+      severity: high
+      justification: "Successful privilege escalation on workstation"
+
+  - id: sr_high_002
+    task_type: severity_rating
+    difficulty: medium
+    category: malware
+    tags: [trojan, persistence, c2]
+    input:
+      alert_type: malware_detected
+      malware_type: "remote_access_trojan"
+      persistence_method: "registry_run_key"
+      c2_communication: true
+      affected_systems: 1
+      data_exfiltration_detected: false
+      system_type: "developer_workstation"
+    expected:
+      severity: high
+      justification: "Active RAT with persistence on developer system"
+
+  - id: sr_high_003
+    task_type: severity_rating
+    difficulty: medium
+    category: phishing
+    tags: [credential-harvest, successful]
+    input:
+      alert_type: phishing_successful
+      victim_count: 3
+      credentials_entered: true
+      accounts_affected:
+        - type: "email"
+          count: 3
+        - type: "vpn"
+          count: 2
+      mfa_enabled: false
+      password_reuse_risk: "high"
+    expected:
+      severity: high
+      justification: "Multiple users compromised with credential reuse risk"
+
+  # Medium Severity
+  - id: sr_med_001
+    task_type: severity_rating
+    difficulty: easy
+    category: suspicious-activity
+    tags: [anomalous-behavior, investigation-needed]
+    input:
+      alert_type: anomalous_behavior
+      user: "john.doe@company.com"
+      behavior: "large_file_download"
+      file_size_mb: 500
+      file_type: "archive"
+      destination: "personal_cloud_storage"
+      business_hours: true
+      previous_incidents: 0
+    expected:
+      severity: medium
+      justification: "Potential data exfiltration requires investigation"
+
+  - id: sr_med_002
+    task_type: severity_rating
+    difficulty: medium
+    category: vulnerability
+    tags: [exploitation-attempt, blocked]
+    input:
+      alert_type: exploitation_attempt
+      vulnerability: "CVE-2024-1234"
+      cvss_score: 7.5
+      target_system: "web_server"
+      attack_blocked: true
+      attack_source: "external"
+      exploit_success: false
+    expected:
+      severity: medium
+      justification: "Exploitation attempt blocked but indicates targeting"
+
+  - id: sr_med_003
+    task_type: severity_rating
+    difficulty: medium
+    category: authentication
+    tags: [brute-force, account-lockout]
+    input:
+      alert_type: brute_force
+      target_account: "admin@company.com"
+      failed_attempts: 50
+      source_ips: 5
+      time_window_minutes: 10
+      account_locked: true
+      geographic_spread: true
+    expected:
+      severity: medium
+      justification: "Distributed brute force attack, account locked out"
+
+  # Low Severity
+  - id: sr_low_001
+    task_type: severity_rating
+    difficulty: easy
+    category: authentication
+    tags: [failed-login, user-error]
+    input:
+      alert_type: failed_login
+      attempts: 3
+      source_ip: "corporate_vpn"
+      user: "john.doe@company.com"
+      time_window_minutes: 5
+      reason: "incorrect_password"
+      account_locked: false
+    expected:
+      severity: low
+      justification: "Minor failed logins from legitimate source, likely user error"
+
+  - id: sr_low_002
+    task_type: severity_rating
+    difficulty: easy
+    category: policy-violation
+    tags: [usb, blocked]
+    input:
+      alert_type: policy_violation
+      violation_type: "unauthorized_usb"
+      device_type: "usb_storage"
+      action_taken: "blocked"
+      user: "employee@company.com"
+      data_transferred: false
+    expected:
+      severity: low
+      justification: "USB policy violation blocked with no data transfer"
+
+  - id: sr_low_003
+    task_type: severity_rating
+    difficulty: medium
+    category: network
+    tags: [port-scan, internal]
+    input:
+      alert_type: network_scan
+      source: "10.0.5.100"
+      source_hostname: "DEVELOPER-WS"
+      scan_type: "port_scan"
+      ports_scanned: 100
+      targets: "internal_subnet"
+      scan_tool: "nmap"
+      user_context: "developer testing"
+    expected:
+      severity: low
+      justification: "Internal port scan, likely development/testing activity"
+
+  # Informational
+  - id: sr_info_001
+    task_type: severity_rating
+    difficulty: easy
+    category: system
+    tags: [windows-service, normal]
+    input:
+      alert_type: suspicious_process
+      process: "cmd.exe"
+      parent: "explorer.exe"
+      user_initiated: true
+      user: "john.doe@company.com"
+      network_activity: false
+      command_line: "cmd.exe"
+    expected:
+      severity: informational
+      justification: "Normal user-initiated command prompt"
+
+  - id: sr_info_002
+    task_type: severity_rating
+    difficulty: easy
+    category: network
+    tags: [dns, benign]
+    input:
+      alert_type: dns_query
+      query_domain: "update.microsoft.com"
+      query_type: "A"
+      source: "workstation"
+      frequency: "normal"
+      category: "software_updates"
+    expected:
+      severity: informational
+      justification: "Normal software update DNS query"
+
+  - id: sr_info_003
+    task_type: severity_rating
+    difficulty: easy
+    category: compliance
+    tags: [audit, logging]
+    input:
+      alert_type: audit_event
+      event_type: "user_login"
+      user: "admin@company.com"
+      login_type: "interactive"
+      source: "console"
+      time: "business_hours"
+      expected_activity: true
+    expected:
+      severity: informational
+      justification: "Expected administrative login during business hours"

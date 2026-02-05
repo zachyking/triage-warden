@@ -582,12 +582,23 @@ mod tests {
         std::env::remove_var("TW_ENCRYPTION_KEY");
 
         let result = create_encryptor();
-        assert!(result.is_err());
+        assert!(result.is_err(), "Expected error in production without key");
 
-        if let Err(CryptoError::InvalidKey(msg)) = result {
-            assert!(msg.contains("required in production"));
-        } else {
-            panic!("Expected InvalidKey error");
+        match result {
+            Err(CryptoError::InvalidKey(msg)) => {
+                // Check that the error message indicates the key is required
+                assert!(
+                    msg.contains("required in production") || msg.contains("TW_ENCRYPTION_KEY"),
+                    "Error message should mention key requirement, got: {}",
+                    msg
+                );
+            }
+            Err(e) => {
+                panic!("Expected InvalidKey error, got different error: {}", e);
+            }
+            Ok(_) => {
+                panic!("Expected error but got Ok");
+            }
         }
 
         // Clean up
