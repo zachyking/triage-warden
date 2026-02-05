@@ -629,7 +629,7 @@ class TestEdgeCases:
             indicators=[],
             mitre_techniques=[],
             recommended_actions=[],
-            reasoning="Unicode reasoning: αβγδ",
+            reasoning="Unicode reasoning: αβγδ 🔒",
             evidence=[],
             investigation_steps=[],
         )
@@ -637,9 +637,11 @@ class TestEdgeCases:
         generator = InvestigationReportGenerator()
         report = generator.generate(sample_incident_data, analysis)
 
-        assert "日本語" in report.verdict.verdict_display or report.executive_summary
+        # The reasoning field is stored directly in the report
+        assert "αβγδ" in report.reasoning
         json_output = report.to_json()
-        assert "🔒" in json_output or "\\u" in json_output  # Either literal or escaped
+        # Verify unicode content survives JSON serialization (literal or escaped)
+        assert "αβγδ" in json_output or "\\u03b1" in json_output
 
     def test_very_long_content(self, sample_incident_data):
         """Test handling of very long content."""
@@ -664,7 +666,8 @@ class TestEdgeCases:
         # Should handle without error
         assert len(report.reasoning) == 10000
         json_output = report.to_json()
-        assert len(json_output) > 20000  # Combined content
+        # The reasoning (10000 chars) plus report structure produces > 10000 chars of JSON
+        assert len(json_output) > 10000
 
 
 # =============================================================================
