@@ -30,34 +30,9 @@ impl SampleAlerts {
         Self::get("phishing_typosquat").expect("phishing_typosquat not found")
     }
 
-    /// Get the legitimate email alert.
-    pub fn phishing_legitimate() -> Value {
-        Self::get("phishing_legitimate").expect("phishing_legitimate not found")
-    }
-
     /// Get the EICAR malware alert.
     pub fn malware_eicar() -> Value {
         Self::get("malware_eicar").expect("malware_eicar not found")
-    }
-
-    /// Get the LSASS access alert.
-    pub fn malware_lsass_access() -> Value {
-        Self::get("malware_lsass_access").expect("malware_lsass_access not found")
-    }
-
-    /// Get the impossible travel auth alert.
-    pub fn auth_impossible_travel() -> Value {
-        Self::get("auth_impossible_travel").expect("auth_impossible_travel not found")
-    }
-
-    /// Get the brute force auth alert.
-    pub fn auth_brute_force() -> Value {
-        Self::get("auth_brute_force").expect("auth_brute_force not found")
-    }
-
-    /// Get the normal login auth alert.
-    pub fn auth_normal_login() -> Value {
-        Self::get("auth_normal_login").expect("auth_normal_login not found")
     }
 }
 

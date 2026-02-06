@@ -15,12 +15,9 @@
 
 #![cfg(feature = "database")]
 
-use sqlx::{postgres::PgPoolOptions, Executor, PgPool, Row};
+use sqlx::{postgres::PgPoolOptions, Executor, PgPool};
 use std::env;
 use uuid::Uuid;
-
-/// Default tenant ID used in migrations.
-const DEFAULT_TENANT_ID: &str = "00000000-0000-0000-0000-000000000001";
 
 /// Helper to get the test database URL or skip the test.
 fn get_test_database_url() -> Option<String> {

@@ -281,13 +281,16 @@ mod tests {
         // Critical >= High -> match
         let critical = make_incident("critical");
         assert_eq!(
-            engine.evaluate_rules(&critical, &[rule.clone()]),
+            engine.evaluate_rules(&critical, std::slice::from_ref(&rule)),
             Some(user_id)
         );
 
         // High >= High -> match
         let high = make_incident("high");
-        assert_eq!(engine.evaluate_rules(&high, &[rule.clone()]), Some(user_id));
+        assert_eq!(
+            engine.evaluate_rules(&high, std::slice::from_ref(&rule)),
+            Some(user_id)
+        );
 
         // Medium < High -> no match
         let medium = make_incident("medium");
@@ -309,7 +312,7 @@ mod tests {
         let mut incident = make_incident("high");
         incident.incident_type = Some("Malware".to_string());
         assert_eq!(
-            engine.evaluate_rules(&incident, &[rule.clone()]),
+            engine.evaluate_rules(&incident, std::slice::from_ref(&rule)),
             Some(user_id)
         );
 
@@ -332,7 +335,7 @@ mod tests {
         let mut incident = make_incident("medium");
         incident.source = Some("CrowdStrike".to_string());
         assert_eq!(
-            engine.evaluate_rules(&incident, &[rule.clone()]),
+            engine.evaluate_rules(&incident, std::slice::from_ref(&rule)),
             Some(user_id)
         );
 
@@ -355,7 +358,7 @@ mod tests {
         let mut incident = make_incident("medium");
         incident.tags = vec!["PCI".to_string(), "production".to_string()];
         assert_eq!(
-            engine.evaluate_rules(&incident, &[rule.clone()]),
+            engine.evaluate_rules(&incident, std::slice::from_ref(&rule)),
             Some(user_id)
         );
 
@@ -382,7 +385,7 @@ mod tests {
         let mut incident = make_incident("critical");
         incident.incident_type = Some("malware".to_string());
         assert_eq!(
-            engine.evaluate_rules(&incident, &[rule.clone()]),
+            engine.evaluate_rules(&incident, std::slice::from_ref(&rule)),
             Some(user_id)
         );
 
@@ -405,15 +408,15 @@ mod tests {
         let incident = make_incident("high");
 
         assert_eq!(
-            engine.evaluate_rules(&incident, &[rule.clone()]),
+            engine.evaluate_rules(&incident, std::slice::from_ref(&rule)),
             Some(users[0])
         );
         assert_eq!(
-            engine.evaluate_rules(&incident, &[rule.clone()]),
+            engine.evaluate_rules(&incident, std::slice::from_ref(&rule)),
             Some(users[1])
         );
         assert_eq!(
-            engine.evaluate_rules(&incident, &[rule.clone()]),
+            engine.evaluate_rules(&incident, std::slice::from_ref(&rule)),
             Some(users[2])
         );
         // Wraps around

@@ -1486,7 +1486,7 @@ mod api_tests {
     async fn test_create_connector_all_types() {
         let app = setup_test_app().await;
 
-        let connector_types = vec![
+        let connector_types = [
             "virustotal",
             "jira",
             "splunk",
@@ -1529,7 +1529,7 @@ mod api_tests {
 
         // Test alternate type name formats
         // The second element is the Display format of ConnectorType
-        let alternate_types = vec![
+        let alternate_types = [
             ("virus_total", "VirusTotal"),
             ("crowd_strike", "CrowdStrike"),
             ("microsoft365", "M365"),

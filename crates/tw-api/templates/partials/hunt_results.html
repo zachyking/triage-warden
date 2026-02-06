@@ -1,0 +1,45 @@
+<div class="table-container">
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Severity</th>
+        <th>Title</th>
+        <th>Type</th>
+        <th>Query</th>
+        <th>Detected</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for finding in findings %}
+      <tr>
+        <td>
+          <span class="badge badge-{% if finding.severity == "Critical" %}danger{% elif finding.severity == "High" %}warning{% elif finding.severity == "Medium" %}info{% else %}secondary{% endif %}">
+            {{ finding.severity }}
+          </span>
+        </td>
+        <td>
+          <div class="font-semibold text-sm">{{ finding.title }}</div>
+          <div class="text-xs text-muted">{{ finding.description|truncate(80) }}</div>
+        </td>
+        <td class="text-sm">{{ finding.finding_type }}</td>
+        <td class="text-xs text-muted">{{ finding.query_id }}</td>
+        <td class="text-xs text-muted">{{ finding.detected_at }}</td>
+        <td>
+          {% match finding.promoted_to_incident %}
+          {% when Some with (incident_id) %}
+          <a href="/incidents/{{ incident_id }}" class="btn btn-ghost btn-sm">View Incident</a>
+          {% when None %}
+          <button class="btn btn-secondary btn-sm"
+                  hx-post="/api/v1/hunts/{{ finding.hunt_id }}/findings/{{ finding.id }}/promote"
+                  hx-swap="none"
+                  hx-on::after-request="if(event.detail.successful) { showToast('success', 'Finding Promoted', 'An incident has been created from this finding.'); location.reload(); }">
+            Promote
+          </button>
+          {% endmatch %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

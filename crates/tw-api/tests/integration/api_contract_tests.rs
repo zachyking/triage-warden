@@ -124,10 +124,8 @@ async fn test_error_response_contract() {
                 let has_error_field = error_response.get("error").is_some()
                     || error_response.get("message").is_some()
                     || error_response.get("detail").is_some();
-                assert!(
-                    has_error_field || true, // Allow any structure for now
-                    "JSON error response should have an error-like field"
-                );
+                // Allow any structure for now
+                let _ = has_error_field;
             }
         }
     }
@@ -257,7 +255,7 @@ mod schema_validation_tests {
         status: String,
         version: String,
         #[serde(default)]
-        components: Option<serde_json::Value>,
+        _components: Option<serde_json::Value>,
     }
 
     #[tokio::test]

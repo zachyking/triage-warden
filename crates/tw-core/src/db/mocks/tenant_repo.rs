@@ -271,8 +271,10 @@ mod tests {
         let tenant = test_tenant("settings-org", "Settings Organization");
         repo.create(&tenant).await.unwrap();
 
-        let mut new_settings = TenantSettings::default();
-        new_settings.concurrency_limit = 50;
+        let new_settings = TenantSettings {
+            concurrency_limit: 50,
+            ..TenantSettings::default()
+        };
 
         let update = TenantUpdate {
             name: None,

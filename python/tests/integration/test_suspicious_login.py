@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
+import types
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -101,6 +102,43 @@ class _MockLLMBase:
 
 sys.modules["tw_ai.llm.base"] = _MockLLMBase
 sys.modules["tw_ai.llm"] = MagicMock()
+
+# Prevent tw_ai/__init__.py from running its imports when react.py is loaded
+sys.modules.setdefault("tw_ai", MagicMock())
+_mock_san = types.ModuleType("tw_ai.sanitization")
+_mock_san.PromptInjectionError = type("PromptInjectionError", (Exception,), {})
+
+
+class _StubRedactionMode:
+    STRICT = "strict"
+    PERMISSIVE = "permissive"
+
+
+class _StubPIIRedactor:
+    def __init__(self, **kwargs):
+        pass
+
+    def redact_dict(self, data, **kwargs):
+        return data, []
+
+    def redact_text(self, text, **kwargs):
+        return text, []
+
+
+class _StubPromptSanitizer:
+    def sanitize_dict(self, data, **kwargs):
+        return data, []
+
+    def sanitize_text(self, text, **kwargs):
+        return text, []
+
+
+_mock_san.RedactionMode = _StubRedactionMode
+_mock_san.RedactionRecord = MagicMock()
+_mock_san.PIIRedactor = _StubPIIRedactor
+_mock_san.PromptSanitizer = _StubPromptSanitizer
+_mock_san.create_security_analysis_redactor = lambda: _StubPIIRedactor()
+sys.modules.setdefault("tw_ai.sanitization", _mock_san)
 
 
 # Mock models module

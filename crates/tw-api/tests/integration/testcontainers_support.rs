@@ -26,7 +26,7 @@ use testcontainers::{
 
 /// PostgreSQL container configuration.
 pub struct PostgresContainer {
-    pub container: ContainerAsync<GenericImage>,
+    pub _container: ContainerAsync<GenericImage>,
     pub host: String,
     pub port: u16,
     pub database: String,
@@ -75,7 +75,7 @@ pub async fn start_postgres() -> PostgresContainer {
         .expect("Failed to get port");
 
     PostgresContainer {
-        container,
+        _container: container,
         host: host.to_string(),
         port,
         database: "triage_warden_test".to_string(),
@@ -198,7 +198,7 @@ async fn run_postgres_migrations(pool: &PgPool) {
 /// Qdrant vector database container configuration.
 /// Note: Using a custom image since testcontainers-modules doesn't have Qdrant yet.
 pub struct QdrantContainer {
-    pub container: ContainerAsync<GenericImage>,
+    pub _container: ContainerAsync<GenericImage>,
     pub host: String,
     pub http_port: u16,
     pub grpc_port: u16,
@@ -242,7 +242,7 @@ pub async fn start_qdrant() -> QdrantContainer {
         .expect("Failed to get gRPC port");
 
     QdrantContainer {
-        container,
+        _container: container,
         host: host.to_string(),
         http_port,
         grpc_port,

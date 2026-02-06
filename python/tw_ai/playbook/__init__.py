@@ -4,6 +4,7 @@ This package provides:
 - YAML playbook parsing and validation
 - Playbook execution engine with parallel step support
 - Conditional branching based on stage results
+- Dynamic AI-driven step generation
 """
 
 from tw_ai.playbook.executor import (
@@ -12,6 +13,11 @@ from tw_ai.playbook.executor import (
     PlaybookExecutor,
     StageResult,
     StepResult,
+)
+from tw_ai.playbook.generator import (
+    DynamicStepGenerator,
+    GeneratedStep,
+    StepGenerationContext,
 )
 from tw_ai.playbook.loader import (
     Branch,
@@ -40,4 +46,8 @@ __all__ = [
     "StageResult",
     "StepResult",
     "ExecutionContext",
+    # Generator
+    "DynamicStepGenerator",
+    "GeneratedStep",
+    "StepGenerationContext",
 ]

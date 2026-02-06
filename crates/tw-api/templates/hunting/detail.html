@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+
+{% block title %}{{ hunt.name }} - Threat Hunting - Triage Warden{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <a href="/hunting" class="text-sm text-muted">&larr; Back to Hunts</a>
+    <h1 class="page-title">{{ hunt.name }}</h1>
+    <p class="page-subtitle">{{ hunt.hypothesis }}</p>
+  </div>
+  <div class="flex gap-2">
+    <button class="btn btn-secondary"
+            hx-get="/web/modals/edit-hunt/{{ hunt.id }}"
+            hx-target="#modal-container"
+            hx-swap="innerHTML">
+      Edit
+    </button>
+    <button class="btn btn-primary"
+            hx-post="/api/v1/hunts/{{ hunt.id }}/execute"
+            hx-target="#hunt-results"
+            hx-swap="innerHTML"
+            hx-on::after-request="if(event.detail.successful) { showToast('success', 'Hunt Started', 'Hunt execution has been triggered.'); }">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polygon points="5 3 19 12 5 21 5 3"/>
+      </svg>
+      Execute Now
+    </button>
+  </div>
+</div>
+
+<!-- Hunt Info -->
+<div class="grid grid-2 gap-4 mb-6">
+  <div class="card">
+    <div class="card-body">
+      <h3 class="font-semibold mb-3">Hunt Details</h3>
+      <div class="flex gap-4 mb-3">
+        <span class="badge badge-{{ hunt.status_color }}">{{ hunt.status }}</span>
+        <span class="badge badge-info">{{ hunt.hunt_type }}</span>
+        {% if hunt.enabled %}<span class="badge badge-success">Enabled</span>{% else %}<span class="badge badge-secondary">Disabled</span>{% endif %}
+      </div>
+      {% if !hunt.description.is_empty() %}
+      <p class="text-sm text-secondary mb-3">{{ hunt.description }}</p>
+      {% endif %}
+      <div class="text-xs text-muted">
+        <div>Created by: {{ hunt.created_by }}</div>
+        <div>Created: {{ hunt.created_at }}</div>
+        <div>Updated: {{ hunt.updated_at }}</div>
+        {% match hunt.last_run %}
+        {% when Some with (lr) %}
+        <div>Last run: {{ lr }}</div>
+        {% when None %}
+        <div>Last run: Never</div>
+        {% endmatch %}
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body">
+      <h3 class="font-semibold mb-3">Schedule &amp; Tags</h3>
+      {% match hunt.schedule %}
+      {% when Some with (sched) %}
+      <div class="mb-3">
+        <div class="text-xs text-muted mb-1">Cron Schedule</div>
+        <code class="text-sm">{{ sched.cron_expression }}</code>
+        <span class="text-xs text-muted ml-2">({{ sched.timezone }})</span>
+      </div>
+      {% when None %}
+      <div class="text-sm text-muted mb-3">No schedule configured (on-demand only)</div>
+      {% endmatch %}
+      <div class="mb-3">
+        <div class="text-xs text-muted mb-1">MITRE Techniques</div>
+        <div class="flex flex-wrap gap-1">
+          {% for technique in hunt.mitre_techniques %}
+          <span class="badge badge-accent">{{ technique }}</span>
+          {% endfor %}
+          {% if hunt.mitre_techniques.is_empty() %}
+          <span class="text-sm text-muted">None specified</span>
+          {% endif %}
+        </div>
+      </div>
+      <div>
+        <div class="text-xs text-muted mb-1">Tags</div>
+        <div class="flex flex-wrap gap-1">
+          {% for tag in hunt.tags %}
+          <span class="badge badge-secondary">{{ tag }}</span>
+          {% endfor %}
+          {% if hunt.tags.is_empty() %}
+          <span class="text-sm text-muted">No tags</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Queries -->
+<div class="card mb-4">
+  <div class="card-body">
+    <h3 class="font-semibold mb-3">Queries ({{ hunt.queries.len() }})</h3>
+    {% for query in hunt.queries %}
+    <div class="mb-4 {% if !loop.last %}border-b pb-4{% endif %}">
+      <div class="flex justify-between items-center mb-2">
+        <div class="flex items-center gap-2">
+          <span class="badge badge-info">{{ query.query_type }}</span>
+          <span class="font-semibold text-sm">{{ query.id }}</span>
+        </div>
+        <span class="text-xs text-muted">Timeout: {{ query.timeout_secs }}s</span>
+      </div>
+      {% if !query.description.is_empty() %}
+      <p class="text-sm text-secondary mb-2">{{ query.description }}</p>
+      {% endif %}
+      <pre class="code-block"><code>{{ query.query }}</code></pre>
+      {% match query.expected_baseline %}
+      {% when Some with (baseline) %}
+      <div class="text-xs text-muted mt-1">Expected baseline: {{ baseline }} events</div>
+      {% when None %}
+      {% endmatch %}
+    </div>
+    {% endfor %}
+    {% if hunt.queries.is_empty() %}
+    <div class="text-sm text-muted">No queries configured for this hunt.</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Results / Findings -->
+<div class="card" id="hunt-results">
+  <div class="card-body">
+    <h3 class="font-semibold mb-3">Recent Findings</h3>
+    {% if findings.is_empty() %}
+    <div class="empty-state">
+      <div class="empty-state-title">No findings yet</div>
+      <div class="empty-state-text">Execute the hunt to start looking for threats.</div>
+    </div>
+    {% else %}
+    {% include "partials/hunt_results.html" %}
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

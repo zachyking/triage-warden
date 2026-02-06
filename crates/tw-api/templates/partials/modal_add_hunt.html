@@ -1,0 +1,67 @@
+<div class="modal-backdrop" id="add-hunt-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 class="modal-title">Create New Hunt</h2>
+      <button class="modal-close" aria-label="Close" onclick="this.closest('.modal-backdrop').remove()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <form hx-post="/api/v1/hunts" hx-swap="none" hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); showToast('success', 'Hunt Created', 'New threat hunt has been created.'); location.reload(); } else { showToast('error', 'Failed to Create Hunt', 'Please check your configuration.'); }">
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Hunt Name</label>
+          <input type="text" name="name" class="form-input" placeholder="e.g., Detect Kerberoasting" required>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Hypothesis</label>
+          <textarea name="hypothesis" class="form-input form-textarea" placeholder="What are you looking for and why?" rows="2" required></textarea>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Description</label>
+          <textarea name="description" class="form-input form-textarea" placeholder="Detailed description of this hunt..." rows="3"></textarea>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Hunt Type</label>
+          <select name="hunt_type" class="form-input form-select">
+            <option value="on_demand">On-Demand</option>
+            <option value="scheduled">Scheduled</option>
+            <option value="continuous">Continuous</option>
+            <option value="triggered">Triggered</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">MITRE ATT&amp;CK Techniques</label>
+          <input type="text" name="mitre_techniques" class="form-input" placeholder="e.g., T1558.003, T1003.001">
+          <p class="text-xs text-muted mt-1">Comma-separated technique IDs</p>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Tags</label>
+          <input type="text" name="tags" class="form-input" placeholder="e.g., credential-access, high-priority">
+          <p class="text-xs text-muted mt-1">Comma-separated tags</p>
+        </div>
+
+        <div class="form-group">
+          <div class="flex items-center gap-3">
+            <label class="switch">
+              <input type="checkbox" name="enabled" value="true">
+              <span class="switch-track"></span>
+              <span class="switch-thumb"></span>
+            </label>
+            <span class="text-sm">Enable hunt immediately</span>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-ghost" onclick="this.closest('.modal-backdrop').remove()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Create Hunt</button>
+      </div>
+    </form>
+  </div>
+</div>

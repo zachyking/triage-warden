@@ -5,12 +5,14 @@ pub mod analytics;
 pub mod api_keys;
 pub mod assets;
 pub mod auth;
+pub mod autonomy;
 pub mod comments;
 pub mod connectors;
 pub mod features;
 pub mod feedback;
 pub mod handoff;
 pub mod health;
+pub mod hunting;
 pub mod identities;
 pub mod incidents;
 pub mod iocs;
@@ -20,9 +22,11 @@ pub mod lessons;
 pub mod metrics;
 pub mod nl_query;
 pub mod notifications;
+pub mod packages;
 pub mod playbooks;
 pub mod policies;
 pub mod reports;
+pub mod risk;
 pub mod settings;
 pub mod training;
 pub mod users;
@@ -74,7 +78,11 @@ fn api_routes() -> Router<AppState> {
             lessons::incident_lessons_routes(),
         )
         .nest("/analytics", analytics::routes())
+        .nest("/autonomy", autonomy::routes())
+        .nest("/hunts", hunting::routes())
         .nest("/nl", nl_query::routes())
+        .nest("/packages", packages::routes())
+        .nest("/risk", risk::routes())
         .nest("/comments", comments::routes())
         .nest("/activity", activity::routes())
         .nest("/handoffs", handoff::routes())

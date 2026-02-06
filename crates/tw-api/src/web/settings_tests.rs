@@ -572,7 +572,7 @@ async fn test_modal_edit_connector_nonexistent_returns_empty() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/web/modals/edit-connector/{}", nonexistent_id))
+                .uri(format!("/web/modals/edit-connector/{}", nonexistent_id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -601,7 +601,7 @@ async fn test_modal_edit_policy_nonexistent_returns_empty() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/web/modals/edit-policy/{}", nonexistent_id))
+                .uri(format!("/web/modals/edit-policy/{}", nonexistent_id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -630,7 +630,7 @@ async fn test_modal_edit_notification_nonexistent_returns_empty() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/web/modals/edit-notification/{}", nonexistent_id))
+                .uri(format!("/web/modals/edit-notification/{}", nonexistent_id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -794,7 +794,7 @@ async fn test_modal_edit_connector_with_existing_entity() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/web/modals/edit-connector/{}", created.id))
+                .uri(format!("/web/modals/edit-connector/{}", created.id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -835,7 +835,7 @@ async fn test_modal_edit_policy_with_existing_entity() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/web/modals/edit-policy/{}", created.id))
+                .uri(format!("/web/modals/edit-policy/{}", created.id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -875,7 +875,7 @@ async fn test_modal_edit_notification_with_existing_entity() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/web/modals/edit-notification/{}", created.id))
+                .uri(format!("/web/modals/edit-notification/{}", created.id))
                 .body(Body::empty())
                 .unwrap(),
         )

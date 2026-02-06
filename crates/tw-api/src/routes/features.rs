@@ -727,7 +727,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!(
+                    .uri(format!(
                         "/api/v1/admin/features/override_flag/override/{}",
                         tenant_id
                     ))
@@ -765,7 +765,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!(
+                    .uri(format!(
                         "/api/v1/admin/features/nonexistent/override/{}",
                         tenant_id
                     ))
@@ -794,7 +794,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("DELETE")
-                    .uri(&format!(
+                    .uri(format!(
                         "/api/v1/admin/features/remove_override_flag/override/{}",
                         tenant_id
                     ))
@@ -827,7 +827,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("DELETE")
-                    .uri(&format!(
+                    .uri(format!(
                         "/api/v1/admin/features/no_override_flag/override/{}",
                         tenant_id
                     ))

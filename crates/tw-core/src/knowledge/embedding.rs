@@ -551,7 +551,8 @@ mod tests {
 
         // Note: MockVectorStore returns results but filtering may not match exactly
         // In production, the search would use proper vector similarity
-        assert!(!results.is_empty() || true); // Relaxed assertion for mock
+        // Note: MockVectorStore may return empty results; relaxed for mock
+        let _ = results;
     }
 
     #[tokio::test]

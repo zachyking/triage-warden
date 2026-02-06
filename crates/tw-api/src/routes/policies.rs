@@ -656,7 +656,7 @@ mod api_tests {
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
-                    .uri(&format!("/api/policies/{}", created.id))
+                    .uri(format!("/api/policies/{}", created.id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -686,7 +686,7 @@ mod api_tests {
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
-                    .uri(&format!("/api/policies/{}", nonexistent_id))
+                    .uri(format!("/api/policies/{}", nonexistent_id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -723,7 +723,7 @@ mod api_tests {
     async fn test_create_policy_with_condition_type_and_value() {
         let (app, _state) = create_test_router_with_state().await;
 
-        let form_body = serde_urlencoded::to_string(&[
+        let form_body = serde_urlencoded::to_string([
             ("name", "New Test Policy"),
             ("description", "A test policy"),
             ("condition_type", "severity"),
@@ -770,7 +770,7 @@ mod api_tests {
     async fn test_create_policy_with_direct_condition() {
         let (app, _state) = create_test_router_with_state().await;
 
-        let form_body = serde_urlencoded::to_string(&[
+        let form_body = serde_urlencoded::to_string([
             ("name", "Direct Condition Policy"),
             ("condition", "severity == 'high' AND source == 'siem'"),
             ("approval", "dual"),
@@ -805,7 +805,7 @@ mod api_tests {
     async fn test_create_policy_auto_approve() {
         let (app, _state) = create_test_router_with_state().await;
 
-        let form_body = serde_urlencoded::to_string(&[
+        let form_body = serde_urlencoded::to_string([
             ("name", "Auto Approve Policy"),
             ("condition", "severity == 'info'"),
             ("requires", "auto"),
@@ -839,7 +839,7 @@ mod api_tests {
     async fn test_create_policy_manager_approval() {
         let (app, _state) = create_test_router_with_state().await;
 
-        let form_body = serde_urlencoded::to_string(&[
+        let form_body = serde_urlencoded::to_string([
             ("name", "Manager Approval Policy"),
             ("condition", "asset_criticality == 'critical'"),
             ("approval", "manager"),
@@ -873,7 +873,7 @@ mod api_tests {
         let (app, _state) = create_test_router_with_state().await;
 
         // Minimal form data - should use defaults
-        let form_body = serde_urlencoded::to_string(&[("name", "Minimal Policy")]).unwrap();
+        let form_body = serde_urlencoded::to_string([("name", "Minimal Policy")]).unwrap();
 
         let response = app
             .oneshot(
@@ -919,7 +919,7 @@ mod api_tests {
         )
         .await;
 
-        let form_body = serde_urlencoded::to_string(&[
+        let form_body = serde_urlencoded::to_string([
             ("name", "Updated Name"),
             ("description", "Updated description"),
             ("condition", "severity == 'high'"),
@@ -933,7 +933,7 @@ mod api_tests {
             .oneshot(
                 Request::builder()
                     .method(Method::PUT)
-                    .uri(&format!("/api/policies/{}", created.id))
+                    .uri(format!("/api/policies/{}", created.id))
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                     .body(Body::from(form_body))
                     .unwrap(),
@@ -977,13 +977,13 @@ mod api_tests {
         let created = repo.create(&policy).await.unwrap();
 
         // Only update the name
-        let form_body = serde_urlencoded::to_string(&[("name", "New Name Only")]).unwrap();
+        let form_body = serde_urlencoded::to_string([("name", "New Name Only")]).unwrap();
 
         let response = app
             .oneshot(
                 Request::builder()
                     .method(Method::PUT)
-                    .uri(&format!("/api/policies/{}", created.id))
+                    .uri(format!("/api/policies/{}", created.id))
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                     .body(Body::from(form_body))
                     .unwrap(),
@@ -1011,13 +1011,13 @@ mod api_tests {
 
         let nonexistent_id = Uuid::new_v4();
 
-        let form_body = serde_urlencoded::to_string(&[("name", "Updated Name")]).unwrap();
+        let form_body = serde_urlencoded::to_string([("name", "Updated Name")]).unwrap();
 
         let response = app
             .oneshot(
                 Request::builder()
                     .method(Method::PUT)
-                    .uri(&format!("/api/policies/{}", nonexistent_id))
+                    .uri(format!("/api/policies/{}", nonexistent_id))
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                     .body(Body::from(form_body))
                     .unwrap(),
@@ -1048,7 +1048,7 @@ mod api_tests {
             .oneshot(
                 Request::builder()
                     .method(Method::DELETE)
-                    .uri(&format!("/api/policies/{}", created.id))
+                    .uri(format!("/api/policies/{}", created.id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1077,7 +1077,7 @@ mod api_tests {
             .oneshot(
                 Request::builder()
                     .method(Method::DELETE)
-                    .uri(&format!("/api/policies/{}", nonexistent_id))
+                    .uri(format!("/api/policies/{}", nonexistent_id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1109,7 +1109,7 @@ mod api_tests {
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
-                    .uri(&format!("/api/policies/{}/toggle", created.id))
+                    .uri(format!("/api/policies/{}/toggle", created.id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1150,7 +1150,7 @@ mod api_tests {
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
-                    .uri(&format!("/api/policies/{}/toggle", created.id))
+                    .uri(format!("/api/policies/{}/toggle", created.id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1177,7 +1177,7 @@ mod api_tests {
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
-                    .uri(&format!("/api/policies/{}/toggle", nonexistent_id))
+                    .uri(format!("/api/policies/{}/toggle", nonexistent_id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1216,7 +1216,7 @@ mod api_tests {
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
-                    .uri(&format!("/api/policies/{}", created.id))
+                    .uri(format!("/api/policies/{}", created.id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1255,7 +1255,7 @@ mod api_tests {
     async fn test_create_policy_with_special_characters() {
         let (app, _state) = create_test_router_with_state().await;
 
-        let form_body = serde_urlencoded::to_string(&[
+        let form_body = serde_urlencoded::to_string([
             ("name", "Policy with 'quotes' and \"double quotes\""),
             ("condition", "target MATCHES '.*\\.example\\.com$'"),
             ("approval", "single"),
@@ -1289,7 +1289,7 @@ mod api_tests {
     async fn test_create_policy_empty_description() {
         let (app, _state) = create_test_router_with_state().await;
 
-        let form_body = serde_urlencoded::to_string(&[
+        let form_body = serde_urlencoded::to_string([
             ("name", "No Description Policy"),
             ("condition", "severity == 'low'"),
             ("approval", "auto"),
@@ -1332,13 +1332,13 @@ mod api_tests {
         let created = repo.create(&policy).await.unwrap();
 
         // Update with empty description to clear it
-        let form_body = serde_urlencoded::to_string(&[("description", "")]).unwrap();
+        let form_body = serde_urlencoded::to_string([("description", "")]).unwrap();
 
         let response = app
             .oneshot(
                 Request::builder()
                     .method(Method::PUT)
-                    .uri(&format!("/api/policies/{}", created.id))
+                    .uri(format!("/api/policies/{}", created.id))
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                     .body(Body::from(form_body))
                     .unwrap(),
@@ -1393,8 +1393,7 @@ mod api_tests {
         let app = create_test_router(state);
 
         let form_body =
-            serde_urlencoded::to_string(&[("name", "Trigger Test"), ("condition", "true")])
-                .unwrap();
+            serde_urlencoded::to_string([("name", "Trigger Test"), ("condition", "true")]).unwrap();
 
         let response = app
             .oneshot(

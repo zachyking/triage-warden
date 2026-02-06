@@ -1386,7 +1386,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(&format!("/api/incidents/{}", incident.id))
+                    .uri(format!("/api/incidents/{}", incident.id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1415,7 +1415,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(&format!("/api/incidents/{}", nonexistent_id))
+                    .uri(format!("/api/incidents/{}", nonexistent_id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1460,7 +1460,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(&format!("/api/incidents/{}", incident.id))
+                    .uri(format!("/api/incidents/{}", incident.id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1503,7 +1503,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/incidents/{}/actions", incident.id))
+                    .uri(format!("/api/incidents/{}/actions", incident.id))
                     .header("Content-Type", "application/json")
                     .body(Body::from(serde_json::to_string(&request_body).unwrap()))
                     .unwrap(),
@@ -1555,7 +1555,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/incidents/{}/actions", incident.id))
+                    .uri(format!("/api/incidents/{}/actions", incident.id))
                     .header("Content-Type", "application/json")
                     .body(Body::from(serde_json::to_string(&request_body).unwrap()))
                     .unwrap(),
@@ -1588,7 +1588,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/incidents/{}/actions", incident.id))
+                    .uri(format!("/api/incidents/{}/actions", incident.id))
                     .header("Content-Type", "application/json")
                     .body(Body::from(serde_json::to_string(&request_body).unwrap()))
                     .unwrap(),
@@ -1626,7 +1626,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/incidents/{}/actions", nonexistent_id))
+                    .uri(format!("/api/incidents/{}/actions", nonexistent_id))
                     .header("Content-Type", "application/json")
                     .body(Body::from(serde_json::to_string(&request_body).unwrap()))
                     .unwrap(),
@@ -1652,7 +1652,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/incidents/{}/actions", incident.id))
+                    .uri(format!("/api/incidents/{}/actions", incident.id))
                     .header("Content-Type", "application/json")
                     .body(Body::from(serde_json::to_string(&request_body).unwrap()))
                     .unwrap(),
@@ -1683,7 +1683,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/incidents/{}/approve", incident.id))
+                    .uri(format!("/api/incidents/{}/approve", incident.id))
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .body(Body::from(form_data))
                     .unwrap(),
@@ -1717,7 +1717,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/incidents/{}/approve", incident.id))
+                    .uri(format!("/api/incidents/{}/approve", incident.id))
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .body(Body::from(form_data))
                     .unwrap(),
@@ -1749,7 +1749,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/incidents/{}/approve", nonexistent_id))
+                    .uri(format!("/api/incidents/{}/approve", nonexistent_id))
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .body(Body::from(form_data))
                     .unwrap(),
@@ -1773,7 +1773,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/incidents/{}/approve", incident.id))
+                    .uri(format!("/api/incidents/{}/approve", incident.id))
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .body(Body::from(form_data))
                     .unwrap(),
@@ -1803,7 +1803,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/incidents/{}/approve", incident.id))
+                    .uri(format!("/api/incidents/{}/approve", incident.id))
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .body(Body::from(form_data))
                     .unwrap(),
@@ -1828,7 +1828,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/incidents/{}/dismiss", incident.id))
+                    .uri(format!("/api/incidents/{}/dismiss", incident.id))
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .body(Body::from("reason=False%20positive"))
                     .unwrap(),
@@ -1858,7 +1858,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/incidents/{}/dismiss", incident.id))
+                    .uri(format!("/api/incidents/{}/dismiss", incident.id))
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .body(Body::empty())
                     .unwrap(),
@@ -1884,7 +1884,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/incidents/{}/dismiss", nonexistent_id))
+                    .uri(format!("/api/incidents/{}/dismiss", nonexistent_id))
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .body(Body::empty())
                     .unwrap(),
@@ -1909,7 +1909,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/incidents/{}/resolve", incident.id))
+                    .uri(format!("/api/incidents/{}/resolve", incident.id))
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .body(Body::from("reason=Threat%20mitigated"))
                     .unwrap(),
@@ -1935,7 +1935,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/incidents/{}/resolve", incident.id))
+                    .uri(format!("/api/incidents/{}/resolve", incident.id))
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .body(Body::empty())
                     .unwrap(),
@@ -1961,7 +1961,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/incidents/{}/resolve", nonexistent_id))
+                    .uri(format!("/api/incidents/{}/resolve", nonexistent_id))
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .body(Body::empty())
                     .unwrap(),
@@ -1986,7 +1986,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/incidents/{}/enrich", incident.id))
+                    .uri(format!("/api/incidents/{}/enrich", incident.id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2017,7 +2017,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/incidents/{}/enrich", nonexistent_id))
+                    .uri(format!("/api/incidents/{}/enrich", nonexistent_id))
                     .body(Body::empty())
                     .unwrap(),
             )

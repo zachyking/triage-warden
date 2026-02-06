@@ -30,6 +30,7 @@ Submodules:
     - tw_ai.few_shot: Dynamic few-shot example selection
     - tw_ai.reports: Investigation report generation
     - tw_ai.llm: LLM provider abstraction
+    - tw_ai.hunting: AI-driven threat hunting hypothesis generation
 
 Example:
     Basic triage analysis::
@@ -83,6 +84,9 @@ from tw_ai.few_shot import (
     FewShotSelector,
     create_few_shot_selector,
 )
+
+# Hunting (Stage 5.1)
+from tw_ai.hunting import HuntingContext, Hypothesis, HypothesisGenerator
 from tw_ai.llm.base import LLMProvider, LLMResponse, Message, ToolDefinition
 
 # RAG components (Stage 2.3)
@@ -153,4 +157,8 @@ __all__ = [
     "InvestigationReportGenerator",
     "InvestigationReport",
     "ReportFormat",
+    # Hunting (Stage 5.1)
+    "Hypothesis",
+    "HuntingContext",
+    "HypothesisGenerator",
 ]

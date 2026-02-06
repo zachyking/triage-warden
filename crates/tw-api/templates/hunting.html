@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+
+{% block title %}Threat Hunting - Triage Warden{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Threat Hunting</h1>
+    <p class="page-subtitle">Proactive threat detection through hypothesis-driven hunts</p>
+  </div>
+  <button class="btn btn-primary btn-lg"
+          hx-get="/web/modals/add-hunt"
+          hx-target="#modal-container"
+          hx-swap="innerHTML">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M12 5v14m-7-7h14"/>
+    </svg>
+    New Hunt
+  </button>
+</div>
+
+<!-- Stats Bar -->
+<div class="grid grid-4 gap-4 mb-6">
+  <div class="card">
+    <div class="card-body text-center">
+      <div class="text-2xl font-bold text-accent">{{ active_hunts }}</div>
+      <div class="text-xs text-muted">Active Hunts</div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body text-center">
+      <div class="text-2xl font-bold">{{ total_findings }}</div>
+      <div class="text-xs text-muted">Total Findings</div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body text-center">
+      <div class="text-2xl font-bold text-warning">{{ critical_findings }}</div>
+      <div class="text-xs text-muted">Critical Findings</div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body text-center">
+      <div class="text-2xl font-bold">{{ findings_24h }}</div>
+      <div class="text-xs text-muted">Last 24h Findings</div>
+    </div>
+  </div>
+</div>
+
+<!-- Filters -->
+<div class="card mb-4">
+  <div class="card-body">
+    <div class="flex gap-4 items-center">
+      <div class="form-group" style="margin-bottom:0">
+        <select class="form-input form-select" id="filter-status"
+                hx-get="/web/partials/hunts"
+                hx-target="#hunts-table-body"
+                hx-include="[id^=filter-]"
+                hx-trigger="change">
+          <option value="">All Statuses</option>
+          <option value="draft">Draft</option>
+          <option value="active">Active</option>
+          <option value="paused">Paused</option>
+          <option value="completed">Completed</option>
+          <option value="failed">Failed</option>
+          <option value="archived">Archived</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <select class="form-input form-select" id="filter-type"
+                hx-get="/web/partials/hunts"
+                hx-target="#hunts-table-body"
+                hx-include="[id^=filter-]"
+                hx-trigger="change">
+          <option value="">All Types</option>
+          <option value="scheduled">Scheduled</option>
+          <option value="continuous">Continuous</option>
+          <option value="on_demand">On-Demand</option>
+          <option value="triggered">Triggered</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <select class="form-input form-select" id="filter-category"
+                hx-get="/web/partials/hunts"
+                hx-target="#hunts-table-body"
+                hx-include="[id^=filter-]"
+                hx-trigger="change">
+          <option value="">All Categories</option>
+          <option value="credential_access">Credential Access</option>
+          <option value="lateral_movement">Lateral Movement</option>
+          <option value="persistence">Persistence</option>
+          <option value="exfiltration">Exfiltration</option>
+          <option value="command_and_control">Command &amp; Control</option>
+          <option value="privilege_escalation">Privilege Escalation</option>
+          <option value="discovery">Discovery</option>
+          <option value="initial_access">Initial Access</option>
+        </select>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Hunts Table -->
+<div class="card">
+  <div class="table-container">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Status</th>
+          <th>MITRE</th>
+          <th>Last Run</th>
+          <th>Findings</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="hunts-table-body">
+        {% for hunt in hunts %}
+        {% include "partials/hunt_row.html" %}
+        {% endfor %}
+        {% if hunts.is_empty() %}
+        <tr>
+          <td colspan="7">
+            <div class="empty-state">
+              <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <circle cx="11" cy="11" r="8"/>
+                <path d="M21 21l-4.35-4.35"/>
+              </svg>
+              <div class="empty-state-title">No hunts configured</div>
+              <div class="empty-state-text">Create a threat hunt to start proactive detection.</div>
+            </div>
+          </td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

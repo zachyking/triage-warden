@@ -374,7 +374,7 @@ mod tests {
         let result = action.execute(context).await.unwrap();
         assert!(result.success);
         // Historical data should not be present
-        assert!(result.output.get("details").is_none());
+        assert!(!result.output.contains_key("details"));
     }
 
     #[test]

@@ -2611,7 +2611,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(&format!("/playbooks/{}", playbook.id))
+                    .uri(format!("/playbooks/{}", playbook.id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2671,7 +2671,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(&format!("/playbooks/{}", random_id))
+                    .uri(format!("/playbooks/{}", random_id))
                     .body(Body::empty())
                     .unwrap(),
             )

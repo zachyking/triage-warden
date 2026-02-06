@@ -503,8 +503,10 @@ mod tests {
 
     #[test]
     fn test_determine_consensus_below_min_providers() {
-        let mut config = AggregatorConfig::default();
-        config.min_providers_for_consensus = 3;
+        let config = AggregatorConfig {
+            min_providers_for_consensus: 3,
+            ..AggregatorConfig::default()
+        };
         let aggregator = ThreatIntelAggregator::new(config);
         let mut votes = HashMap::new();
         votes.insert(ThreatVerdict::Malicious, 1.0);

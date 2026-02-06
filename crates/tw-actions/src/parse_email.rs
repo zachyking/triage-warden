@@ -745,8 +745,8 @@ Content-Type: text/html
         let result = action.execute(context).await.unwrap();
         assert!(result.success);
 
-        assert!(result.output.get("body_text").is_some());
-        assert!(result.output.get("body_html").is_some());
+        assert!(result.output.contains_key("body_text"));
+        assert!(result.output.contains_key("body_html"));
     }
 
     #[tokio::test]

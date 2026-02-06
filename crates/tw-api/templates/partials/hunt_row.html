@@ -1,0 +1,41 @@
+<tr>
+  <td>
+    <a href="/hunting/{{ hunt.id }}" class="font-semibold text-accent">{{ hunt.name }}</a>
+    <div class="text-xs text-muted">{{ hunt.hypothesis|truncate(60) }}</div>
+  </td>
+  <td><span class="badge badge-info">{{ hunt.hunt_type }}</span></td>
+  <td><span class="badge badge-{{ hunt.status_color }}">{{ hunt.status }}</span></td>
+  <td>
+    <div class="flex flex-wrap gap-1">
+      {% for technique in hunt.mitre_techniques %}
+      <span class="badge badge-accent text-xs">{{ technique }}</span>
+      {% endfor %}
+    </div>
+  </td>
+  <td class="text-sm text-muted">
+    {% match hunt.last_run %}
+    {% when Some with (lr) %}{{ lr }}{% when None %}Never{% endmatch %}
+  </td>
+  <td>
+    {% match hunt.last_result_total %}
+    {% when Some with (total) %}
+    <span class="font-semibold">{{ total }}</span>
+    {% when None %}
+    <span class="text-muted">--</span>
+    {% endmatch %}
+  </td>
+  <td>
+    <div class="flex gap-1">
+      <button class="btn btn-ghost btn-sm"
+              hx-post="/api/v1/hunts/{{ hunt.id }}/execute"
+              hx-swap="none"
+              hx-on::after-request="if(event.detail.successful) { showToast('success', 'Hunt Started', 'Execution triggered.'); }"
+              title="Execute">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polygon points="5 3 19 12 5 21 5 3"/>
+        </svg>
+      </button>
+      <a href="/hunting/{{ hunt.id }}" class="btn btn-secondary btn-sm">Details</a>
+    </div>
+  </td>
+</tr>

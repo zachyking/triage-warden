@@ -756,7 +756,7 @@ mod tests {
         // Now calibration should be different
         let calibrated = service.calibrate(0.9, None, None);
         // It might be close to 0.9 or different, but should be valid
-        assert!(calibrated >= 0.0 && calibrated <= 1.0);
+        assert!((0.0..=1.0).contains(&calibrated));
     }
 
     #[test]

@@ -451,11 +451,6 @@ mod tests {
         std::env::remove_var("ENVIRONMENT");
     }
 
-    // Helper to set production env
-    fn set_production_env() {
-        std::env::set_var("TW_ENV", "production");
-    }
-
     #[test]
     fn test_error_codes_defined() {
         assert_eq!(ApiError::NotFound("".to_string()).error_code(), "NOT_FOUND");

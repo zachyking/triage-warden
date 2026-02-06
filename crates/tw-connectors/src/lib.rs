@@ -6,6 +6,7 @@
 //! This crate provides the trait definitions and implementations for connecting
 //! to external security tools and services.
 
+pub mod asm;
 pub mod cloud;
 pub mod collaboration;
 pub mod edr;
@@ -21,6 +22,7 @@ pub mod testing;
 pub mod threat_intel;
 pub mod ticketing;
 pub mod traits;
+pub mod vulnerability;
 
 // Re-export SecureString at the crate root
 pub use secure_string::SecureString;
@@ -143,3 +145,16 @@ pub use cloud::{
 pub use collaboration::{
     MockCollaborationConnector, SlackConfig, SlackConnector, TeamsConfig, TeamsConnector,
 };
+
+// Re-export vulnerability scanner connectors
+pub use vulnerability::{
+    qualys::QualysConnector, rapid7::Rapid7Connector, tenable::TenableConnector,
+};
+pub use vulnerability::{
+    MockVulnerabilityScanner, ScanResult, ScanStatus, VulnSeverity, VulnStatus, Vulnerability,
+    VulnerabilityScanner,
+};
+
+// Re-export ASM connectors
+pub use asm::{censys::CensysConnector, scorecard::ScorecardConnector};
+pub use asm::{AttackSurfaceMonitor, ExposureType, ExternalExposure, MockAsmProvider};

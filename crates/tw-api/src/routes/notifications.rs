@@ -1362,7 +1362,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri(&format!("/api/notifications/{}", created.id))
+                    .uri(format!("/api/notifications/{}", created.id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1390,7 +1390,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri(&format!("/api/notifications/{}", non_existent_id))
+                    .uri(format!("/api/notifications/{}", non_existent_id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1693,7 +1693,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("PUT")
-                    .uri(&format!("/api/notifications/{}", created.id))
+                    .uri(format!("/api/notifications/{}", created.id))
                     .header("content-type", "application/x-www-form-urlencoded")
                     .body(Body::from(form_body))
                     .unwrap(),
@@ -1722,7 +1722,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("PUT")
-                    .uri(&format!("/api/notifications/{}", non_existent_id))
+                    .uri(format!("/api/notifications/{}", non_existent_id))
                     .header("content-type", "application/x-www-form-urlencoded")
                     .body(Body::from(form_body))
                     .unwrap(),
@@ -1765,7 +1765,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("DELETE")
-                    .uri(&format!("/api/notifications/{}", created.id))
+                    .uri(format!("/api/notifications/{}", created.id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1790,7 +1790,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("DELETE")
-                    .uri(&format!("/api/notifications/{}", non_existent_id))
+                    .uri(format!("/api/notifications/{}", non_existent_id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1834,7 +1834,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/notifications/{}/toggle", created.id))
+                    .uri(format!("/api/notifications/{}/toggle", created.id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1881,7 +1881,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/notifications/{}/toggle", created.id))
+                    .uri(format!("/api/notifications/{}/toggle", created.id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1907,7 +1907,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/notifications/{}/toggle", non_existent_id))
+                    .uri(format!("/api/notifications/{}/toggle", non_existent_id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1952,7 +1952,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/notifications/{}/test", created.id))
+                    .uri(format!("/api/notifications/{}/test", created.id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1997,7 +1997,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/notifications/{}/test", created.id))
+                    .uri(format!("/api/notifications/{}/test", created.id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2024,7 +2024,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/notifications/{}/test", non_existent_id))
+                    .uri(format!("/api/notifications/{}/test", non_existent_id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2061,7 +2061,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/notifications/{}/test", created.id))
+                    .uri(format!("/api/notifications/{}/test", created.id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2139,7 +2139,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("DELETE")
-                    .uri(&format!("/api/notifications/{}", created.id))
+                    .uri(format!("/api/notifications/{}", created.id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2184,7 +2184,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/notifications/{}/toggle", created.id))
+                    .uri(format!("/api/notifications/{}/toggle", created.id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2235,7 +2235,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("PUT")
-                    .uri(&format!("/api/notifications/{}", created.id))
+                    .uri(format!("/api/notifications/{}", created.id))
                     .header("content-type", "application/x-www-form-urlencoded")
                     .body(Body::from(form_body))
                     .unwrap(),
@@ -2288,7 +2288,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("PUT")
-                    .uri(&format!("/api/notifications/{}", created.id))
+                    .uri(format!("/api/notifications/{}", created.id))
                     .header("content-type", "application/x-www-form-urlencoded")
                     .body(Body::from(form_body))
                     .unwrap(),
@@ -2336,7 +2336,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("PUT")
-                    .uri(&format!("/api/notifications/{}", created.id))
+                    .uri(format!("/api/notifications/{}", created.id))
                     .header("content-type", "application/x-www-form-urlencoded")
                     .body(Body::from(form_body))
                     .unwrap(),
@@ -2382,7 +2382,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("PUT")
-                    .uri(&format!("/api/notifications/{}", created.id))
+                    .uri(format!("/api/notifications/{}", created.id))
                     .header("content-type", "application/x-www-form-urlencoded")
                     .body(Body::from(form_body))
                     .unwrap(),
@@ -2590,7 +2590,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri(&format!("/api/notifications/{}", created.id))
+                    .uri(format!("/api/notifications/{}", created.id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2759,7 +2759,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri(&format!("/api/notifications/rules/{}", non_existent_id))
+                    .uri(format!("/api/notifications/rules/{}", non_existent_id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2778,7 +2778,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("DELETE")
-                    .uri(&format!("/api/notifications/rules/{}", non_existent_id))
+                    .uri(format!("/api/notifications/rules/{}", non_existent_id))
                     .body(Body::empty())
                     .unwrap(),
             )

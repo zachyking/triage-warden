@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 
-from .conftest import (
+from ._e2e_fixtures import (
     ReActAgent,
     TriageRequest,
     StepType,

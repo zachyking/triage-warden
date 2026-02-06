@@ -224,8 +224,6 @@ async fn revoke_api_key(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_valid_scopes() {
         let valid = [

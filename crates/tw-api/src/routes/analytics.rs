@@ -526,10 +526,14 @@ mod tests {
 
     #[test]
     fn test_incident_metrics_response_from() {
-        let mut metrics = IncidentMetrics::default();
-        metrics.total_incidents = 50;
-        metrics.by_severity.insert("high".to_string(), 20);
-        metrics.mttd_seconds = Some(120.0);
+        let mut by_severity = std::collections::HashMap::new();
+        by_severity.insert("high".to_string(), 20);
+        let metrics = IncidentMetrics {
+            total_incidents: 50,
+            by_severity,
+            mttd_seconds: Some(120.0),
+            ..Default::default()
+        };
 
         let response = IncidentMetricsResponse::from(metrics);
 

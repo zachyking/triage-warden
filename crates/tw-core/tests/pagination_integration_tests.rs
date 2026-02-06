@@ -21,7 +21,7 @@ use chrono::Utc;
 use sqlx::sqlite::SqlitePoolOptions;
 use tw_core::db::{
     pagination::{AuditLogFilter, PaginatedResult, Pagination, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE},
-    AuditRepository, DbPool, IncidentFilter, IncidentRepository,
+    DbPool, IncidentFilter,
 };
 use tw_core::incident::{
     Alert, AlertSource, AuditAction, AuditEntry, Incident, IncidentStatus, Severity,

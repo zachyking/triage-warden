@@ -402,11 +402,17 @@ mod tests {
 
     #[test]
     fn test_incident_metrics_serialization() {
-        let mut metrics = IncidentMetrics::default();
-        metrics.total_incidents = 50;
-        metrics.by_severity.insert("high".to_string(), 20);
-        metrics.mttd_seconds = Some(120.0);
-        metrics.mttr_seconds = Some(3600.0);
+        let metrics = IncidentMetrics {
+            total_incidents: 50,
+            by_severity: {
+                let mut m = HashMap::new();
+                m.insert("high".to_string(), 20);
+                m
+            },
+            mttd_seconds: Some(120.0),
+            mttr_seconds: Some(3600.0),
+            ..IncidentMetrics::default()
+        };
 
         let json = serde_json::to_string(&metrics).unwrap();
         let deserialized: IncidentMetrics = serde_json::from_str(&json).unwrap();

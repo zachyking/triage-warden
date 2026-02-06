@@ -548,7 +548,7 @@ impl SIEMBridge {
     ///     with_sample_data: If True and mode="mock", initializes with sample security events
     ///
     /// Environment Variables (for splunk mode):
-    ///     TW_SPLUNK_URL: Splunk server URL (e.g., "https://splunk.example.com:8089")
+    ///     TW_SPLUNK_URL: Splunk server URL (e.g., "<https://splunk.example.com:8089>")
     ///     TW_SPLUNK_TOKEN: Splunk authentication token
     ///
     /// Returns:

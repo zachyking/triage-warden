@@ -1,0 +1,77 @@
+<div class="modal-backdrop" id="edit-hunt-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 class="modal-title">Edit Hunt</h2>
+      <button class="modal-close" aria-label="Close" onclick="this.closest('.modal-backdrop').remove()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <form hx-put="/api/v1/hunts/{{ hunt.id }}" hx-swap="none" hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); showToast('success', 'Hunt Updated', 'Hunt has been updated.'); location.reload(); } else { showToast('error', 'Failed to Update', 'Please check your configuration.'); }">
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Hunt Name</label>
+          <input type="text" name="name" class="form-input" value="{{ hunt.name }}" required>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Hypothesis</label>
+          <textarea name="hypothesis" class="form-input form-textarea" rows="2" required>{{ hunt.hypothesis }}</textarea>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Description</label>
+          <textarea name="description" class="form-input form-textarea" rows="3">{{ hunt.description }}</textarea>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Hunt Type</label>
+          <select name="hunt_type" class="form-input form-select">
+            <option value="on_demand" {% if hunt.hunt_type == "On-Demand" %}selected{% endif %}>On-Demand</option>
+            <option value="scheduled" {% if hunt.hunt_type == "Scheduled" %}selected{% endif %}>Scheduled</option>
+            <option value="continuous" {% if hunt.hunt_type == "Continuous" %}selected{% endif %}>Continuous</option>
+            <option value="triggered" {% if hunt.hunt_type == "Triggered" %}selected{% endif %}>Triggered</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Status</label>
+          <select name="status" class="form-input form-select">
+            <option value="draft" {% if hunt.status == "Draft" %}selected{% endif %}>Draft</option>
+            <option value="active" {% if hunt.status == "Active" %}selected{% endif %}>Active</option>
+            <option value="paused" {% if hunt.status == "Paused" %}selected{% endif %}>Paused</option>
+            <option value="archived" {% if hunt.status == "Archived" %}selected{% endif %}>Archived</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">MITRE ATT&amp;CK Techniques</label>
+          <input type="text" name="mitre_techniques" class="form-input" value="{{ hunt.mitre_techniques_str }}">
+          <p class="text-xs text-muted mt-1">Comma-separated technique IDs</p>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Tags</label>
+          <input type="text" name="tags" class="form-input" value="{{ hunt.tags_str }}">
+          <p class="text-xs text-muted mt-1">Comma-separated tags</p>
+        </div>
+
+        <div class="form-group">
+          <div class="flex items-center gap-3">
+            <label class="switch">
+              <input type="checkbox" name="enabled" value="true" {% if hunt.enabled %}checked{% endif %}>
+              <span class="switch-track"></span>
+              <span class="switch-thumb"></span>
+            </label>
+            <span class="text-sm">Enable hunt</span>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-ghost" onclick="this.closest('.modal-backdrop').remove()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save Changes</button>
+      </div>
+    </form>
+  </div>
+</div>
