@@ -358,6 +358,9 @@ class RetrievalService:
     def _build_filters(self, **kwargs: Any) -> dict[str, Any] | None:
         """Build ChromaDB filter dict from keyword arguments.
 
+        ChromaDB requires exactly one key at the top level of a where clause.
+        Multiple filters must be wrapped with ``$and``.
+
         Args:
             **kwargs: Field names and values to filter on.
 
@@ -365,4 +368,9 @@ class RetrievalService:
             Filter dict or None if no filters.
         """
         filters = {k: v for k, v in kwargs.items() if v is not None}
-        return filters if filters else None
+        if not filters:
+            return None
+        if len(filters) == 1:
+            return filters
+        # Wrap multiple conditions with $and for ChromaDB compatibility
+        return {"$and": [{k: v} for k, v in filters.items()]}

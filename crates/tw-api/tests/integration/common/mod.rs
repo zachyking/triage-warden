@@ -107,6 +107,14 @@ async fn run_migrations(pool: &SqlitePool) {
             });
     }
 
+    // Analyst feedback table
+    sqlx::query(include_str!(
+        "../../../../tw-core/src/db/migrations/sqlite/20240301_000001_create_analyst_feedback.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("Failed to run analyst feedback migration");
+
     // Add tenant_id to all tables
     let tenant_id_sql: &str = include_str!(
         "../../../../tw-core/src/db/migrations/sqlite/20240215_000002_add_tenant_id_to_tables.sql"
@@ -154,6 +162,35 @@ pub async fn create_test_router() -> (Router, AppState) {
 pub fn get_request(uri: &str) -> axum::extract::Request<Body> {
     axum::extract::Request::builder()
         .method(Method::GET)
+        .uri(uri)
+        .body(Body::empty())
+        .unwrap()
+}
+
+/// Helper to make POST requests with JSON body.
+pub fn post_json_request(uri: &str, body: &str) -> axum::extract::Request<Body> {
+    axum::extract::Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header("Content-Type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+/// Helper to make PUT requests with JSON body.
+pub fn put_json_request(uri: &str, body: &str) -> axum::extract::Request<Body> {
+    axum::extract::Request::builder()
+        .method(Method::PUT)
+        .uri(uri)
+        .header("Content-Type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+/// Helper to make DELETE requests.
+pub fn delete_request(uri: &str) -> axum::extract::Request<Body> {
+    axum::extract::Request::builder()
+        .method(Method::DELETE)
         .uri(uri)
         .body(Body::empty())
         .unwrap()

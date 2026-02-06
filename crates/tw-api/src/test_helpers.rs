@@ -229,6 +229,22 @@ async fn run_migrations(pool: &SqlitePool) {
         .execute(pool)
         .await
         .expect("Failed to add tenant_id to settings");
+
+    // Auth tables (users, sessions, api_keys)
+    sqlx::query(include_str!(
+        "../../tw-core/src/db/migrations/sqlite/20240107_000001_create_auth_tables.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("Failed to run auth tables migration");
+
+    // Analyst feedback table
+    sqlx::query(include_str!(
+        "../../tw-core/src/db/migrations/sqlite/20240301_000001_create_analyst_feedback.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("Failed to run analyst feedback migration");
 }
 
 // ============================================================================

@@ -55,6 +55,7 @@ def rag_config(temp_chroma_dir: Path):
     return RAGConfig(
         persist_directory=temp_chroma_dir,
         use_persistent_storage=False,  # Use in-memory for faster tests
+        min_similarity_threshold=0.0,  # Disable threshold for mock embeddings
     )
 
 

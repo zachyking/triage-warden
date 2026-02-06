@@ -855,4 +855,417 @@ mod tests {
         let response = internal.into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
+
+    // ============================================================
+    // Invalid Tenant ID Format Tests
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_extract_header_tenant_id_various_invalid_formats() {
+        let pool = sqlx::sqlite::SqlitePool::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let config = TenantResolutionConfig::default();
+        let resolver = TenantResolver {
+            db: Arc::new(tw_core::db::DbPool::Sqlite(pool)),
+            cache: Arc::new(TenantCache::default_cache()),
+            config,
+        };
+
+        // Empty string
+        let mut headers = HeaderMap::new();
+        headers.insert(TENANT_ID_HEADER, HeaderValue::from_static(""));
+        assert_eq!(resolver.extract_header_tenant_id(&headers), None);
+
+        // Plain text (not UUID)
+        let mut headers = HeaderMap::new();
+        headers.insert(TENANT_ID_HEADER, HeaderValue::from_static("my-tenant"));
+        assert_eq!(resolver.extract_header_tenant_id(&headers), None);
+
+        // UUID-like but wrong length
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            TENANT_ID_HEADER,
+            HeaderValue::from_static("550e8400-e29b-41d4-a716"),
+        );
+        assert_eq!(resolver.extract_header_tenant_id(&headers), None);
+
+        // Numeric value
+        let mut headers = HeaderMap::new();
+        headers.insert(TENANT_ID_HEADER, HeaderValue::from_static("12345"));
+        assert_eq!(resolver.extract_header_tenant_id(&headers), None);
+
+        // UUID with extra characters
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            TENANT_ID_HEADER,
+            HeaderValue::from_static("550e8400-e29b-41d4-a716-446655440000-extra"),
+        );
+        assert_eq!(resolver.extract_header_tenant_id(&headers), None);
+    }
+
+    // ============================================================
+    // Subdomain Edge Cases
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_extract_subdomain_no_base_domain_configured() {
+        let pool = sqlx::sqlite::SqlitePool::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let config = TenantResolutionConfig {
+            base_domain: None,
+            ..Default::default()
+        };
+        let resolver = TenantResolver {
+            db: Arc::new(tw_core::db::DbPool::Sqlite(pool)),
+            cache: Arc::new(TenantCache::default_cache()),
+            config,
+        };
+
+        // With no base domain configured, subdomain extraction should return None
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::HOST,
+            HeaderValue::from_static("tenant.example.com"),
+        );
+        assert_eq!(resolver.extract_subdomain(&headers), None);
+    }
+
+    #[tokio::test]
+    async fn test_extract_subdomain_no_host_header() {
+        let pool = sqlx::sqlite::SqlitePool::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let config = TenantResolutionConfig {
+            base_domain: Some("example.com".to_string()),
+            ..Default::default()
+        };
+        let resolver = TenantResolver {
+            db: Arc::new(tw_core::db::DbPool::Sqlite(pool)),
+            cache: Arc::new(TenantCache::default_cache()),
+            config,
+        };
+
+        // No Host header at all
+        let headers = HeaderMap::new();
+        assert_eq!(resolver.extract_subdomain(&headers), None);
+    }
+
+    #[tokio::test]
+    async fn test_extract_subdomain_all_reserved_subdomains() {
+        let pool = sqlx::sqlite::SqlitePool::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let config = TenantResolutionConfig {
+            base_domain: Some("example.com".to_string()),
+            ..Default::default()
+        };
+        let resolver = TenantResolver {
+            db: Arc::new(tw_core::db::DbPool::Sqlite(pool)),
+            cache: Arc::new(TenantCache::default_cache()),
+            config,
+        };
+
+        let reserved = &[
+            "www",
+            "api",
+            "admin",
+            "app",
+            "dashboard",
+            "static",
+            "cdn",
+            "assets",
+        ];
+        for sub in reserved {
+            let mut headers = HeaderMap::new();
+            let host = format!("{}.example.com", sub);
+            headers.insert(
+                axum::http::header::HOST,
+                HeaderValue::from_str(&host).unwrap(),
+            );
+            assert_eq!(
+                resolver.extract_subdomain(&headers),
+                None,
+                "Reserved subdomain '{}' should not be extracted",
+                sub
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_extract_subdomain_host_is_just_port() {
+        let pool = sqlx::sqlite::SqlitePool::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let config = TenantResolutionConfig {
+            base_domain: Some("example.com".to_string()),
+            ..Default::default()
+        };
+        let resolver = TenantResolver {
+            db: Arc::new(tw_core::db::DbPool::Sqlite(pool)),
+            cache: Arc::new(TenantCache::default_cache()),
+            config,
+        };
+
+        // Host with just port number
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::HOST,
+            HeaderValue::from_static("example.com:443"),
+        );
+        assert_eq!(resolver.extract_subdomain(&headers), None);
+    }
+
+    // ============================================================
+    // Bypass Path Edge Cases
+    // ============================================================
+
+    #[test]
+    fn test_should_bypass_path_edge_cases() {
+        // Path prefix matching - these all start with a bypass prefix
+        assert!(should_bypass_path("/health/"));
+        assert!(should_bypass_path("/health/detailed"));
+        assert!(should_bypass_path("/metrics/prometheus"));
+        assert!(should_bypass_path("/swagger-ui/index.html"));
+
+        // /healthz also matches because /health is a prefix
+        assert!(should_bypass_path("/healthz"));
+
+        // Should NOT bypass
+        assert!(!should_bypass_path("/api/health")); // health is not at the root
+        assert!(!should_bypass_path("/v1/metrics"));
+        assert!(!should_bypass_path(""));
+        assert!(!should_bypass_path("/dashboard"));
+        assert!(!should_bypass_path("/api/v1/incidents"));
+    }
+
+    // ============================================================
+    // Tenant Resolution Error Edge Cases
+    // ============================================================
+
+    #[test]
+    fn test_tenant_resolution_error_pending_deletion_status() {
+        let not_operational = TenantResolutionError::NotOperational(TenantStatus::PendingDeletion);
+        let response = not_operational.into_response();
+        // Should return 404 to avoid leaking tenant existence
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ============================================================
+    // Base64 Decode Edge Cases
+    // ============================================================
+
+    #[test]
+    fn test_base64_decode_empty_input() {
+        let result = base64_decode_url_safe("");
+        // Empty input should decode to empty output
+        assert!(result.is_some());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_base64_decode_invalid_characters() {
+        // Characters outside the base64 alphabet
+        let result = base64_decode_url_safe("!!!!");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_base64_decode_url_safe_characters() {
+        // URL-safe base64 uses - and _ instead of + and /
+        // "Hello" in URL-safe base64 is SGVsbG8
+        let result = base64_decode_url_safe("SGVsbG8");
+        assert!(result.is_some());
+        let decoded = String::from_utf8(result.unwrap()).unwrap();
+        assert_eq!(decoded, "Hello");
+    }
+
+    // ============================================================
+    // JWT Extraction Tests
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_extract_jwt_tenant_id_no_auth_header() {
+        let pool = sqlx::sqlite::SqlitePool::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let config = TenantResolutionConfig::default();
+        let resolver = TenantResolver {
+            db: Arc::new(tw_core::db::DbPool::Sqlite(pool)),
+            cache: Arc::new(TenantCache::default_cache()),
+            config,
+        };
+
+        let headers = HeaderMap::new();
+        assert_eq!(resolver.extract_jwt_tenant_id(&headers), None);
+    }
+
+    #[tokio::test]
+    async fn test_extract_jwt_tenant_id_non_bearer_auth() {
+        let pool = sqlx::sqlite::SqlitePool::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let config = TenantResolutionConfig::default();
+        let resolver = TenantResolver {
+            db: Arc::new(tw_core::db::DbPool::Sqlite(pool)),
+            cache: Arc::new(TenantCache::default_cache()),
+            config,
+        };
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            HeaderValue::from_static("Basic dXNlcjpwYXNz"),
+        );
+        assert_eq!(resolver.extract_jwt_tenant_id(&headers), None);
+    }
+
+    #[tokio::test]
+    async fn test_extract_jwt_tenant_id_malformed_token() {
+        let pool = sqlx::sqlite::SqlitePool::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let config = TenantResolutionConfig::default();
+        let resolver = TenantResolver {
+            db: Arc::new(tw_core::db::DbPool::Sqlite(pool)),
+            cache: Arc::new(TenantCache::default_cache()),
+            config,
+        };
+
+        // Token with only 2 parts (missing signature)
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer header.payload"),
+        );
+        assert_eq!(resolver.extract_jwt_tenant_id(&headers), None);
+
+        // Token with 4 parts
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer a.b.c.d"),
+        );
+        assert_eq!(resolver.extract_jwt_tenant_id(&headers), None);
+
+        // Token with no dots
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer nodots"),
+        );
+        assert_eq!(resolver.extract_jwt_tenant_id(&headers), None);
+    }
+
+    #[tokio::test]
+    async fn test_extract_jwt_tenant_id_no_tenant_claim() {
+        let pool = sqlx::sqlite::SqlitePool::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let config = TenantResolutionConfig::default();
+        let resolver = TenantResolver {
+            db: Arc::new(tw_core::db::DbPool::Sqlite(pool)),
+            cache: Arc::new(TenantCache::default_cache()),
+            config,
+        };
+
+        // JWT with no tenant_id claim: {"sub":"user123"}
+        // header: eyJhbGciOiJIUzI1NiJ9 payload: eyJzdWIiOiJ1c2VyMTIzIn0 sig: fake
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyMTIzIn0.fakesig"),
+        );
+        assert_eq!(resolver.extract_jwt_tenant_id(&headers), None);
+    }
+
+    // ============================================================
+    // TenantCache Edge Cases
+    // ============================================================
+
+    #[test]
+    fn test_tenant_cache_overwrite() {
+        use tokio::runtime::Runtime;
+
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let cache = TenantCache::new(10, Duration::from_secs(60));
+
+            let tenant1 = Tenant::new("test-slug", "First Name").unwrap();
+            let tenant1_id = tenant1.id;
+            cache.insert(&tenant1).await;
+
+            // Insert another tenant with same slug (overwrites)
+            let tenant2 = Tenant::new("test-slug", "Second Name").unwrap();
+            // tenant2 will have a different ID by default
+            let tenant2_id = tenant2.id;
+            cache.insert(&tenant2).await;
+
+            // By slug, should return the newer one
+            let retrieved = cache.get_by_slug("test-slug").await.unwrap();
+            assert_eq!(retrieved.id, tenant2_id);
+            assert_eq!(retrieved.name, "Second Name");
+
+            // Old ID should still be in the by_id cache
+            let old = cache.get_by_id(tenant1_id).await;
+            assert!(old.is_some());
+        });
+    }
+
+    #[test]
+    fn test_tenant_cache_capacity_eviction() {
+        use tokio::runtime::Runtime;
+
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            // Cache with capacity of 2
+            let cache = TenantCache::new(2, Duration::from_secs(60));
+
+            let t1 = Tenant::new("slug-1", "Tenant 1").unwrap();
+            let t2 = Tenant::new("slug-2", "Tenant 2").unwrap();
+            let t3 = Tenant::new("slug-3", "Tenant 3").unwrap();
+
+            cache.insert(&t1).await;
+            cache.insert(&t2).await;
+            cache.insert(&t3).await; // Should evict t1 (LRU)
+
+            // t1 should be evicted from slug cache
+            assert!(cache.get_by_slug("slug-1").await.is_none());
+            // t2 and t3 should still be present
+            assert!(cache.get_by_slug("slug-2").await.is_some());
+            assert!(cache.get_by_slug("slug-3").await.is_some());
+        });
+    }
+
+    // ============================================================
+    // TenantResolutionConfig Tests
+    // ============================================================
+
+    #[test]
+    fn test_tenant_resolution_config_defaults() {
+        // Clear env vars that might affect defaults
+        let config = TenantResolutionConfig {
+            require_tenant: true,
+            base_domain: None,
+            default_tenant_slug: None,
+            cache_ttl_secs: DEFAULT_CACHE_TTL_SECS,
+            cache_capacity: DEFAULT_CACHE_CAPACITY,
+        };
+
+        assert!(config.require_tenant);
+        assert!(config.base_domain.is_none());
+        assert!(config.default_tenant_slug.is_none());
+        assert_eq!(config.cache_ttl_secs, 60);
+        assert_eq!(config.cache_capacity, 1000);
+    }
+
+    #[test]
+    fn test_tenant_source_equality() {
+        assert_eq!(TenantSource::Subdomain, TenantSource::Subdomain);
+        assert_eq!(TenantSource::Header, TenantSource::Header);
+        assert_eq!(TenantSource::JwtClaim, TenantSource::JwtClaim);
+        assert_eq!(TenantSource::Default, TenantSource::Default);
+        assert_ne!(TenantSource::Subdomain, TenantSource::Header);
+    }
 }

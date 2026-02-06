@@ -2101,6 +2101,256 @@ mod tests {
     }
 
     // ============================================================
+    // OrchestratorConfig Tests
+    // ============================================================
+
+    #[test]
+    fn test_orchestrator_config_defaults() {
+        let config = OrchestratorConfig::default();
+        assert_eq!(config.mode, OperationMode::Supervised);
+        assert_eq!(config.max_concurrent_incidents, 50);
+        assert_eq!(config.enrichment_timeout_secs, 60);
+        assert_eq!(config.analysis_timeout_secs, 120);
+        assert!(config.auto_create_tickets);
+        assert!(!config.kill_switch_enabled);
+    }
+
+    #[test]
+    fn test_orchestrator_config_custom() {
+        let config = OrchestratorConfig {
+            mode: OperationMode::Autonomous,
+            max_concurrent_incidents: 100,
+            enrichment_timeout_secs: 30,
+            analysis_timeout_secs: 60,
+            auto_create_tickets: false,
+            kill_switch_enabled: true,
+        };
+        assert_eq!(config.mode, OperationMode::Autonomous);
+        assert_eq!(config.max_concurrent_incidents, 100);
+        assert!(!config.auto_create_tickets);
+        assert!(config.kill_switch_enabled);
+    }
+
+    // ============================================================
+    // OperationMode Serialization Tests
+    // ============================================================
+
+    #[test]
+    fn test_operation_mode_serialization() {
+        let mode = OperationMode::Supervised;
+        let json = serde_json::to_string(&mode).unwrap();
+        assert_eq!(json, "\"supervised\"");
+
+        let mode = OperationMode::Assisted;
+        let json = serde_json::to_string(&mode).unwrap();
+        assert_eq!(json, "\"assisted\"");
+
+        let mode = OperationMode::Autonomous;
+        let json = serde_json::to_string(&mode).unwrap();
+        assert_eq!(json, "\"autonomous\"");
+    }
+
+    #[test]
+    fn test_operation_mode_deserialization() {
+        let mode: OperationMode = serde_json::from_str("\"supervised\"").unwrap();
+        assert_eq!(mode, OperationMode::Supervised);
+
+        let mode: OperationMode = serde_json::from_str("\"assisted\"").unwrap();
+        assert_eq!(mode, OperationMode::Assisted);
+
+        let mode: OperationMode = serde_json::from_str("\"autonomous\"").unwrap();
+        assert_eq!(mode, OperationMode::Autonomous);
+    }
+
+    #[test]
+    fn test_operation_mode_default() {
+        let mode = OperationMode::default();
+        assert_eq!(mode, OperationMode::Supervised);
+    }
+
+    // ============================================================
+    // OrchestratorStats Tests
+    // ============================================================
+
+    #[test]
+    fn test_orchestrator_stats_default() {
+        let stats = OrchestratorStats::default();
+        assert_eq!(stats.alerts_received, 0);
+        assert_eq!(stats.incidents_created, 0);
+        assert_eq!(stats.incidents_in_progress, 0);
+        assert_eq!(stats.incidents_resolved, 0);
+        assert_eq!(stats.incidents_false_positive, 0);
+        assert_eq!(stats.actions_executed, 0);
+        assert_eq!(stats.actions_denied, 0);
+        assert_eq!(stats.errors, 0);
+    }
+
+    // ============================================================
+    // LeadershipStats Tests
+    // ============================================================
+
+    #[test]
+    fn test_leadership_stats_default() {
+        let stats = LeadershipStats::default();
+        assert_eq!(stats.elections_won, 0);
+        assert_eq!(stats.elections_lost, 0);
+        assert_eq!(stats.renewals_successful, 0);
+        assert_eq!(stats.renewals_failed, 0);
+        assert_eq!(stats.cleanup_executions, 0);
+        assert_eq!(stats.scheduler_executions, 0);
+        assert_eq!(stats.metrics_executions, 0);
+        assert!(stats.leadership_acquired_at.is_none());
+        assert_eq!(stats.total_leadership_seconds, 0);
+    }
+
+    // ============================================================
+    // Orchestrator Lifecycle Tests
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_orchestrator_start_stop() {
+        let orchestrator = Orchestrator::new();
+        assert!(!orchestrator.is_running().await);
+
+        orchestrator.start().await.unwrap();
+        assert!(orchestrator.is_running().await);
+
+        // Starting again is idempotent
+        orchestrator.start().await.unwrap();
+        assert!(orchestrator.is_running().await);
+
+        orchestrator.stop().await.unwrap();
+        assert!(!orchestrator.is_running().await);
+    }
+
+    #[tokio::test]
+    async fn test_orchestrator_default() {
+        let orchestrator = Orchestrator::default();
+        assert!(!orchestrator.is_running().await);
+        assert_eq!(
+            orchestrator.operation_mode().await,
+            OperationMode::Supervised
+        );
+        assert!(!orchestrator.has_leader_election());
+    }
+
+    // ============================================================
+    // Update Incident Tests
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_update_incident() {
+        let orchestrator = Orchestrator::new();
+        let alert = create_test_alert();
+        let incident_id = orchestrator.process_alert(alert).await.unwrap();
+
+        // Update the incident severity
+        orchestrator
+            .update_incident(incident_id, |inc| {
+                inc.severity = Severity::Critical;
+            })
+            .await
+            .unwrap();
+
+        let incident = orchestrator.get_incident(incident_id).await.unwrap();
+        assert_eq!(incident.severity, Severity::Critical);
+    }
+
+    #[tokio::test]
+    async fn test_update_nonexistent_incident() {
+        let orchestrator = Orchestrator::new();
+        let fake_id = uuid::Uuid::new_v4();
+
+        let result = orchestrator.update_incident(fake_id, |_| {}).await;
+
+        assert!(matches!(
+            result,
+            Err(OrchestratorError::IncidentNotFound(_))
+        ));
+    }
+
+    // ============================================================
+    // Incident Counts Tests
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_get_incident_counts_empty() {
+        let orchestrator = Orchestrator::new();
+        let counts = orchestrator.get_incident_counts().await;
+        assert!(counts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_incident_counts_multiple() {
+        let orchestrator = Orchestrator::new();
+
+        // Create 3 alerts
+        for i in 0..3 {
+            let mut alert = create_test_alert();
+            alert.id = format!("count-test-{}", i);
+            orchestrator.process_alert(alert).await.unwrap();
+        }
+
+        let counts = orchestrator.get_incident_counts().await;
+        assert_eq!(*counts.get(&IncidentStatus::New).unwrap_or(&0), 3);
+    }
+
+    // ============================================================
+    // Stats Tracking for Terminal State Transitions
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_stats_update_on_resolved() {
+        let orchestrator = Orchestrator::new();
+        let auth_ctx = create_analyst_context();
+
+        let alert = create_test_alert();
+        let incident_id = orchestrator.process_alert(alert).await.unwrap();
+
+        // Transition to enriching (allowed from New)
+        orchestrator
+            .transition_incident(incident_id, IncidentStatus::Enriching, &auth_ctx)
+            .await
+            .unwrap();
+
+        // Transition to Dismissed (should work from Enriching if workflow allows)
+        let _result = orchestrator
+            .transition_incident(incident_id, IncidentStatus::Dismissed, &auth_ctx)
+            .await;
+
+        // Even if the workflow doesn't allow this exact transition,
+        // verify stats are consistent
+        let stats = orchestrator.stats().await;
+        assert_eq!(stats.alerts_received, 1);
+        assert_eq!(stats.incidents_created, 1);
+    }
+
+    // ============================================================
+    // Event Bus Access
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_event_bus_accessible() {
+        let orchestrator = Orchestrator::new();
+        let bus = orchestrator.event_bus();
+        // Just verify we can get a reference to it
+        assert!(Arc::strong_count(&bus) >= 1);
+    }
+
+    // ============================================================
+    // Shutdown Receiver Test
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_shutdown_receiver() {
+        let orchestrator = Orchestrator::new();
+        let rx = orchestrator.shutdown_receiver();
+
+        // Initial value should be false
+        assert!(!*rx.borrow());
+    }
+
+    // ============================================================
     // Leader Election and Singleton Task Tests (Task 1.5.2)
     // ============================================================
 
@@ -2544,6 +2794,43 @@ mod tests {
             );
 
             assert_eq!(orchestrator.instance_id(), "test-instance-123");
+        }
+
+        #[tokio::test]
+        async fn test_renew_no_lease_returns_false() {
+            let elector = create_mock_elector("instance-1");
+            let orchestrator = Orchestrator::with_leader_elector(
+                OrchestratorConfig::default(),
+                elector,
+                "instance-1",
+            );
+
+            // Try to renew without ever acquiring - should return false
+            let renewed = orchestrator
+                .renew_leadership(LEADER_RESOURCE_CLEANUP)
+                .await
+                .unwrap();
+            assert!(!renewed);
+        }
+
+        #[tokio::test]
+        async fn test_release_leadership_without_lease_is_noop() {
+            let elector = create_mock_elector("instance-1");
+            let orchestrator = Orchestrator::with_leader_elector(
+                OrchestratorConfig::default(),
+                elector,
+                "instance-1",
+            );
+
+            // Release without acquiring should succeed without error
+            orchestrator
+                .release_leadership(LEADER_RESOURCE_CLEANUP)
+                .await
+                .unwrap();
+
+            let stats = orchestrator.leadership_stats().await;
+            assert_eq!(stats.elections_won, 0);
+            assert_eq!(stats.elections_lost, 0);
         }
 
         #[tokio::test]

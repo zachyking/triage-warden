@@ -461,4 +461,563 @@ mod tests {
         store.set_healthy(false);
         assert!(!store.health_check().await);
     }
+
+    // ============================================================
+    // Batch Operation Tests
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_upsert_batch_multiple_documents() {
+        let store = MockVectorStore::new();
+        let config = CollectionConfig::new(4).with_cosine();
+        store.create_collection("test", config).await.unwrap();
+
+        let records = vec![
+            VectorRecord::new(
+                "v1",
+                vec![1.0, 0.0, 0.0, 0.0],
+                VectorMetadata::new().with_field("name", json!("first")),
+            ),
+            VectorRecord::new(
+                "v2",
+                vec![0.0, 1.0, 0.0, 0.0],
+                VectorMetadata::new().with_field("name", json!("second")),
+            ),
+            VectorRecord::new(
+                "v3",
+                vec![0.0, 0.0, 1.0, 0.0],
+                VectorMetadata::new().with_field("name", json!("third")),
+            ),
+        ];
+
+        store.upsert_batch("test", records).await.unwrap();
+
+        // All three should be retrievable
+        let r1 = store.get("test", "v1").await.unwrap().unwrap();
+        assert_eq!(r1.metadata.get_str("name"), Some("first"));
+
+        let r2 = store.get("test", "v2").await.unwrap().unwrap();
+        assert_eq!(r2.metadata.get_str("name"), Some("second"));
+
+        let r3 = store.get("test", "v3").await.unwrap().unwrap();
+        assert_eq!(r3.metadata.get_str("name"), Some("third"));
+
+        // Verify collection info
+        let info = store.collection_info("test").await.unwrap();
+        assert_eq!(info.vectors_count, 3);
+    }
+
+    #[tokio::test]
+    async fn test_upsert_batch_empty() {
+        let store = MockVectorStore::new();
+        let config = CollectionConfig::new(4);
+        store.create_collection("test", config).await.unwrap();
+
+        // Empty batch should succeed
+        store.upsert_batch("test", vec![]).await.unwrap();
+
+        let info = store.collection_info("test").await.unwrap();
+        assert_eq!(info.vectors_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_upsert_batch_partial_dimension_mismatch() {
+        let store = MockVectorStore::new();
+        let config = CollectionConfig::new(4);
+        store.create_collection("test", config).await.unwrap();
+
+        let records = vec![
+            VectorRecord::new("good1", vec![1.0, 0.0, 0.0, 0.0], VectorMetadata::new()),
+            VectorRecord::new("bad1", vec![1.0, 0.0], VectorMetadata::new()), // Wrong dimension
+            VectorRecord::new("good2", vec![0.0, 1.0, 0.0, 0.0], VectorMetadata::new()),
+        ];
+
+        let err = store.upsert_batch("test", records).await.unwrap_err();
+        assert!(matches!(
+            err,
+            VectorStoreError::PartialBatchFailure {
+                failed_count: 1,
+                total_count: 3,
+                ..
+            }
+        ));
+
+        // The valid records should still have been inserted
+        assert!(store.get("test", "good1").await.unwrap().is_some());
+        assert!(store.get("test", "good2").await.unwrap().is_some());
+        assert!(store.get("test", "bad1").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_upsert_batch_nonexistent_collection() {
+        let store = MockVectorStore::new();
+
+        let records = vec![VectorRecord::new("v1", vec![1.0], VectorMetadata::new())];
+
+        let err = store
+            .upsert_batch("nonexistent", records)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, VectorStoreError::CollectionNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn test_upsert_batch_overwrites_existing() {
+        let store = MockVectorStore::new();
+        let config = CollectionConfig::new(4);
+        store.create_collection("test", config).await.unwrap();
+
+        // Insert initial record
+        store
+            .upsert(
+                "test",
+                "v1",
+                &[1.0, 0.0, 0.0, 0.0],
+                VectorMetadata::new().with_field("ver", json!("old")),
+            )
+            .await
+            .unwrap();
+
+        // Batch upsert with same ID should overwrite
+        let records = vec![VectorRecord::new(
+            "v1",
+            vec![0.0, 1.0, 0.0, 0.0],
+            VectorMetadata::new().with_field("ver", json!("new")),
+        )];
+        store.upsert_batch("test", records).await.unwrap();
+
+        let record = store.get("test", "v1").await.unwrap().unwrap();
+        assert_eq!(record.metadata.get_str("ver"), Some("new"));
+        assert_eq!(record.embedding, vec![0.0, 1.0, 0.0, 0.0]);
+    }
+
+    // ============================================================
+    // Delete Batch Tests
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_delete_batch_multiple_ids() {
+        let store = MockVectorStore::new();
+        let config = CollectionConfig::new(4);
+        store.create_collection("test", config).await.unwrap();
+
+        // Insert several records
+        for i in 0..5 {
+            store
+                .upsert(
+                    "test",
+                    &format!("v{}", i),
+                    &[1.0, 0.0, 0.0, 0.0],
+                    VectorMetadata::new(),
+                )
+                .await
+                .unwrap();
+        }
+
+        // Delete a subset
+        store.delete_batch("test", &["v1", "v3"]).await.unwrap();
+
+        // Check deleted
+        assert!(store.get("test", "v1").await.unwrap().is_none());
+        assert!(store.get("test", "v3").await.unwrap().is_none());
+
+        // Check retained
+        assert!(store.get("test", "v0").await.unwrap().is_some());
+        assert!(store.get("test", "v2").await.unwrap().is_some());
+        assert!(store.get("test", "v4").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_delete_batch_empty() {
+        let store = MockVectorStore::new();
+        let config = CollectionConfig::new(4);
+        store.create_collection("test", config).await.unwrap();
+
+        store
+            .upsert("test", "v1", &[1.0, 0.0, 0.0, 0.0], VectorMetadata::new())
+            .await
+            .unwrap();
+
+        // Empty delete batch should be a no-op
+        store.delete_batch("test", &[]).await.unwrap();
+
+        assert!(store.get("test", "v1").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_delete_batch_nonexistent_ids() {
+        let store = MockVectorStore::new();
+        let config = CollectionConfig::new(4);
+        store.create_collection("test", config).await.unwrap();
+
+        store
+            .upsert("test", "v1", &[1.0, 0.0, 0.0, 0.0], VectorMetadata::new())
+            .await
+            .unwrap();
+
+        // Deleting non-existent IDs should not error
+        store
+            .delete_batch("test", &["nonexistent1", "nonexistent2"])
+            .await
+            .unwrap();
+
+        // Existing record should be unaffected
+        assert!(store.get("test", "v1").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_delete_batch_nonexistent_collection() {
+        let store = MockVectorStore::new();
+
+        let err = store
+            .delete_batch("nonexistent", &["v1"])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, VectorStoreError::CollectionNotFound(_)));
+    }
+
+    // ============================================================
+    // Get with Non-Existent IDs
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_get_nonexistent_id() {
+        let store = MockVectorStore::new();
+        let config = CollectionConfig::new(4);
+        store.create_collection("test", config).await.unwrap();
+
+        let result = store.get("test", "does-not-exist").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_nonexistent_collection() {
+        let store = MockVectorStore::new();
+
+        let err = store.get("nonexistent", "v1").await.unwrap_err();
+        assert!(matches!(err, VectorStoreError::CollectionNotFound(_)));
+    }
+
+    // ============================================================
+    // Filtered Search Tests
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_search_with_in_filter() {
+        let store = MockVectorStore::new();
+        let config = CollectionConfig::new(4).with_cosine();
+        store.create_collection("test", config).await.unwrap();
+
+        let embedding = vec![1.0, 0.0, 0.0, 0.0];
+
+        store
+            .upsert(
+                "test",
+                "high",
+                &embedding,
+                VectorMetadata::new().with_field("severity", json!("high")),
+            )
+            .await
+            .unwrap();
+        store
+            .upsert(
+                "test",
+                "medium",
+                &embedding,
+                VectorMetadata::new().with_field("severity", json!("medium")),
+            )
+            .await
+            .unwrap();
+        store
+            .upsert(
+                "test",
+                "low",
+                &embedding,
+                VectorMetadata::new().with_field("severity", json!("low")),
+            )
+            .await
+            .unwrap();
+
+        let filter = SearchFilter::In {
+            field: "severity".to_string(),
+            values: vec![json!("high"), json!("medium")],
+        };
+
+        let results = store
+            .search("test", &embedding, 10, Some(filter))
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 2);
+
+        let ids: Vec<&str> = results.iter().map(|r| r.id.as_str()).collect();
+        assert!(ids.contains(&"high"));
+        assert!(ids.contains(&"medium"));
+    }
+
+    #[tokio::test]
+    async fn test_search_with_and_filter() {
+        let store = MockVectorStore::new();
+        let config = CollectionConfig::new(4).with_cosine();
+        store.create_collection("test", config).await.unwrap();
+
+        let embedding = vec![1.0, 0.0, 0.0, 0.0];
+
+        store
+            .upsert(
+                "test",
+                "match",
+                &embedding,
+                VectorMetadata::new()
+                    .with_field("type", json!("incident"))
+                    .with_field("severity", json!("high")),
+            )
+            .await
+            .unwrap();
+
+        store
+            .upsert(
+                "test",
+                "partial",
+                &embedding,
+                VectorMetadata::new()
+                    .with_field("type", json!("incident"))
+                    .with_field("severity", json!("low")),
+            )
+            .await
+            .unwrap();
+
+        let filter = SearchFilter::And(vec![
+            SearchFilter::equals("type", "incident"),
+            SearchFilter::equals("severity", "high"),
+        ]);
+
+        let results = store
+            .search("test", &embedding, 10, Some(filter))
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "match");
+    }
+
+    #[tokio::test]
+    async fn test_search_with_not_filter() {
+        let store = MockVectorStore::new();
+        let config = CollectionConfig::new(4).with_cosine();
+        store.create_collection("test", config).await.unwrap();
+
+        let embedding = vec![1.0, 0.0, 0.0, 0.0];
+
+        store
+            .upsert(
+                "test",
+                "keep",
+                &embedding,
+                VectorMetadata::new().with_field("status", json!("active")),
+            )
+            .await
+            .unwrap();
+
+        store
+            .upsert(
+                "test",
+                "exclude",
+                &embedding,
+                VectorMetadata::new().with_field("status", json!("archived")),
+            )
+            .await
+            .unwrap();
+
+        let filter = SearchFilter::Not(Box::new(SearchFilter::equals("status", "archived")));
+
+        let results = store
+            .search("test", &embedding, 10, Some(filter))
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "keep");
+    }
+
+    // ============================================================
+    // Search with Different top_k Values
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_search_top_k_limits_results() {
+        let store = MockVectorStore::new();
+        let config = CollectionConfig::new(4).with_cosine();
+        store.create_collection("test", config).await.unwrap();
+
+        // Insert 10 vectors
+        for i in 0..10 {
+            let mut embedding = vec![0.0; 4];
+            embedding[0] = 1.0 - (i as f32 * 0.1);
+            embedding[1] = i as f32 * 0.1;
+            store
+                .upsert(
+                    "test",
+                    &format!("v{}", i),
+                    &embedding,
+                    VectorMetadata::new(),
+                )
+                .await
+                .unwrap();
+        }
+
+        let query = vec![1.0, 0.0, 0.0, 0.0];
+
+        // top_k = 1
+        let results = store.search("test", &query, 1, None).await.unwrap();
+        assert_eq!(results.len(), 1);
+
+        // top_k = 3
+        let results = store.search("test", &query, 3, None).await.unwrap();
+        assert_eq!(results.len(), 3);
+
+        // top_k = 5
+        let results = store.search("test", &query, 5, None).await.unwrap();
+        assert_eq!(results.len(), 5);
+
+        // top_k larger than collection size
+        let results = store.search("test", &query, 100, None).await.unwrap();
+        assert_eq!(results.len(), 10);
+    }
+
+    #[tokio::test]
+    async fn test_search_top_k_zero() {
+        let store = MockVectorStore::new();
+        let config = CollectionConfig::new(4).with_cosine();
+        store.create_collection("test", config).await.unwrap();
+
+        store
+            .upsert("test", "v1", &[1.0, 0.0, 0.0, 0.0], VectorMetadata::new())
+            .await
+            .unwrap();
+
+        let results = store
+            .search("test", &[1.0, 0.0, 0.0, 0.0], 0, None)
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    // ============================================================
+    // Distance Metric Tests
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_search_euclid_distance() {
+        let store = MockVectorStore::new();
+        let config = CollectionConfig::new(4).with_euclid();
+        store.create_collection("test", config).await.unwrap();
+
+        store
+            .upsert(
+                "test",
+                "close",
+                &[1.0, 0.1, 0.0, 0.0],
+                VectorMetadata::new(),
+            )
+            .await
+            .unwrap();
+        store
+            .upsert("test", "far", &[0.0, 0.0, 1.0, 1.0], VectorMetadata::new())
+            .await
+            .unwrap();
+
+        let query = vec![1.0, 0.0, 0.0, 0.0];
+        let results = store.search("test", &query, 2, None).await.unwrap();
+
+        // "close" should have higher similarity score (closer distance)
+        assert_eq!(results[0].id, "close");
+        assert_eq!(results[1].id, "far");
+        assert!(results[0].score > results[1].score);
+    }
+
+    #[tokio::test]
+    async fn test_search_dot_product() {
+        let store = MockVectorStore::new();
+        let config = CollectionConfig::new(4).with_dot();
+        store.create_collection("test", config).await.unwrap();
+
+        store
+            .upsert(
+                "test",
+                "high_dot",
+                &[2.0, 0.0, 0.0, 0.0],
+                VectorMetadata::new(),
+            )
+            .await
+            .unwrap();
+        store
+            .upsert(
+                "test",
+                "low_dot",
+                &[0.1, 0.0, 0.0, 0.0],
+                VectorMetadata::new(),
+            )
+            .await
+            .unwrap();
+
+        let query = vec![1.0, 0.0, 0.0, 0.0];
+        let results = store.search("test", &query, 2, None).await.unwrap();
+
+        // high_dot should come first (dot product 2.0 vs 0.1)
+        assert_eq!(results[0].id, "high_dot");
+        assert!((results[0].score - 2.0).abs() < 0.001);
+        assert!((results[1].score - 0.1).abs() < 0.001);
+    }
+
+    // ============================================================
+    // Collection Operations
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_collection_count() {
+        let store = MockVectorStore::new();
+        assert_eq!(store.collection_count(), 0);
+
+        store
+            .create_collection("a", CollectionConfig::new(4))
+            .await
+            .unwrap();
+        assert_eq!(store.collection_count(), 1);
+
+        store
+            .create_collection("b", CollectionConfig::new(8))
+            .await
+            .unwrap();
+        assert_eq!(store.collection_count(), 2);
+
+        store.delete_collection("a").await.unwrap();
+        assert_eq!(store.collection_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_collection_info_reflects_vectors() {
+        let store = MockVectorStore::new();
+        let config = CollectionConfig::new(4).with_cosine().with_on_disk(true);
+        store.create_collection("test", config).await.unwrap();
+
+        let info = store.collection_info("test").await.unwrap();
+        assert_eq!(info.name, "test");
+        assert_eq!(info.dimension, 4);
+        assert_eq!(info.distance, DistanceMetric::Cosine);
+        assert!(info.on_disk);
+        assert_eq!(info.vectors_count, 0);
+
+        store
+            .upsert("test", "v1", &[1.0, 0.0, 0.0, 0.0], VectorMetadata::new())
+            .await
+            .unwrap();
+
+        let info = store.collection_info("test").await.unwrap();
+        assert_eq!(info.vectors_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_default_mock_vector_store() {
+        let store = MockVectorStore::default();
+        assert!(store.health_check().await);
+        assert_eq!(store.collection_count(), 0);
+    }
 }
