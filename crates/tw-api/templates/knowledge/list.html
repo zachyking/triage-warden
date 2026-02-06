@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+
+{% block title %}Knowledge Base - Triage Warden{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Knowledge Base</h1>
+    <p class="page-subtitle">Playbooks, procedures, and incident documentation</p>
+  </div>
+</div>
+
+<!-- Search & Filters -->
+<div class="toolbar">
+  <div class="search-box" style="width: 400px;">
+    <svg class="search-box-icon" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+    </svg>
+    <input type="text"
+           name="q"
+           value="{{ query }}"
+           placeholder="Search articles, procedures, runbooks..."
+           hx-get="/knowledge"
+           hx-trigger="input changed delay:300ms"
+           hx-target="body"
+           hx-push-url="true"
+           hx-include="[name='type_filter']">
+  </div>
+  <div class="filter-group">
+    <button class="filter-btn{% if type_filter.is_empty() %} active{% endif %}"
+            name="type_filter"
+            value=""
+            hx-get="/knowledge"
+            hx-push-url="true"
+            hx-target="body"
+            hx-include="[name='q']">All</button>
+    <button class="filter-btn{% if type_filter == "playbook" %} active{% endif %}"
+            name="type_filter"
+            value="playbook"
+            hx-get="/knowledge"
+            hx-push-url="true"
+            hx-target="body"
+            hx-include="[name='q']">Playbooks</button>
+    <button class="filter-btn{% if type_filter == "runbook" %} active{% endif %}"
+            name="type_filter"
+            value="runbook"
+            hx-get="/knowledge"
+            hx-push-url="true"
+            hx-target="body"
+            hx-include="[name='q']">Runbooks</button>
+    <button class="filter-btn{% if type_filter == "procedure" %} active{% endif %}"
+            name="type_filter"
+            value="procedure"
+            hx-get="/knowledge"
+            hx-push-url="true"
+            hx-target="body"
+            hx-include="[name='q']">Procedures</button>
+    <button class="filter-btn{% if type_filter == "reference" %} active{% endif %}"
+            name="type_filter"
+            value="reference"
+            hx-get="/knowledge"
+            hx-push-url="true"
+            hx-target="body"
+            hx-include="[name='q']">Reference</button>
+  </div>
+</div>
+
+<!-- Articles Grid -->
+<div class="grid grid-3 gap-4" id="knowledge-articles">
+  {% for article in articles %}
+  <a href="/knowledge/{{ article.id }}" class="knowledge-card" hx-get="/knowledge/{{ article.id }}" hx-push-url="true" hx-target="body">
+    <div class="knowledge-card-header">
+      <span class="badge badge-kb-{{ article.article_type }}">{{ article.article_type }}</span>
+      <span class="text-xs text-muted">{{ article.updated_at }}</span>
+    </div>
+    <h3 class="knowledge-card-title">{{ article.title }}</h3>
+    <p class="knowledge-card-excerpt">{{ article.excerpt }}</p>
+    {% if !article.tags.is_empty() %}
+    <div class="knowledge-card-tags">
+      {% for tag in article.tags %}
+      <span class="knowledge-tag">{{ tag }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </a>
+  {% endfor %}
+  {% if articles.is_empty() %}
+  <div class="empty-state col-span-full">
+    <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <path d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
+    </svg>
+    <div class="empty-state-title">No articles found</div>
+    <div class="empty-state-text">Try adjusting your search or filters.</div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.querySelectorAll('.filter-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+      this.classList.add('active');
+    });
+  });
+</script>
+{% endblock %}

@@ -26,6 +26,8 @@
         {% if approval_count > 0 %}<span class="nav-badge">{{ approval_count }}</span>{% endif %}
       </a>
       <a href="/playbooks" class="nav-link{% if active_nav == "playbooks" %} active{% endif %}">Playbooks</a>
+      <a href="/knowledge" class="nav-link{% if active_nav == "knowledge" %} active{% endif %}">Knowledge</a>
+      <a href="/analytics" class="nav-link{% if active_nav == "analytics" %} active{% endif %}">Analytics</a>
       <a href="/settings" class="nav-link{% if active_nav == "settings" %} active{% endif %}">Settings</a>
     </div>
     <div class="nav-right">
@@ -88,6 +90,16 @@
   <div class="container">
     {% block content %}{% endblock %}
   </div>
+
+  <!-- Chat Sidebar Toggle -->
+  <button class="chat-toggle-btn" onclick="document.getElementById('chat-sidebar').classList.toggle('open')" title="AI Assistant">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+    </svg>
+  </button>
+
+  <!-- NL Chat Sidebar -->
+  {% include "partials/nl_chat.html" %}
 
   <!-- Modal Container (HTMX will inject modals here) -->
   <div id="modal-container"></div>
@@ -182,6 +194,31 @@
 
     document.body.addEventListener('htmx:sendError', function(e) {
       showToast('error', 'Network Error', 'Unable to connect to the server. Please check your connection and try again.');
+    });
+
+    // Chat helper: append user message bubble before HTMX sends the request
+    window.appendUserMessage = function(text) {
+      const container = document.getElementById('chat-messages');
+      if (!container) return;
+      const msg = document.createElement('div');
+      msg.className = 'chat-message user';
+      msg.innerHTML = '<div class="chat-message-content">' + text.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>';
+      container.appendChild(msg);
+      container.scrollTop = container.scrollHeight;
+    };
+
+    // Show/hide typing indicator
+    document.body.addEventListener('htmx:beforeRequest', function(e) {
+      const indicator = document.getElementById('chat-typing');
+      if (indicator && e.detail.elt.closest && e.detail.elt.closest('.chat-input-area')) {
+        indicator.style.display = 'flex';
+      }
+    });
+    document.body.addEventListener('htmx:afterRequest', function(e) {
+      const indicator = document.getElementById('chat-typing');
+      if (indicator) indicator.style.display = 'none';
+      const container = document.getElementById('chat-messages');
+      if (container) container.scrollTop = container.scrollHeight;
     });
 
   </script>

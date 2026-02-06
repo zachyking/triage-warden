@@ -1,0 +1,29 @@
+<div class="activity-item">
+  <div class="activity-icon {{ activity.activity_type }}">
+    {% if activity.activity_type == "alert" %}
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+      <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+    </svg>
+    {% else if activity.activity_type == "comment" %}
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+    </svg>
+    {% else %}
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+    </svg>
+    {% endif %}
+  </div>
+  <div class="activity-content">
+    <div class="activity-description">
+      <span class="activity-actor">{{ activity.actor }}</span> {{ activity.description }}
+      {% if let Some(title) = activity.incident_title %}
+      {% if let Some(iid) = activity.incident_id %}
+      <a href="/incidents/{{ iid }}" class="activity-link">{{ title }}</a>
+      {% endif %}
+      {% endif %}
+    </div>
+    <div class="activity-time text-xs text-muted">{{ activity.timestamp }}</div>
+  </div>
+</div>

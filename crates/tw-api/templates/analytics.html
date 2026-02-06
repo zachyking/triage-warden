@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+
+{% block title %}Analytics - Triage Warden{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Analytics</h1>
+    <p class="page-subtitle">Security operations metrics and insights</p>
+  </div>
+</div>
+
+<!-- KPI Cards -->
+<div class="kpi-grid analytics-kpis">
+  <div class="kpi-card">
+    <div class="kpi-label">Total Incidents</div>
+    <div class="kpi-value">{{ kpis.total_incidents }}</div>
+    <div class="kpi-trend">All time</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Mean Time to Detect</div>
+    <div class="kpi-value accent">{{ kpis.mttd_minutes }}m</div>
+    <div class="kpi-trend">Average MTTD</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Mean Time to Respond</div>
+    <div class="kpi-value accent">{{ kpis.mttr_minutes }}m</div>
+    <div class="kpi-trend">Average MTTR</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">AI Accuracy</div>
+    <div class="kpi-value{% if kpis.ai_accuracy_pct >= 90 %} text-success{% else if kpis.ai_accuracy_pct >= 70 %} accent{% else %} text-critical{% endif %}">{{ kpis.ai_accuracy_pct }}%</div>
+    <div class="kpi-trend">Based on analyst feedback</div>
+  </div>
+</div>
+
+<div class="grid grid-2 gap-4">
+  <!-- Incident Trend Chart -->
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Incident Trend</h3>
+    </div>
+    <div class="card-body">
+      {% if !incident_trend.is_empty() %}
+      <div class="bar-chart">
+        {% for point in incident_trend %}
+        <div class="bar-chart-item">
+          <div class="bar-chart-bar-container">
+            <div class="bar-chart-bar" style="height: {{ point.count }}%;"></div>
+          </div>
+          <div class="bar-chart-label">{{ point.label }}</div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty-state">
+        <div class="empty-state-text">Not enough data to display trends.</div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Top MITRE Techniques -->
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Top MITRE ATT&CK Techniques</h3>
+    </div>
+    <div class="card-body no-padding">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Technique</th>
+            <th>Name</th>
+            <th>Count</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for technique in top_techniques %}
+          <tr>
+            <td><code class="font-mono">{{ technique.id }}</code></td>
+            <td>{{ technique.name }}</td>
+            <td class="font-mono font-semibold">{{ technique.count }}</td>
+          </tr>
+          {% endfor %}
+          {% if top_techniques.is_empty() %}
+          <tr>
+            <td colspan="3">
+              <div class="empty-state">
+                <div class="empty-state-text">No technique data available.</div>
+              </div>
+            </td>
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Analyst Workload -->
+<div class="card mt-4">
+  <div class="card-header">
+    <h3 class="card-title">Analyst Workload</h3>
+  </div>
+  <div class="card-body no-padding">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Analyst</th>
+          <th>Assigned</th>
+          <th>Resolved</th>
+          <th>Completion Rate</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for analyst in analyst_workload %}
+        <tr>
+          <td class="font-semibold">{{ analyst.name }}</td>
+          <td class="font-mono">{{ analyst.assigned }}</td>
+          <td class="font-mono">{{ analyst.resolved }}</td>
+          <td>
+            {% if analyst.assigned > 0 %}
+            <div class="flex items-center gap-2">
+              <div class="progress-bar-container">
+                <div class="progress-bar" style="width: {{ analyst.resolved * 100 / analyst.assigned }}%;"></div>
+              </div>
+              <span class="font-mono text-xs">{{ analyst.resolved * 100 / analyst.assigned }}%</span>
+            </div>
+            {% else %}
+            <span class="text-muted">--</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        {% if analyst_workload.is_empty() %}
+        <tr>
+          <td colspan="4">
+            <div class="empty-state">
+              <div class="empty-state-text">No analyst data available.</div>
+            </div>
+          </td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Lessons Learned -->
+<div class="mt-4" hx-get="/web/partials/lessons" hx-trigger="load" hx-swap="innerHTML">
+  <div class="card">
+    <div class="card-body">
+      <div class="flex items-center justify-center p-4">
+        <span class="spinner"></span>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

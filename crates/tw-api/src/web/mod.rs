@@ -9,7 +9,7 @@ use axum::{
     extract::{Path, Query, State},
     response::{IntoResponse, Redirect, Response},
     routing::get,
-    Router,
+    Form, Router,
 };
 use chrono::{Duration, Utc};
 use serde::Deserialize;
@@ -84,6 +84,41 @@ pub fn create_web_router(state: AppState) -> Router {
             "/web/modals/playbook/:id/stage/:stage_index/step/:step_index/edit",
             get(modal_edit_step),
         )
+        // Stage 4: NL Chat
+        .route("/web/nl-query", axum::routing::post(web_nl_query))
+        // Stage 4: Incident Timeline & MITRE
+        .route(
+            "/web/partials/incidents/:id/timeline",
+            get(partials_incident_timeline),
+        )
+        .route("/web/partials/mitre-matrix", get(partials_mitre_matrix))
+        // Stage 4: Collaboration
+        .route(
+            "/web/partials/incidents/:id/comments",
+            get(partials_incident_comments),
+        )
+        .route(
+            "/web/incidents/:id/comments",
+            axum::routing::post(web_post_comment),
+        )
+        .route(
+            "/web/incidents/:id/comments/:comment_id",
+            axum::routing::delete(web_delete_comment),
+        )
+        .route(
+            "/web/partials/incidents/:id/assignment",
+            get(partials_incident_assignment),
+        )
+        .route(
+            "/web/incidents/:id/assign",
+            axum::routing::post(web_assign_incident),
+        )
+        .route("/web/partials/activity", get(partials_activity_feed))
+        // Stage 4: Knowledge & Analytics
+        .route("/knowledge", get(knowledge_list))
+        .route("/knowledge/:id", get(knowledge_detail))
+        .route("/analytics", get(analytics))
+        .route("/web/partials/lessons", get(partials_lessons))
         .with_state(state)
 }
 
@@ -989,6 +1024,424 @@ async fn modal_edit_step(
 }
 
 // ============================================
+// Stage 4: NL Chat Handlers
+// ============================================
+
+#[derive(Debug, Deserialize)]
+struct NlQueryForm {
+    query: String,
+}
+
+/// Handle NL query from chat sidebar; returns a chat message partial.
+async fn web_nl_query(
+    AuthenticatedUser(_user): AuthenticatedUser,
+    Form(form): Form<NlQueryForm>,
+) -> Result<impl IntoResponse, ApiError> {
+    // NL query engine runs in Python service; returns guided response for now
+    let response_content = format!(
+        "I understand you're asking about: \"{}\". The NL query engine is being connected. \
+         In the meantime, you can use the search bar and filters to find incidents.",
+        form.query
+    );
+    let suggestions = vec![
+        "Show critical incidents".to_string(),
+        "What are the top threats?".to_string(),
+    ];
+    let template = ChatMessageTemplate {
+        role: "assistant".to_string(),
+        content: response_content,
+        suggestions,
+    };
+    Ok(HtmlTemplate(template))
+}
+
+// ============================================
+// Stage 4: Incident Timeline & MITRE Handlers
+// ============================================
+
+/// Returns the incident timeline partial with color-coded events.
+async fn partials_incident_timeline(
+    State(state): State<AppState>,
+    AuthenticatedUser(_user): AuthenticatedUser,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    let audit_repo = create_audit_repository(&state.db);
+
+    let entries = audit_repo
+        .get_for_incident(DEFAULT_TENANT_ID, id)
+        .await
+        .unwrap_or_default();
+
+    let events: Vec<TimelineEvent> = entries
+        .into_iter()
+        .map(|e| {
+            let event_type = classify_timeline_event(&format!("{:?}", e.action));
+            TimelineEvent {
+                event_type,
+                title: format!("{:?}", e.action),
+                description: e.actor.clone(),
+                timestamp: e.timestamp.format("%H:%M:%S").to_string(),
+                severity: None,
+                details: e.details.map(|v| v.to_string()),
+            }
+        })
+        .collect();
+
+    let template = IncidentTimelineTemplate { events };
+    Ok(HtmlTemplate(template))
+}
+
+/// Classifies an audit action into a timeline event type for styling.
+fn classify_timeline_event(action: &str) -> String {
+    let lower = action.to_lowercase();
+    if lower.contains("alert") || lower.contains("creat") || lower.contains("new") {
+        "alert".to_string()
+    } else if lower.contains("enrich") {
+        "enrichment".to_string()
+    } else if lower.contains("analy") || lower.contains("triage") {
+        "analysis".to_string()
+    } else if lower.contains("action")
+        || lower.contains("execut")
+        || lower.contains("approv")
+        || lower.contains("resolv")
+    {
+        "action".to_string()
+    } else if lower.contains("comment") || lower.contains("note") {
+        "comment".to_string()
+    } else {
+        "alert".to_string()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct MitreMatrixQuery {
+    #[serde(default)]
+    incident_id: Option<Uuid>,
+}
+
+/// Returns the MITRE ATT&CK matrix partial.
+async fn partials_mitre_matrix(
+    State(state): State<AppState>,
+    AuthenticatedUser(_user): AuthenticatedUser,
+    Query(query): Query<MitreMatrixQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let mut detected_techniques: Vec<(String, String)> = Vec::new();
+
+    // If an incident_id is provided, fetch its techniques
+    if let Some(id) = query.incident_id {
+        let repo = create_incident_repository(&state.db);
+        if let Ok(Some(incident)) = repo.get(id).await {
+            if let Some(analysis) = &incident.analysis {
+                for t in &analysis.mitre_techniques {
+                    detected_techniques.push((t.id.clone(), t.name.clone()));
+                }
+            }
+        }
+    }
+
+    // Build a simplified MITRE matrix with common tactics
+    let tactics = build_mitre_tactics(&detected_techniques);
+
+    let template = MitreMatrixTemplate { tactics };
+    Ok(HtmlTemplate(template))
+}
+
+// ============================================
+// Stage 4: Collaboration Handlers
+// ============================================
+
+/// Returns the comments section for an incident.
+async fn partials_incident_comments(
+    AuthenticatedUser(_user): AuthenticatedUser,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    // Comments are not yet persisted; will be wired to the comment store
+    let template = CommentThreadTemplate {
+        incident_id: id,
+        comments: vec![],
+    };
+    Ok(HtmlTemplate(template))
+}
+
+#[derive(Debug, Deserialize)]
+struct PostCommentForm {
+    content: String,
+    #[serde(default = "default_comment_type")]
+    comment_type: String,
+}
+
+fn default_comment_type() -> String {
+    "note".to_string()
+}
+
+/// Post a new comment on an incident.
+async fn web_post_comment(
+    AuthenticatedUser(user): AuthenticatedUser,
+    Path(id): Path<Uuid>,
+    Form(form): Form<PostCommentForm>,
+) -> Result<impl IntoResponse, ApiError> {
+    // Return a new comment item partial
+    let comment = CommentData {
+        id: Uuid::new_v4(),
+        author: user.username.clone(),
+        content: form.content,
+        comment_type: form.comment_type,
+        created_at: "just now".to_string(),
+        is_own: true,
+    };
+    let template = CommentItemTemplate {
+        comment,
+        incident_id: id,
+    };
+    Ok(HtmlTemplate(template))
+}
+
+/// Delete a comment from an incident.
+async fn web_delete_comment(
+    AuthenticatedUser(_user): AuthenticatedUser,
+    Path((_id, _comment_id)): Path<(Uuid, Uuid)>,
+) -> Result<impl IntoResponse, ApiError> {
+    // Comment deletion not yet persisted; returns empty to remove from DOM
+    Ok("")
+}
+
+/// Returns the assignment picker partial for an incident.
+async fn partials_incident_assignment(
+    AuthenticatedUser(_user): AuthenticatedUser,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    // Assignment not yet persisted; shows available users from static list
+    let template = AssignmentPickerTemplate {
+        incident_id: id,
+        current_assignee: None,
+        available_users: vec![
+            "admin".to_string(),
+            "analyst1".to_string(),
+            "analyst2".to_string(),
+        ],
+    };
+    Ok(HtmlTemplate(template))
+}
+
+#[derive(Debug, Deserialize)]
+struct AssignForm {
+    assignee: String,
+}
+
+/// Assign an incident to a user.
+async fn web_assign_incident(
+    AuthenticatedUser(user): AuthenticatedUser,
+    Path(id): Path<Uuid>,
+    Form(form): Form<AssignForm>,
+) -> Result<impl IntoResponse, ApiError> {
+    let assignee = if form.assignee == "me" {
+        Some(user.username.clone())
+    } else if form.assignee.is_empty() {
+        None
+    } else {
+        Some(form.assignee)
+    };
+
+    let template = AssignmentPickerTemplate {
+        incident_id: id,
+        current_assignee: assignee,
+        available_users: vec![
+            "admin".to_string(),
+            "analyst1".to_string(),
+            "analyst2".to_string(),
+        ],
+    };
+    Ok(HtmlTemplate(template))
+}
+
+/// Returns the global activity feed partial.
+async fn partials_activity_feed(
+    State(state): State<AppState>,
+    AuthenticatedUser(_user): AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
+    // Fetch recent audit entries as activity
+    let audit_repo = create_audit_repository(&state.db);
+    let entries = audit_repo
+        .get_recent_for_tenant(DEFAULT_TENANT_ID, 20)
+        .await
+        .unwrap_or_default();
+
+    let activities: Vec<ActivityData> = entries
+        .into_iter()
+        .map(|(incident_id, e)| {
+            let activity_type = classify_timeline_event(&format!("{:?}", e.action));
+            ActivityData {
+                activity_type,
+                description: format!("{:?}", e.action),
+                actor: e.actor,
+                timestamp: format_time_ago(e.timestamp),
+                incident_id: Some(incident_id),
+                incident_title: None,
+            }
+        })
+        .collect();
+
+    let template = ActivityFeedTemplate { activities };
+    Ok(HtmlTemplate(template))
+}
+
+// ============================================
+// Stage 4: Knowledge & Analytics Handlers
+// ============================================
+
+#[derive(Debug, Deserialize)]
+struct KnowledgeQuery {
+    #[serde(default)]
+    q: String,
+    #[serde(default)]
+    type_filter: String,
+}
+
+/// Knowledge base listing page.
+async fn knowledge_list(
+    State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
+    Query(query): Query<KnowledgeQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let repo = create_incident_repository(&state.db);
+    let nav = fetch_nav_counts(repo.as_ref()).await;
+
+    // Knowledge articles not yet persisted; will be wired to the knowledge store
+    let articles: Vec<KnowledgeArticle> = vec![];
+
+    let template = KnowledgeListTemplate {
+        active_nav: "knowledge".to_string(),
+        critical_count: nav.critical_count,
+        open_count: nav.open_count,
+        approval_count: nav.approval_count,
+        system_healthy: true,
+        current_user: Some(user_to_current_info(&user)),
+        articles,
+        query: query.q,
+        type_filter: query.type_filter,
+    };
+
+    Ok(HtmlTemplate(template))
+}
+
+/// Knowledge base article detail page.
+async fn knowledge_detail(
+    State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
+    Path(id): Path<Uuid>,
+) -> Result<Response, ApiError> {
+    let repo = create_incident_repository(&state.db);
+    let nav = fetch_nav_counts(repo.as_ref()).await;
+
+    // Article store not yet wired; shows placeholder
+    let article = KnowledgeArticleDetail {
+        id,
+        title: "Article not found".to_string(),
+        article_type: "reference".to_string(),
+        tags: vec![],
+        content: "This article could not be found. The knowledge base is being populated."
+            .to_string(),
+        author: "System".to_string(),
+        created_at: "N/A".to_string(),
+        updated_at: "N/A".to_string(),
+    };
+
+    let template = KnowledgeDetailTemplate {
+        active_nav: "knowledge".to_string(),
+        critical_count: nav.critical_count,
+        open_count: nav.open_count,
+        approval_count: nav.approval_count,
+        system_healthy: true,
+        current_user: Some(user_to_current_info(&user)),
+        article,
+    };
+
+    Ok(HtmlTemplate(template).into_response())
+}
+
+/// Analytics dashboard page.
+async fn analytics(
+    State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
+    let repo = create_incident_repository(&state.db);
+    let nav = fetch_nav_counts(repo.as_ref()).await;
+
+    let total_incidents = repo.count(&IncidentFilter::default()).await.unwrap_or(0) as u32;
+
+    // Count resolved incidents to estimate AI accuracy
+    let resolved_filter = IncidentFilter {
+        status: Some(vec![IncidentStatus::Resolved, IncidentStatus::Closed]),
+        ..Default::default()
+    };
+    let resolved_count = repo.count(&resolved_filter).await.unwrap_or(0) as u32;
+    let ai_accuracy_pct = if total_incidents > 0 && resolved_count > 0 {
+        ((resolved_count as f64 / total_incidents as f64) * 100.0).min(100.0) as u32
+    } else {
+        0
+    };
+
+    let kpis = AnalyticsKpis {
+        total_incidents,
+        mttd_minutes: 0,
+        mttr_minutes: 0,
+        ai_accuracy_pct,
+    };
+
+    // Extract MITRE techniques from recent incidents
+    let recent_pagination = Pagination {
+        page: 1,
+        per_page: 50,
+    };
+    let recent_incidents = repo
+        .list(&IncidentFilter::default(), &recent_pagination)
+        .await
+        .unwrap_or_default();
+
+    let mut technique_counts: std::collections::HashMap<(String, String), u32> =
+        std::collections::HashMap::new();
+    for incident in &recent_incidents {
+        if let Some(analysis) = &incident.analysis {
+            for t in &analysis.mitre_techniques {
+                *technique_counts
+                    .entry((t.id.clone(), t.name.clone()))
+                    .or_insert(0) += 1;
+            }
+        }
+    }
+    let mut top_techniques: Vec<TopTechnique> = technique_counts
+        .into_iter()
+        .map(|((id, name), count)| TopTechnique { id, name, count })
+        .collect();
+    top_techniques.sort_by(|a, b| b.count.cmp(&a.count));
+    top_techniques.truncate(10);
+
+    let template = AnalyticsTemplate {
+        active_nav: "analytics".to_string(),
+        critical_count: nav.critical_count,
+        open_count: nav.open_count,
+        approval_count: nav.approval_count,
+        system_healthy: true,
+        current_user: Some(user_to_current_info(&user)),
+        kpis,
+        top_techniques,
+        analyst_workload: vec![],
+        incident_trend: vec![],
+    };
+
+    Ok(HtmlTemplate(template))
+}
+
+/// Returns the lessons learned table partial.
+async fn partials_lessons(
+    AuthenticatedUser(_user): AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
+    // Lessons not yet persisted; will be wired to the lessons store
+    let template = LessonsTableTemplate { lessons: vec![] };
+    Ok(HtmlTemplate(template))
+}
+
+// ============================================
 // Data Fetching Helpers
 // ============================================
 
@@ -1313,6 +1766,130 @@ fn convert_incident_to_detail(
 // ============================================
 // Utility Functions
 // ============================================
+
+type TacticDef = (
+    &'static str,
+    &'static str,
+    Vec<(&'static str, &'static str)>,
+);
+
+/// Builds a simplified MITRE ATT&CK tactic/technique structure for display.
+fn build_mitre_tactics(detected: &[(String, String)]) -> Vec<MitreTactic> {
+    // Common MITRE ATT&CK tactics with well-known techniques
+    let tactic_defs: Vec<TacticDef> = vec![
+        (
+            "TA0001",
+            "Initial Access",
+            vec![
+                ("T1566", "Phishing"),
+                ("T1190", "Exploit Public App"),
+                ("T1133", "External Remote Svc"),
+            ],
+        ),
+        (
+            "TA0002",
+            "Execution",
+            vec![
+                ("T1059", "Command & Script"),
+                ("T1204", "User Execution"),
+                ("T1053", "Scheduled Task"),
+            ],
+        ),
+        (
+            "TA0003",
+            "Persistence",
+            vec![
+                ("T1547", "Boot/Logon Autostart"),
+                ("T1136", "Create Account"),
+                ("T1078", "Valid Accounts"),
+            ],
+        ),
+        (
+            "TA0004",
+            "Privilege Escalation",
+            vec![
+                ("T1548", "Abuse Elevation"),
+                ("T1134", "Access Token Manip"),
+                ("T1078", "Valid Accounts"),
+            ],
+        ),
+        (
+            "TA0005",
+            "Defense Evasion",
+            vec![
+                ("T1070", "Indicator Removal"),
+                ("T1036", "Masquerading"),
+                ("T1027", "Obfuscated Files"),
+            ],
+        ),
+        (
+            "TA0006",
+            "Credential Access",
+            vec![
+                ("T1110", "Brute Force"),
+                ("T1003", "OS Credential Dump"),
+                ("T1555", "Credentials from Store"),
+            ],
+        ),
+        (
+            "TA0007",
+            "Discovery",
+            vec![
+                ("T1087", "Account Discovery"),
+                ("T1046", "Network Svc Scan"),
+                ("T1057", "Process Discovery"),
+            ],
+        ),
+        (
+            "TA0008",
+            "Lateral Movement",
+            vec![
+                ("T1021", "Remote Services"),
+                ("T1534", "Internal Phishing"),
+                ("T1080", "Taint Shared Content"),
+            ],
+        ),
+        (
+            "TA0010",
+            "Exfiltration",
+            vec![
+                ("T1041", "Exfil Over C2"),
+                ("T1048", "Exfil Over Alt Proto"),
+                ("T1567", "Exfil Over Web Svc"),
+            ],
+        ),
+        (
+            "TA0040",
+            "Impact",
+            vec![
+                ("T1486", "Data Encrypted"),
+                ("T1489", "Service Stop"),
+                ("T1490", "Inhibit Recovery"),
+            ],
+        ),
+    ];
+
+    tactic_defs
+        .into_iter()
+        .map(|(tid, tname, techs)| MitreTactic {
+            id: tid.to_string(),
+            name: tname.to_string(),
+            techniques: techs
+                .into_iter()
+                .map(|(tech_id, tech_name)| {
+                    let highlighted = detected.iter().any(|(d_id, _)| d_id.starts_with(tech_id));
+                    let count = if highlighted { 1 } else { 0 };
+                    MitreTechniqueCell {
+                        id: tech_id.to_string(),
+                        name: tech_name.to_string(),
+                        count,
+                        highlighted,
+                    }
+                })
+                .collect(),
+        })
+        .collect()
+}
 
 fn parse_severity(s: &str) -> Option<Vec<Severity>> {
     match s.to_lowercase().as_str() {

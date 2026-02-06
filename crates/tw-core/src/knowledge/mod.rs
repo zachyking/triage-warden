@@ -71,6 +71,12 @@ pub enum KnowledgeType {
     PostMortem,
     /// External tool or service documentation.
     VendorDocumentation,
+    /// Threat actor or campaign profiles.
+    ThreatProfile,
+    /// Best practice guides and recommendations.
+    BestPractice,
+    /// Tool usage and configuration guides.
+    ToolGuide,
 }
 
 impl KnowledgeType {
@@ -82,6 +88,9 @@ impl KnowledgeType {
             KnowledgeType::SecurityPolicy => "security_policy",
             KnowledgeType::PostMortem => "post_mortem",
             KnowledgeType::VendorDocumentation => "vendor_documentation",
+            KnowledgeType::ThreatProfile => "threat_profile",
+            KnowledgeType::BestPractice => "best_practice",
+            KnowledgeType::ToolGuide => "tool_guide",
         }
     }
 
@@ -93,6 +102,9 @@ impl KnowledgeType {
             "security_policy" => Some(KnowledgeType::SecurityPolicy),
             "post_mortem" => Some(KnowledgeType::PostMortem),
             "vendor_documentation" => Some(KnowledgeType::VendorDocumentation),
+            "threat_profile" => Some(KnowledgeType::ThreatProfile),
+            "best_practice" => Some(KnowledgeType::BestPractice),
+            "tool_guide" => Some(KnowledgeType::ToolGuide),
             _ => None,
         }
     }
@@ -105,6 +117,9 @@ impl KnowledgeType {
             KnowledgeType::SecurityPolicy,
             KnowledgeType::PostMortem,
             KnowledgeType::VendorDocumentation,
+            KnowledgeType::ThreatProfile,
+            KnowledgeType::BestPractice,
+            KnowledgeType::ToolGuide,
         ]
     }
 
@@ -116,6 +131,9 @@ impl KnowledgeType {
             KnowledgeType::SecurityPolicy => "Organizational security policies",
             KnowledgeType::PostMortem => "Post-incident analysis and lessons learned",
             KnowledgeType::VendorDocumentation => "External tool or service documentation",
+            KnowledgeType::ThreatProfile => "Threat actor or campaign profiles",
+            KnowledgeType::BestPractice => "Best practice guides and recommendations",
+            KnowledgeType::ToolGuide => "Tool usage and configuration guides",
         }
     }
 }
@@ -772,6 +790,186 @@ pub struct KnowledgeStats {
 }
 
 // ============================================================================
+// Article Status & Enhanced Knowledge Article
+// ============================================================================
+
+/// Status of a knowledge article.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArticleStatus {
+    /// Article is in draft form, not yet published.
+    Draft,
+    /// Article is published and visible.
+    Published,
+    /// Article has been archived (still accessible but not in default searches).
+    Archived,
+    /// Article is deprecated and should not be used.
+    Deprecated,
+}
+
+impl ArticleStatus {
+    /// Returns the string representation.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ArticleStatus::Draft => "draft",
+            ArticleStatus::Published => "published",
+            ArticleStatus::Archived => "archived",
+            ArticleStatus::Deprecated => "deprecated",
+        }
+    }
+
+    /// Parse from string.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "draft" => Some(ArticleStatus::Draft),
+            "published" => Some(ArticleStatus::Published),
+            "archived" => Some(ArticleStatus::Archived),
+            "deprecated" => Some(ArticleStatus::Deprecated),
+            _ => None,
+        }
+    }
+
+    /// Returns all statuses.
+    pub fn all() -> &'static [ArticleStatus] {
+        &[
+            ArticleStatus::Draft,
+            ArticleStatus::Published,
+            ArticleStatus::Archived,
+            ArticleStatus::Deprecated,
+        ]
+    }
+}
+
+impl fmt::Display for ArticleStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// An enhanced knowledge article with richer metadata.
+///
+/// Extends `KnowledgeDocument` with relational fields for incidents,
+/// MITRE techniques, authorship, and lifecycle status.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeArticle {
+    /// The underlying knowledge document.
+    #[serde(flatten)]
+    pub document: KnowledgeDocument,
+
+    /// Related incident IDs.
+    #[serde(default)]
+    pub related_incidents: Vec<Uuid>,
+
+    /// Related MITRE ATT&CK technique IDs (e.g., "T1566.001").
+    #[serde(default)]
+    pub related_techniques: Vec<String>,
+
+    /// Author user ID.
+    #[serde(default)]
+    pub author_id: Option<Uuid>,
+
+    /// Article lifecycle status.
+    #[serde(default = "default_article_status")]
+    pub status: ArticleStatus,
+}
+
+fn default_article_status() -> ArticleStatus {
+    ArticleStatus::Draft
+}
+
+impl KnowledgeArticle {
+    /// Create a new knowledge article from a document.
+    pub fn from_document(document: KnowledgeDocument) -> Self {
+        Self {
+            document,
+            related_incidents: Vec::new(),
+            related_techniques: Vec::new(),
+            author_id: None,
+            status: ArticleStatus::Draft,
+        }
+    }
+
+    /// Set related incidents.
+    pub fn with_related_incidents(mut self, incidents: Vec<Uuid>) -> Self {
+        self.related_incidents = incidents;
+        self
+    }
+
+    /// Set related MITRE techniques.
+    pub fn with_related_techniques(mut self, techniques: Vec<String>) -> Self {
+        self.related_techniques = techniques;
+        self
+    }
+
+    /// Set the author.
+    pub fn with_author(mut self, author_id: Uuid) -> Self {
+        self.author_id = Some(author_id);
+        self
+    }
+
+    /// Set the status.
+    pub fn with_status(mut self, status: ArticleStatus) -> Self {
+        self.status = status;
+        self
+    }
+
+    /// Publish the article.
+    pub fn publish(&mut self) {
+        self.status = ArticleStatus::Published;
+        self.document.updated_at = Utc::now();
+    }
+
+    /// Archive the article.
+    pub fn archive(&mut self) {
+        self.status = ArticleStatus::Archived;
+        self.document.updated_at = Utc::now();
+    }
+}
+
+// ============================================================================
+// Knowledge Search Query
+// ============================================================================
+
+/// A structured search query for knowledge documents.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct KnowledgeSearchQuery {
+    /// Search text.
+    pub text: String,
+
+    /// Optional filters.
+    #[serde(default)]
+    pub filters: KnowledgeFilters,
+
+    /// Maximum results to return.
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// Filters for knowledge search.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct KnowledgeFilters {
+    /// Filter by article types.
+    #[serde(default)]
+    pub article_types: Option<Vec<KnowledgeType>>,
+
+    /// Filter by tags.
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+
+    /// Filter by date range (start).
+    #[serde(default)]
+    pub date_from: Option<DateTime<Utc>>,
+
+    /// Filter by date range (end).
+    #[serde(default)]
+    pub date_to: Option<DateTime<Utc>>,
+
+    /// Filter by article status.
+    #[serde(default)]
+    pub status: Option<Vec<ArticleStatus>>,
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -792,6 +990,9 @@ mod tests {
             KnowledgeType::VendorDocumentation.as_str(),
             "vendor_documentation"
         );
+        assert_eq!(KnowledgeType::ThreatProfile.as_str(), "threat_profile");
+        assert_eq!(KnowledgeType::BestPractice.as_str(), "best_practice");
+        assert_eq!(KnowledgeType::ToolGuide.as_str(), "tool_guide");
     }
 
     #[test]
@@ -804,7 +1005,28 @@ mod tests {
             KnowledgeType::parse("threat_intel_report"),
             Some(KnowledgeType::ThreatIntelReport)
         );
+        assert_eq!(
+            KnowledgeType::parse("threat_profile"),
+            Some(KnowledgeType::ThreatProfile)
+        );
+        assert_eq!(
+            KnowledgeType::parse("best_practice"),
+            Some(KnowledgeType::BestPractice)
+        );
+        assert_eq!(
+            KnowledgeType::parse("tool_guide"),
+            Some(KnowledgeType::ToolGuide)
+        );
         assert_eq!(KnowledgeType::parse("invalid"), None);
+    }
+
+    #[test]
+    fn test_knowledge_type_all_includes_new_types() {
+        let all = KnowledgeType::all();
+        assert_eq!(all.len(), 8);
+        assert!(all.contains(&KnowledgeType::ThreatProfile));
+        assert!(all.contains(&KnowledgeType::BestPractice));
+        assert!(all.contains(&KnowledgeType::ToolGuide));
     }
 
     #[test]
@@ -953,5 +1175,139 @@ mod tests {
         assert_eq!(metadata.get_str("knowledge_type"), Some("runbook"));
         assert_eq!(metadata.get_str("title"), Some("Test Doc"));
         assert_eq!(metadata.get_bool("is_active"), Some(true));
+    }
+
+    // ========================================================================
+    // Article Status Tests
+    // ========================================================================
+
+    #[test]
+    fn test_article_status_serialization() {
+        assert_eq!(ArticleStatus::Draft.as_str(), "draft");
+        assert_eq!(ArticleStatus::Published.as_str(), "published");
+        assert_eq!(ArticleStatus::Archived.as_str(), "archived");
+        assert_eq!(ArticleStatus::Deprecated.as_str(), "deprecated");
+    }
+
+    #[test]
+    fn test_article_status_parse() {
+        assert_eq!(ArticleStatus::parse("draft"), Some(ArticleStatus::Draft));
+        assert_eq!(
+            ArticleStatus::parse("published"),
+            Some(ArticleStatus::Published)
+        );
+        assert_eq!(
+            ArticleStatus::parse("archived"),
+            Some(ArticleStatus::Archived)
+        );
+        assert_eq!(
+            ArticleStatus::parse("deprecated"),
+            Some(ArticleStatus::Deprecated)
+        );
+        assert_eq!(ArticleStatus::parse("invalid"), None);
+    }
+
+    #[test]
+    fn test_article_status_all() {
+        assert_eq!(ArticleStatus::all().len(), 4);
+    }
+
+    // ========================================================================
+    // Knowledge Article Tests
+    // ========================================================================
+
+    #[test]
+    fn test_knowledge_article_from_document() {
+        let tenant_id = Uuid::new_v4();
+        let doc = KnowledgeDocument::new(
+            tenant_id,
+            KnowledgeType::BestPractice,
+            "MFA Best Practices",
+            "Always use MFA for admin accounts.",
+        );
+
+        let article = KnowledgeArticle::from_document(doc);
+
+        assert_eq!(article.document.doc_type, KnowledgeType::BestPractice);
+        assert_eq!(article.status, ArticleStatus::Draft);
+        assert!(article.related_incidents.is_empty());
+        assert!(article.related_techniques.is_empty());
+        assert!(article.author_id.is_none());
+    }
+
+    #[test]
+    fn test_knowledge_article_builder() {
+        let tenant_id = Uuid::new_v4();
+        let author_id = Uuid::new_v4();
+        let incident_id = Uuid::new_v4();
+        let doc = KnowledgeDocument::new(
+            tenant_id,
+            KnowledgeType::ThreatProfile,
+            "APT29 Profile",
+            "APT29 overview content.",
+        );
+
+        let article = KnowledgeArticle::from_document(doc)
+            .with_author(author_id)
+            .with_related_incidents(vec![incident_id])
+            .with_related_techniques(vec!["T1059".to_string(), "T1071".to_string()])
+            .with_status(ArticleStatus::Published);
+
+        assert_eq!(article.author_id, Some(author_id));
+        assert_eq!(article.related_incidents, vec![incident_id]);
+        assert_eq!(article.related_techniques.len(), 2);
+        assert_eq!(article.status, ArticleStatus::Published);
+    }
+
+    #[test]
+    fn test_knowledge_article_publish_archive() {
+        let tenant_id = Uuid::new_v4();
+        let doc = KnowledgeDocument::new(
+            tenant_id,
+            KnowledgeType::ToolGuide,
+            "Splunk Guide",
+            "How to use Splunk.",
+        );
+
+        let mut article = KnowledgeArticle::from_document(doc);
+        assert_eq!(article.status, ArticleStatus::Draft);
+
+        article.publish();
+        assert_eq!(article.status, ArticleStatus::Published);
+
+        article.archive();
+        assert_eq!(article.status, ArticleStatus::Archived);
+    }
+
+    // ========================================================================
+    // Search Query / Filters Tests
+    // ========================================================================
+
+    #[test]
+    fn test_knowledge_search_query_default() {
+        let query = KnowledgeSearchQuery {
+            text: "phishing playbook".to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(query.text, "phishing playbook");
+        assert!(query.filters.article_types.is_none());
+        assert!(query.filters.tags.is_none());
+        assert!(query.limit.is_none());
+    }
+
+    #[test]
+    fn test_knowledge_filters() {
+        let filters = KnowledgeFilters {
+            article_types: Some(vec![KnowledgeType::Runbook, KnowledgeType::BestPractice]),
+            tags: Some(vec!["phishing".to_string()]),
+            date_from: None,
+            date_to: None,
+            status: Some(vec![ArticleStatus::Published]),
+        };
+
+        assert_eq!(filters.article_types.as_ref().unwrap().len(), 2);
+        assert_eq!(filters.tags.as_ref().unwrap().len(), 1);
+        assert_eq!(filters.status.as_ref().unwrap().len(), 1);
     }
 }

@@ -662,3 +662,241 @@ pub struct NotificationsPartialTemplate {
 #[derive(Template)]
 #[template(path = "partials/modal_add_api_key.html")]
 pub struct AddApiKeyModalTemplate;
+
+// ============================================
+// Stage 4: NL Chat
+// ============================================
+
+/// Chat message partial returned by NL query endpoint.
+#[derive(Template)]
+#[template(path = "partials/chat_message.html")]
+pub struct ChatMessageTemplate {
+    pub role: String,
+    pub content: String,
+    pub suggestions: Vec<String>,
+}
+
+// ============================================
+// Stage 4: Incident Timeline
+// ============================================
+
+/// Incident timeline partial with color-coded events.
+#[derive(Template)]
+#[template(path = "partials/incident_timeline.html")]
+pub struct IncidentTimelineTemplate {
+    pub events: Vec<TimelineEvent>,
+}
+
+pub struct TimelineEvent {
+    pub event_type: String,
+    pub title: String,
+    pub description: String,
+    pub timestamp: String,
+    pub severity: Option<String>,
+    pub details: Option<String>,
+}
+
+// ============================================
+// Stage 4: MITRE ATT&CK Matrix
+// ============================================
+
+/// MITRE ATT&CK matrix visualization partial.
+#[derive(Template)]
+#[template(path = "partials/mitre_matrix.html")]
+pub struct MitreMatrixTemplate {
+    pub tactics: Vec<MitreTactic>,
+}
+
+pub struct MitreTactic {
+    pub id: String,
+    pub name: String,
+    pub techniques: Vec<MitreTechniqueCell>,
+}
+
+pub struct MitreTechniqueCell {
+    pub id: String,
+    pub name: String,
+    pub count: u32,
+    pub highlighted: bool,
+}
+
+// ============================================
+// Stage 4: Collaboration UI
+// ============================================
+
+/// Comment thread partial for incident detail.
+#[derive(Template)]
+#[template(path = "partials/comment_thread.html")]
+pub struct CommentThreadTemplate {
+    pub incident_id: Uuid,
+    pub comments: Vec<CommentData>,
+}
+
+pub struct CommentData {
+    pub id: Uuid,
+    pub author: String,
+    pub content: String,
+    pub comment_type: String,
+    pub created_at: String,
+    pub is_own: bool,
+}
+
+/// Single comment item partial.
+#[derive(Template)]
+#[template(path = "partials/comment_item.html")]
+pub struct CommentItemTemplate {
+    pub comment: CommentData,
+    pub incident_id: Uuid,
+}
+
+/// Assignment picker partial.
+#[derive(Template)]
+#[template(path = "partials/assignment_picker.html")]
+pub struct AssignmentPickerTemplate {
+    pub incident_id: Uuid,
+    pub current_assignee: Option<String>,
+    pub available_users: Vec<String>,
+}
+
+/// Activity feed partial.
+#[derive(Template)]
+#[template(path = "partials/activity_feed.html")]
+pub struct ActivityFeedTemplate {
+    pub activities: Vec<ActivityData>,
+}
+
+pub struct ActivityData {
+    pub activity_type: String,
+    pub description: String,
+    pub actor: String,
+    pub timestamp: String,
+    pub incident_id: Option<Uuid>,
+    pub incident_title: Option<String>,
+}
+
+/// Single activity item partial.
+#[allow(dead_code)]
+#[derive(Template)]
+#[template(path = "partials/activity_item.html")]
+pub struct ActivityItemTemplate {
+    pub activity: ActivityData,
+}
+
+// ============================================
+// Stage 4: Knowledge Base
+// ============================================
+
+/// Knowledge base listing page.
+#[derive(Template)]
+#[template(path = "knowledge/list.html")]
+pub struct KnowledgeListTemplate {
+    pub active_nav: String,
+    pub critical_count: u32,
+    pub open_count: u32,
+    pub approval_count: u32,
+    pub system_healthy: bool,
+    pub current_user: Option<CurrentUserInfo>,
+    pub articles: Vec<KnowledgeArticle>,
+    pub query: String,
+    pub type_filter: String,
+}
+
+pub struct KnowledgeArticle {
+    pub id: Uuid,
+    pub title: String,
+    pub article_type: String,
+    pub tags: Vec<String>,
+    pub excerpt: String,
+    pub updated_at: String,
+}
+
+/// Knowledge base article detail page.
+#[derive(Template)]
+#[template(path = "knowledge/detail.html")]
+pub struct KnowledgeDetailTemplate {
+    pub active_nav: String,
+    pub critical_count: u32,
+    pub open_count: u32,
+    pub approval_count: u32,
+    pub system_healthy: bool,
+    pub current_user: Option<CurrentUserInfo>,
+    pub article: KnowledgeArticleDetail,
+}
+
+#[allow(dead_code)]
+pub struct KnowledgeArticleDetail {
+    pub id: Uuid,
+    pub title: String,
+    pub article_type: String,
+    pub tags: Vec<String>,
+    pub content: String,
+    pub author: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+// ============================================
+// Stage 4: Analytics
+// ============================================
+
+/// Analytics dashboard page.
+#[derive(Template)]
+#[template(path = "analytics.html")]
+pub struct AnalyticsTemplate {
+    pub active_nav: String,
+    pub critical_count: u32,
+    pub open_count: u32,
+    pub approval_count: u32,
+    pub system_healthy: bool,
+    pub current_user: Option<CurrentUserInfo>,
+    pub kpis: AnalyticsKpis,
+    pub top_techniques: Vec<TopTechnique>,
+    pub analyst_workload: Vec<AnalystWorkload>,
+    pub incident_trend: Vec<TrendPoint>,
+}
+
+pub struct AnalyticsKpis {
+    pub total_incidents: u32,
+    pub mttd_minutes: u32,
+    pub mttr_minutes: u32,
+    pub ai_accuracy_pct: u32,
+}
+
+pub struct TopTechnique {
+    pub id: String,
+    pub name: String,
+    pub count: u32,
+}
+
+pub struct AnalystWorkload {
+    pub name: String,
+    pub assigned: u32,
+    pub resolved: u32,
+}
+
+pub struct TrendPoint {
+    pub label: String,
+    pub count: u32,
+}
+
+// ============================================
+// Stage 4: Lessons Learned
+// ============================================
+
+/// Lessons learned table partial.
+#[derive(Template)]
+#[template(path = "partials/lessons_table.html")]
+pub struct LessonsTableTemplate {
+    pub lessons: Vec<LessonData>,
+}
+
+#[allow(dead_code)]
+pub struct LessonData {
+    pub id: Uuid,
+    pub title: String,
+    pub category: String,
+    pub status: String,
+    pub incident_id: Option<Uuid>,
+    pub incident_title: Option<String>,
+    pub created_at: String,
+}

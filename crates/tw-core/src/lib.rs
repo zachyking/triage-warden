@@ -5,10 +5,12 @@
 //! This crate provides the central orchestration loop, incident data models,
 //! workflow state machine, and event bus for the Triage Warden system.
 
+pub mod analytics;
 pub mod asset_store;
 pub mod auth;
 pub mod cache;
 pub mod calibration;
+pub mod collaboration;
 pub mod connector;
 pub mod crypto;
 pub mod custom_ioc;
@@ -19,6 +21,7 @@ pub mod feedback;
 pub mod incident;
 pub mod knowledge;
 pub mod leadership;
+pub mod lesson;
 pub mod messaging;
 pub mod models;
 pub mod notification;
@@ -35,6 +38,18 @@ pub mod workflow;
 
 #[cfg(feature = "database")]
 pub mod db;
+
+// Analytics exports
+pub use analytics::{
+    AnalystMetrics, AnalyticsTimeRange, Granularity, IncidentMetrics, SecurityPosture,
+    TechniqueCount, TrendDataPoint as AnalyticsTrendDataPoint,
+};
+
+// Lesson exports
+pub use lesson::{
+    CreateLessonRequest, LessonCategory, LessonFilter, LessonLearned, LessonStatus,
+    UpdateLessonRequest,
+};
 
 pub use connector::{ConnectorConfig, ConnectorStatus, ConnectorType};
 pub use events::{
@@ -153,12 +168,12 @@ pub use calibration::{
 
 // Knowledge base exports
 pub use knowledge::{
-    CreateKnowledgeDocument, DocumentExtractor, DocumentFormat, DocumentMetadata,
-    ExtractedDocument, ExtractionConfig, ExtractionError, ExtractionResult,
+    ArticleStatus, CreateKnowledgeDocument, DocumentExtractor, DocumentFormat, DocumentMetadata,
+    ExtractedDocument, ExtractionConfig, ExtractionError, ExtractionResult, KnowledgeArticle,
     KnowledgeCollectionStats, KnowledgeDocument, KnowledgeEmbeddingConfig,
-    KnowledgeEmbeddingService, KnowledgeFilter, KnowledgeIndexStats, KnowledgeSearchResult,
-    KnowledgeStats, KnowledgeType, UpdateKnowledgeDocument, KNOWLEDGE_COLLECTION,
-    MAX_KNOWLEDGE_TEXT_LENGTH,
+    KnowledgeEmbeddingService, KnowledgeFilter, KnowledgeFilters, KnowledgeIndexStats,
+    KnowledgeSearchQuery, KnowledgeSearchResult, KnowledgeStats, KnowledgeType,
+    UpdateKnowledgeDocument, KNOWLEDGE_COLLECTION, MAX_KNOWLEDGE_TEXT_LENGTH,
 };
 
 // Asset & Identity Context Store exports
@@ -186,6 +201,15 @@ pub use custom_ioc::{
 pub use sandbox_pipeline::{
     ArtifactType, IncidentArtifact, PipelineStatus, PipelineSubmission, SandboxSubmissionRule,
     SeverityFilter, SubmissionQueue,
+};
+
+// Collaboration exports
+pub use collaboration::handoff::{ActionSummary, IncidentSummary};
+pub use collaboration::{
+    ActivityEntry, ActivityFilter, ActivityType, AssigneeTarget, AssignmentCondition,
+    AssignmentEngine, AutoAssignmentRule, CommentType, CreateCommentRequest, FieldChange,
+    IncidentAssignment, IncidentComment, RealtimeEvent, RealtimeSubscription, ShiftHandoff,
+    ShiftHandoffRequest, SubscriptionFilter, UpdateCommentRequest,
 };
 
 #[cfg(feature = "vector-store")]

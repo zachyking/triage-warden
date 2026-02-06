@@ -1,0 +1,63 @@
+<div class="comment-thread" id="comment-thread">
+  <div class="comment-list" id="comment-list">
+    {% for comment in comments %}
+    <div class="comment-item" id="comment-{{ comment.id }}">
+      <div class="comment-header">
+        <div class="flex items-center gap-2">
+          <span class="comment-avatar">{{ comment.author.chars().next().unwrap_or('?') }}</span>
+          <span class="comment-author">{{ comment.author }}</span>
+          <span class="badge badge-comment-{{ comment.comment_type }}">{{ comment.comment_type }}</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="comment-time text-xs text-muted">{{ comment.created_at }}</span>
+          {% if comment.is_own %}
+          <button class="btn btn-ghost btn-sm"
+                  hx-delete="/web/incidents/{{ incident_id }}/comments/{{ comment.id }}"
+                  hx-target="#comment-{{ comment.id }}"
+                  hx-swap="outerHTML"
+                  hx-confirm="Delete this comment?">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
+            </svg>
+          </button>
+          {% endif %}
+        </div>
+      </div>
+      <div class="comment-body">{{ comment.content }}</div>
+    </div>
+    {% endfor %}
+    {% if comments.is_empty() %}
+    <div class="empty-state" id="comments-empty">
+      <div class="empty-state-text">No comments yet. Start the conversation.</div>
+    </div>
+    {% endif %}
+  </div>
+
+  <form class="comment-form"
+        hx-post="/web/incidents/{{ incident_id }}/comments"
+        hx-target="#comment-list"
+        hx-swap="beforeend"
+        hx-on::after-request="this.reset(); document.getElementById('comments-empty')?.remove()">
+    <div class="form-group mb-2">
+      <textarea name="content"
+                class="form-input form-textarea comment-textarea"
+                placeholder="Add a comment..."
+                rows="2"
+                required></textarea>
+    </div>
+    <div class="flex justify-between items-center">
+      <select name="comment_type" class="form-input form-select comment-type-select">
+        <option value="note">Note</option>
+        <option value="finding">Finding</option>
+        <option value="question">Question</option>
+        <option value="action_taken">Action Taken</option>
+      </select>
+      <button type="submit" class="btn btn-primary btn-sm">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+        </svg>
+        Comment
+      </button>
+    </div>
+  </form>
+</div>

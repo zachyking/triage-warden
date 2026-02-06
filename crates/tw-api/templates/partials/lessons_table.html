@@ -1,0 +1,50 @@
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">Lessons Learned</h3>
+  </div>
+  <div class="card-body no-padding">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Title</th>
+          <th>Category</th>
+          <th>Status</th>
+          <th>Linked Incident</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for lesson in lessons %}
+        <tr>
+          <td class="font-semibold">{{ lesson.title }}</td>
+          <td><span class="badge badge-info">{{ lesson.category }}</span></td>
+          <td>
+            <span class="badge badge-{% if lesson.status == "open" %}high{% else if lesson.status == "in_progress" %}medium{% else %}success{% endif %}">{{ lesson.status }}</span>
+          </td>
+          <td>
+            {% if let Some(iid) = lesson.incident_id %}
+            {% if let Some(title) = lesson.incident_title %}
+            <a href="/incidents/{{ iid }}" class="text-accent">{{ title }}</a>
+            {% else %}
+            <a href="/incidents/{{ iid }}" class="text-accent font-mono text-xs">{{ iid }}</a>
+            {% endif %}
+            {% else %}
+            <span class="text-muted">--</span>
+            {% endif %}
+          </td>
+          <td class="text-xs text-muted">{{ lesson.created_at }}</td>
+        </tr>
+        {% endfor %}
+        {% if lessons.is_empty() %}
+        <tr>
+          <td colspan="5">
+            <div class="empty-state">
+              <div class="empty-state-text">No lessons recorded yet.</div>
+            </div>
+          </td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>

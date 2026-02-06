@@ -1,0 +1,43 @@
+<div class="chat-sidebar" id="chat-sidebar">
+  <div class="chat-header">
+    <h3 class="chat-title">AI Assistant</h3>
+    <button class="btn btn-ghost btn-sm" onclick="document.getElementById('chat-sidebar').classList.remove('open')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M6 18L18 6M6 6l12 12"/>
+      </svg>
+    </button>
+  </div>
+  <div class="chat-messages" id="chat-messages">
+    <div class="chat-message assistant">
+      <div class="chat-message-content">
+        How can I help you investigate? Try asking questions like "Show me all critical incidents from last week" or "What MITRE techniques are most common?"
+      </div>
+    </div>
+  </div>
+  <div class="chat-input-area">
+    <form hx-post="/web/nl-query"
+          hx-target="#chat-messages"
+          hx-swap="beforeend"
+          hx-indicator="#chat-typing"
+          hx-on::before-request="this.querySelector('input').value && appendUserMessage(this.querySelector('input').value)"
+          hx-on::after-request="this.reset()">
+      <div class="chat-input-row">
+        <input type="text"
+               name="query"
+               class="form-input chat-input"
+               placeholder="Ask a question..."
+               autocomplete="off"
+               required>
+        <button type="submit" class="btn btn-primary">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+          </svg>
+        </button>
+      </div>
+    </form>
+    <div class="chat-typing" id="chat-typing" style="display:none;">
+      <span class="spinner spinner-sm"></span>
+      <span class="text-xs text-muted">Thinking...</span>
+    </div>
+  </div>
+</div>

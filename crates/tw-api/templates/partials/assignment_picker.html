@@ -1,0 +1,48 @@
+<div class="assignment-picker" id="assignment-picker">
+  <div class="assignment-current">
+    <span class="text-xs text-muted">Assigned to:</span>
+    {% match current_assignee %}
+    {% when Some with (assignee) %}
+    <span class="assignment-name">
+      <span class="comment-avatar sm">{{ assignee.chars().next().unwrap_or('?') }}</span>
+      {{ assignee }}
+    </span>
+    {% when None %}
+    <span class="text-secondary text-sm">Unassigned</span>
+    {% endmatch %}
+  </div>
+  <div class="assignment-actions">
+    <button class="btn btn-secondary btn-sm"
+            hx-post="/web/incidents/{{ incident_id }}/assign"
+            hx-vals='{"assignee": "me"}'
+            hx-target="#assignment-picker"
+            hx-swap="outerHTML">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/>
+        <circle cx="12" cy="7" r="4"/>
+      </svg>
+      Take Ownership
+    </button>
+    <div class="assignment-dropdown">
+      <button class="btn btn-ghost btn-sm" onclick="this.parentElement.classList.toggle('open')">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M6 9l6 6 6-6"/>
+        </svg>
+      </button>
+      <div class="assignment-dropdown-menu">
+        {% for user in available_users %}
+        <button class="dropdown-item"
+                hx-post="/web/incidents/{{ incident_id }}/assign"
+                hx-vals='{"assignee": "{{ user }}"}'
+                hx-target="#assignment-picker"
+                hx-swap="outerHTML">{{ user }}</button>
+        {% endfor %}
+        <button class="dropdown-item dropdown-item-danger"
+                hx-post="/web/incidents/{{ incident_id }}/assign"
+                hx-vals='{"assignee": ""}'
+                hx-target="#assignment-picker"
+                hx-swap="outerHTML">Unassign</button>
+      </div>
+    </div>
+  </div>
+</div>

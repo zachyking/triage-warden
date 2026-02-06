@@ -23,7 +23,13 @@
       </p>
     </div>
   </div>
-  <div class="flex gap-2">
+  <div class="flex items-center gap-3">
+    <!-- Assignment Picker -->
+    <div hx-get="/web/partials/incidents/{{ incident.id }}/assignment"
+         hx-trigger="load"
+         hx-swap="innerHTML"
+         id="assignment-container">
+    </div>
     {% if incident.status != "resolved" %}
     <button class="btn btn-primary btn-lg"
             hx-post="/api/incidents/{{ incident.id }}/actions"
@@ -99,6 +105,25 @@
         {% endif %}
       </div>
     </div>
+    {% endif %}
+
+    <!-- MITRE ATT&CK Matrix View -->
+    {% if let Some(analysis) = incident.analysis %}
+    {% if !analysis.mitre_techniques.is_empty() %}
+    <div class="card mb-4">
+      <div class="card-header">
+        <h3 class="card-title">MITRE ATT&CK Coverage</h3>
+      </div>
+      <div class="card-body"
+           hx-get="/web/partials/mitre-matrix?incident_id={{ incident.id }}"
+           hx-trigger="load"
+           hx-swap="innerHTML">
+        <div class="flex items-center justify-center p-4">
+          <span class="spinner"></span>
+        </div>
+      </div>
+    </div>
+    {% endif %}
     {% endif %}
 
     <!-- Enrichments -->
@@ -264,12 +289,16 @@
     </div>
     {% endif %}
 
-    <!-- Audit Timeline -->
-    <div class="card">
+    <!-- Enhanced Activity Timeline -->
+    <div class="card mb-4">
       <div class="card-header">
         <h3 class="card-title">Activity Timeline</h3>
       </div>
-      <div class="card-body">
+      <div class="card-body"
+           hx-get="/web/partials/incidents/{{ incident.id }}/timeline"
+           hx-trigger="load"
+           hx-swap="innerHTML">
+        <!-- Fallback to existing audit log while HTMX loads -->
         <div class="timeline">
           {% for entry in incident.audit_log %}
           <div class="timeline-item{% if loop.first %} active{% endif %}{% if entry.action == "resolved" %} success{% endif %}">
@@ -286,6 +315,21 @@
             <div class="empty-state-text">No activity recorded yet.</div>
           </div>
           {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Comments Section -->
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Comments</h3>
+      </div>
+      <div class="card-body"
+           hx-get="/web/partials/incidents/{{ incident.id }}/comments"
+           hx-trigger="load"
+           hx-swap="innerHTML">
+        <div class="flex items-center justify-center p-4">
+          <span class="spinner"></span>
         </div>
       </div>
     </div>

@@ -1,0 +1,16 @@
+<div class="chat-message {{ role }}">
+  <div class="chat-message-content">{{ content }}</div>
+  {% if !suggestions.is_empty() %}
+  <div class="chat-suggestions">
+    {% for suggestion in suggestions %}
+    <button class="btn btn-ghost btn-sm chat-suggestion"
+            hx-post="/web/nl-query"
+            hx-target="#chat-messages"
+            hx-swap="beforeend"
+            hx-vals='{"query": "{{ suggestion }}"}'
+            hx-indicator="#chat-typing"
+            onclick="appendUserMessage('{{ suggestion }}')">{{ suggestion }}</button>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>

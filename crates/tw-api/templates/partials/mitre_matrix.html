@@ -1,0 +1,35 @@
+<div class="mitre-matrix">
+  {% for tactic in tactics %}
+  <div class="mitre-column">
+    <div class="mitre-tactic-header">
+      <div class="mitre-tactic-name">{{ tactic.name }}</div>
+      <div class="mitre-tactic-id text-xs text-muted">{{ tactic.id }}</div>
+    </div>
+    <div class="mitre-techniques">
+      {% for technique in tactic.techniques %}
+      <div class="mitre-cell{% if technique.highlighted %} highlighted{% endif %}"
+           hx-get="/incidents?mitre={{ technique.id }}"
+           hx-push-url="true"
+           hx-target="body"
+           title="{{ technique.id }}: {{ technique.name }} ({{ technique.count }} incidents)">
+        <div class="mitre-cell-name">{{ technique.name }}</div>
+        {% if technique.count > 0 %}
+        <div class="mitre-cell-count">{{ technique.count }}</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+      {% if tactic.techniques.is_empty() %}
+      <div class="mitre-cell empty">
+        <span class="text-xs text-muted">No techniques</span>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+  {% if tactics.is_empty() %}
+  <div class="empty-state col-span-full">
+    <div class="empty-state-title">No MITRE ATT&CK data</div>
+    <div class="empty-state-text">Technique mappings will appear after AI analysis.</div>
+  </div>
+  {% endif %}
+</div>

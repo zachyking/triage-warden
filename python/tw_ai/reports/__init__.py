@@ -4,7 +4,7 @@ This module provides functionality to generate structured investigation reports
 from incident data and AI triage analysis. Reports include executive summaries,
 evidence tables, MITRE ATT&CK mappings, and recommended actions.
 
-Stage 2.1.3 Implementation.
+Also provides post-incident report generation (Stage 4.4.1).
 """
 
 from tw_ai.reports.formatters import (
@@ -21,12 +21,18 @@ from tw_ai.reports.models import (
     ReportFormat,
     ReportMetadata,
 )
+from tw_ai.reports.post_incident import (
+    PostIncidentReport,
+    PostIncidentReportGenerator,
+)
 
 __all__ = [
     # Generator
     "InvestigationReportGenerator",
+    "PostIncidentReportGenerator",
     # Models
     "InvestigationReport",
+    "PostIncidentReport",
     "ReportFormat",
     "ReportMetadata",
     # Formatters

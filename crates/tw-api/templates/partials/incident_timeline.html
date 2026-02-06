@@ -1,0 +1,31 @@
+<div class="timeline incident-timeline">
+  {% for event in events %}
+  <div class="timeline-item {{ event.event_type }}{% if loop.first %} active{% endif %}">
+    <div class="timeline-dot"></div>
+    <div class="timeline-content">
+      <div class="flex items-center gap-2 mb-1">
+        <span class="timeline-time">{{ event.timestamp }}</span>
+        <span class="badge badge-timeline-{{ event.event_type }}">{{ event.event_type }}</span>
+        {% if let Some(severity) = event.severity %}
+        <span class="badge badge-{{ severity }}">{{ severity }}</span>
+        {% endif %}
+      </div>
+      <div class="timeline-title">{{ event.title }}</div>
+      <div class="timeline-description">{{ event.description }}</div>
+      {% if let Some(details) = event.details %}
+      <details class="timeline-details">
+        <summary class="text-xs text-muted">Show details</summary>
+        <div class="code-block mt-2">
+          <code>{{ details }}</code>
+        </div>
+      </details>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+  {% if events.is_empty() %}
+  <div class="empty-state">
+    <div class="empty-state-text">No timeline events recorded yet.</div>
+  </div>
+  {% endif %}
+</div>
