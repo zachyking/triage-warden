@@ -7,6 +7,7 @@ This module provides a natural language interface for querying security data:
 - Backend adapters for Splunk, Elasticsearch, and SQL
 - Conversation context tracking for multi-turn investigation
 - Query audit logging and sanitization
+- FastAPI endpoint for NL query service (requires fastapi)
 
 Public API:
     - NLQueryTranslator: Main translator from NL to structured queries
@@ -15,6 +16,7 @@ Public API:
     - ConversationContext: Track multi-turn conversation state
     - QueryAuditLog: Audit logging for queries
     - QuerySanitizer: Input sanitization
+    - router: FastAPI router for NL query API (only when fastapi is installed)
 """
 
 from tw_ai.nl_query.audit import (
@@ -44,7 +46,14 @@ from tw_ai.nl_query.translator import (
     TranslatedQuery,
 )
 
+try:
+    from tw_ai.nl_query.api import router
+except ImportError:
+    router = None
+
 __all__ = [
+    # API (requires fastapi)
+    "router",
     # Intent classification
     "QueryIntent",
     "IntentClassifier",

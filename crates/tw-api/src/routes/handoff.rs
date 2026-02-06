@@ -14,7 +14,11 @@ use validator::Validate;
 use crate::auth::RequireAnalyst;
 use crate::error::ApiError;
 use crate::state::AppState;
-use tw_core::collaboration::handoff::ShiftHandoff;
+use tw_core::collaboration::handoff::{IncidentSummary, ShiftHandoff};
+use tw_core::db::{
+    create_handoff_repository, create_incident_repository, IncidentFilter, Pagination,
+};
+use tw_core::incident::IncidentStatus;
 
 /// Creates handoff routes.
 pub fn routes() -> Router<AppState> {
@@ -81,7 +85,7 @@ pub struct HandoffResponse {
 
 /// Generate a new shift handoff report.
 async fn create_handoff(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(user): RequireAnalyst,
     Json(request): Json<CreateHandoffApiRequest>,
 ) -> Result<(StatusCode, Json<HandoffResponse>), ApiError> {
@@ -93,35 +97,88 @@ async fn create_handoff(
         ));
     }
 
-    let handoff = ShiftHandoff::new(
+    let tenant_id = tw_core::auth::DEFAULT_TENANT_ID;
+
+    let mut handoff = ShiftHandoff::new(
         request.shift_start,
         request.shift_end,
         user.id,
         user.username.clone(),
     );
 
-    let response = handoff_to_response(&handoff);
+    // Query open incidents to populate the handoff report
+    let incident_repo = create_incident_repository(&state.db);
+    let open_statuses = vec![
+        IncidentStatus::New,
+        IncidentStatus::Enriching,
+        IncidentStatus::Analyzing,
+        IncidentStatus::PendingReview,
+        IncidentStatus::PendingApproval,
+        IncidentStatus::Executing,
+    ];
+    let filter = IncidentFilter {
+        tenant_id: Some(tenant_id),
+        status: Some(open_statuses),
+        ..Default::default()
+    };
+    let pagination = Pagination::new(1, 100);
+    if let Ok(incidents) = incident_repo.list(&filter, &pagination).await {
+        for inc in incidents {
+            let title = inc
+                .alert_data
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Untitled Incident")
+                .to_string();
+            handoff.add_incident(IncidentSummary {
+                id: inc.id,
+                title,
+                severity: inc.severity.as_db_str().to_string(),
+                status: inc.status.as_db_str().to_string(),
+                assigned_to: None,
+                last_updated: inc.updated_at,
+            });
+        }
+    }
+
+    let handoff_repo = create_handoff_repository(&state.db);
+    let created = handoff_repo.create(tenant_id, &handoff).await?;
+
+    let response = handoff_to_response(&created);
     Ok((StatusCode::CREATED, Json(response)))
 }
 
 /// Get the most recently generated handoff report.
 async fn get_latest_handoff(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
 ) -> Result<Json<HandoffResponse>, ApiError> {
-    Err(ApiError::NotFound("No handoff reports found".to_string()))
+    let tenant_id = tw_core::auth::DEFAULT_TENANT_ID;
+    let repo = create_handoff_repository(&state.db);
+
+    let handoff = repo
+        .get_latest(tenant_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound("No handoff reports found".to_string()))?;
+
+    Ok(Json(handoff_to_response(&handoff)))
 }
 
 /// Get a specific handoff report by ID.
 async fn get_handoff(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
     Path(id): Path<Uuid>,
 ) -> Result<Json<HandoffResponse>, ApiError> {
-    Err(ApiError::NotFound(format!(
-        "Handoff report {} not found",
-        id
-    )))
+    let tenant_id = tw_core::auth::DEFAULT_TENANT_ID;
+    let repo = create_handoff_repository(&state.db);
+
+    let handoff = repo
+        .get_for_tenant(id, tenant_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Handoff report {} not found", id)))?;
+
+    Ok(Json(handoff_to_response(&handoff)))
 }
 
 // ============================================================================

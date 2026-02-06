@@ -7,7 +7,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::ToSchema;
@@ -20,6 +20,12 @@ use crate::state::AppState;
 use tw_core::analytics::{
     AnalystMetrics, Granularity, IncidentMetrics, SecurityPosture, TechniqueCount, TrendDataPoint,
 };
+use tw_core::auth::DEFAULT_TENANT_ID;
+use tw_core::db::{
+    create_feedback_repository, create_incident_repository, FeedbackFilter, IncidentFilter,
+    Pagination,
+};
+use tw_core::incident::{IncidentStatus, Severity};
 
 /// Creates analytics routes.
 pub fn routes() -> Router<AppState> {
@@ -196,52 +202,243 @@ impl From<SecurityPosture> for SecurityPostureResponse {
 // Handlers
 // ============================================================================
 
+/// Statuses considered "open" for analytics purposes.
+const OPEN_STATUSES: &[IncidentStatus] = &[
+    IncidentStatus::New,
+    IncidentStatus::Enriching,
+    IncidentStatus::Analyzing,
+    IncidentStatus::PendingReview,
+    IncidentStatus::PendingApproval,
+    IncidentStatus::Executing,
+    IncidentStatus::Escalated,
+];
+
+/// All severity levels for iteration.
+const ALL_SEVERITIES: &[Severity] = &[
+    Severity::Info,
+    Severity::Low,
+    Severity::Medium,
+    Severity::High,
+    Severity::Critical,
+];
+
+/// All status values for iteration.
+const ALL_STATUSES: &[IncidentStatus] = &[
+    IncidentStatus::New,
+    IncidentStatus::Enriching,
+    IncidentStatus::Analyzing,
+    IncidentStatus::PendingReview,
+    IncidentStatus::PendingApproval,
+    IncidentStatus::Executing,
+    IncidentStatus::Resolved,
+    IncidentStatus::FalsePositive,
+    IncidentStatus::Dismissed,
+    IncidentStatus::Escalated,
+    IncidentStatus::Closed,
+];
+
 /// Get incident metrics.
 async fn get_incident_metrics(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
     Query(query): Query<IncidentMetricsQuery>,
 ) -> Result<Json<IncidentMetricsResponse>, ApiError> {
     query.validate()?;
 
-    // In a real implementation, we would compute from the database.
-    // Return placeholder metrics for now.
-    let metrics = IncidentMetrics::default();
+    let incident_repo = create_incident_repository(&state.db);
+
+    // Build base filter with time range
+    let base_filter = IncidentFilter {
+        since: query.start,
+        until: query.end,
+        ..Default::default()
+    };
+
+    // Total count
+    let total_incidents = incident_repo.count(&base_filter).await?;
+
+    // Count by severity
+    let mut by_severity = HashMap::new();
+    for severity in ALL_SEVERITIES {
+        let filter = IncidentFilter {
+            severity: Some(vec![*severity]),
+            since: query.start,
+            until: query.end,
+            ..Default::default()
+        };
+        let count = incident_repo.count(&filter).await?;
+        if count > 0 {
+            by_severity.insert(severity.as_db_str().to_string(), count);
+        }
+    }
+
+    // Count by status
+    let mut by_status = HashMap::new();
+    for status in ALL_STATUSES {
+        let filter = IncidentFilter {
+            status: Some(vec![status.clone()]),
+            since: query.start,
+            until: query.end,
+            ..Default::default()
+        };
+        let count = incident_repo.count(&filter).await?;
+        if count > 0 {
+            by_status.insert(status.as_db_str().to_string(), count);
+        }
+    }
+
+    // Count by type: fetch a page of incidents and count source types.
+    // For large datasets, a dedicated DB query would be more efficient,
+    // but this works for the initial wiring.
+    let mut by_type: HashMap<String, u64> = HashMap::new();
+    let page = Pagination::new(1, 1000);
+    let incidents = incident_repo.list(&base_filter, &page).await?;
+    for inc in &incidents {
+        let source_type = inc.source.to_string();
+        // Extract the category prefix (e.g., "SIEM" from "SIEM:Splunk")
+        let category = source_type
+            .split(':')
+            .next()
+            .unwrap_or(&source_type)
+            .to_string();
+        *by_type.entry(category).or_insert(0) += 1;
+    }
+
+    // Compute MTTR from resolved incidents
+    let mut total_resolution_secs: f64 = 0.0;
+    let mut resolved_count: u64 = 0;
+    for inc in &incidents {
+        if inc.status == IncidentStatus::Resolved || inc.status == IncidentStatus::FalsePositive {
+            let diff = (inc.updated_at - inc.created_at).num_seconds() as f64;
+            if diff > 0.0 {
+                total_resolution_secs += diff;
+                resolved_count += 1;
+            }
+        }
+    }
+    let mttr_seconds = if resolved_count > 0 {
+        Some(total_resolution_secs / resolved_count as f64)
+    } else {
+        None
+    };
+
+    let metrics = IncidentMetrics {
+        total_incidents,
+        by_severity,
+        by_status,
+        by_type,
+        mttd_seconds: None, // Requires detection timestamp data not yet tracked
+        mttr_seconds,
+    };
+
     Ok(Json(IncidentMetricsResponse::from(metrics)))
 }
 
 /// Get analyst performance metrics.
 async fn get_analyst_metrics(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
     Query(query): Query<AnalystMetricsQuery>,
 ) -> Result<Json<AnalystMetricsResponse>, ApiError> {
     query.validate()?;
 
-    // In a real implementation, we would aggregate from the database.
-    Ok(Json(AnalystMetricsResponse { analysts: vec![] }))
+    let feedback_repo = create_feedback_repository(&state.db);
+
+    // Build feedback filter for the time range
+    let filter = FeedbackFilter {
+        tenant_id: Some(DEFAULT_TENANT_ID),
+        analyst_id: query.analyst_id,
+        since: query.start,
+        until: query.end,
+        ..Default::default()
+    };
+
+    let limit = query.limit.unwrap_or(20).min(100) as u32;
+    let page = Pagination::new(1, limit);
+    let result = feedback_repo.list(&filter, &page).await?;
+
+    // Aggregate by analyst
+    let mut analyst_map: HashMap<Uuid, (u64, f64)> = HashMap::new();
+    for fb in &result.items {
+        let entry = analyst_map.entry(fb.analyst_id).or_insert((0, 0.0));
+        entry.0 += 1;
+        // Count "correct" feedback as score 1.0
+        if fb.corrected_verdict.is_none() && fb.corrected_severity.is_none() {
+            entry.1 += 1.0;
+        }
+    }
+
+    let analysts: Vec<AnalystMetricItem> = analyst_map
+        .into_iter()
+        .map(|(analyst_id, (count, correct))| {
+            let score = if count > 0 {
+                Some(correct / count as f64)
+            } else {
+                None
+            };
+            AnalystMetricItem {
+                analyst_id,
+                incidents_handled: count,
+                avg_resolution_time_secs: None,
+                feedback_score: score,
+            }
+        })
+        .collect();
+
+    Ok(Json(AnalystMetricsResponse { analysts }))
 }
 
 /// Get security posture overview.
 async fn get_security_posture(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
 ) -> Result<Json<SecurityPostureResponse>, ApiError> {
-    // In a real implementation, we would compute from the database.
-    let posture = SecurityPosture::new(SecurityPosture::calculate_score(0, 0, None));
+    let incident_repo = create_incident_repository(&state.db);
+    let feedback_repo = create_feedback_repository(&state.db);
+
+    // Count open critical incidents
+    let critical_filter = IncidentFilter {
+        severity: Some(vec![Severity::Critical]),
+        status: Some(OPEN_STATUSES.to_vec()),
+        ..Default::default()
+    };
+    let open_critical = incident_repo.count(&critical_filter).await?;
+
+    // Count open high incidents
+    let high_filter = IncidentFilter {
+        severity: Some(vec![Severity::High]),
+        status: Some(OPEN_STATUSES.to_vec()),
+        ..Default::default()
+    };
+    let open_high = incident_repo.count(&high_filter).await?;
+
+    // Get AI accuracy from feedback stats
+    let stats = feedback_repo.get_stats(DEFAULT_TENANT_ID).await?;
+    let ai_accuracy = if stats.total_feedback > 0 {
+        Some(stats.accuracy_rate)
+    } else {
+        None
+    };
+
+    let score = SecurityPosture::calculate_score(open_critical, open_high, ai_accuracy);
+    let mut posture = SecurityPosture::new(score);
+    posture.open_critical = open_critical;
+    posture.open_high = open_high;
+    posture.ai_accuracy = ai_accuracy;
+
     Ok(Json(SecurityPostureResponse::from(posture)))
 }
 
 /// Get trend data.
 async fn get_trends(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
     Query(query): Query<TrendsQuery>,
 ) -> Result<Json<TrendsResponse>, ApiError> {
     query.validate()?;
 
     let granularity_str = query.granularity.as_deref().unwrap_or("daily");
-    let _granularity = Granularity::parse(granularity_str).ok_or_else(|| {
+    let granularity = Granularity::parse(granularity_str).ok_or_else(|| {
         ApiError::BadRequest(format!(
             "Invalid granularity: {}. Must be hourly, daily, weekly, or monthly",
             granularity_str
@@ -250,11 +447,72 @@ async fn get_trends(
 
     let metric = query.metric.as_deref().unwrap_or("incidents");
 
-    // In a real implementation, we would compute from the database.
+    let now = Utc::now();
+    let end = query.end.unwrap_or(now);
+    let start = query.start.unwrap_or_else(|| end - Duration::days(30));
+
+    let incident_repo = create_incident_repository(&state.db);
+
+    // Generate time buckets based on granularity
+    let bucket_duration = match granularity {
+        Granularity::Hourly => Duration::hours(1),
+        Granularity::Daily => Duration::days(1),
+        Granularity::Weekly => Duration::weeks(1),
+        Granularity::Monthly => Duration::days(30),
+    };
+
+    let mut data = Vec::new();
+    let mut bucket_start = start;
+
+    while bucket_start < end {
+        let bucket_end = (bucket_start + bucket_duration).min(end);
+
+        let filter = IncidentFilter {
+            since: Some(bucket_start),
+            until: Some(bucket_end),
+            ..Default::default()
+        };
+
+        let value = match metric {
+            "incidents" => incident_repo.count(&filter).await? as f64,
+            "resolution_time" => {
+                // Compute average resolution time for resolved incidents in this bucket
+                let resolved_filter = IncidentFilter {
+                    status: Some(vec![
+                        IncidentStatus::Resolved,
+                        IncidentStatus::FalsePositive,
+                    ]),
+                    since: Some(bucket_start),
+                    until: Some(bucket_end),
+                    ..Default::default()
+                };
+                let page = Pagination::new(1, 500);
+                let resolved = incident_repo.list(&resolved_filter, &page).await?;
+                if resolved.is_empty() {
+                    0.0
+                } else {
+                    let total_secs: f64 = resolved
+                        .iter()
+                        .map(|i| (i.updated_at - i.created_at).num_seconds() as f64)
+                        .sum();
+                    total_secs / resolved.len() as f64
+                }
+            }
+            _ => incident_repo.count(&filter).await? as f64,
+        };
+
+        data.push(TrendPointResponse::from(TrendDataPoint::new(
+            bucket_start,
+            value,
+        )));
+
+        bucket_start = bucket_end;
+    }
+
     Ok(Json(TrendsResponse {
         metric: metric.to_string(),
         granularity: granularity_str.to_string(),
-        data: vec![],
+        data,
     }))
 }
 
@@ -370,5 +628,41 @@ mod tests {
 
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"total_incidents\":0"));
+    }
+
+    #[test]
+    fn test_open_statuses_are_valid() {
+        // Ensure all open statuses are not terminal states
+        for status in OPEN_STATUSES {
+            assert!(
+                !matches!(
+                    status,
+                    IncidentStatus::Resolved
+                        | IncidentStatus::FalsePositive
+                        | IncidentStatus::Dismissed
+                        | IncidentStatus::Closed
+                ),
+                "Status {:?} should not be in OPEN_STATUSES",
+                status
+            );
+        }
+    }
+
+    #[test]
+    fn test_all_statuses_complete() {
+        assert_eq!(
+            ALL_STATUSES.len(),
+            11,
+            "All 11 IncidentStatus variants should be covered"
+        );
+    }
+
+    #[test]
+    fn test_all_severities_complete() {
+        assert_eq!(
+            ALL_SEVERITIES.len(),
+            5,
+            "All 5 Severity variants should be covered"
+        );
     }
 }

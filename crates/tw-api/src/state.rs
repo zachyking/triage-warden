@@ -41,6 +41,8 @@ pub struct AppState {
     pub leader_elector: Option<Arc<dyn LeaderElector>>,
     /// Feature flags for controlling feature availability.
     pub feature_flags: Arc<FeatureFlags>,
+    /// URL of the Python NL query service (optional).
+    pub nl_query_url: Option<String>,
 }
 
 impl AppState {
@@ -69,6 +71,7 @@ impl AppState {
             cache: None,
             leader_elector: None,
             feature_flags: Arc::new(feature_flags),
+            nl_query_url: std::env::var("NL_QUERY_URL").ok(),
         }
     }
 
@@ -167,6 +170,7 @@ pub struct AppStateBuilder {
     message_queue: Option<Arc<dyn MessageQueue>>,
     cache: Option<Arc<dyn DynCache>>,
     leader_elector: Option<Arc<dyn LeaderElector>>,
+    nl_query_url: Option<String>,
 }
 
 impl AppStateBuilder {
@@ -187,6 +191,7 @@ impl AppStateBuilder {
             message_queue: None,
             cache: None,
             leader_elector: None,
+            nl_query_url: std::env::var("NL_QUERY_URL").ok(),
         }
     }
 
@@ -256,6 +261,12 @@ impl AppStateBuilder {
         self
     }
 
+    /// Sets the NL query service URL.
+    pub fn with_nl_query_url(mut self, url: String) -> Self {
+        self.nl_query_url = Some(url);
+        self
+    }
+
     /// Builds the AppState with all configured components.
     ///
     /// Components not explicitly set will use their defaults:
@@ -306,6 +317,7 @@ impl AppStateBuilder {
             cache: self.cache,
             leader_elector: self.leader_elector,
             feature_flags: Arc::new(self.feature_flags),
+            nl_query_url: self.nl_query_url,
         }
     }
 }

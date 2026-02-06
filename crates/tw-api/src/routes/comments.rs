@@ -13,7 +13,11 @@ use validator::Validate;
 use crate::auth::RequireAnalyst;
 use crate::error::ApiError;
 use crate::state::AppState;
+use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::collaboration::comment::{CommentType, IncidentComment};
+use tw_core::db::comment_repo::CommentFilter;
+use tw_core::db::create_comment_repository;
+use tw_core::db::pagination::Pagination;
 
 /// Creates comment routes.
 pub fn routes() -> Router<AppState> {
@@ -100,7 +104,7 @@ pub struct PaginatedCommentsResponse {
 
 /// List comments with optional filters.
 async fn list_comments(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
     Query(query): Query<ListCommentsQuery>,
 ) -> Result<Json<PaginatedCommentsResponse>, ApiError> {
@@ -109,17 +113,37 @@ async fn list_comments(
     let page = query.page.unwrap_or(1);
     let per_page = query.per_page.unwrap_or(20);
 
+    let comment_type = query
+        .comment_type
+        .as_deref()
+        .map(parse_comment_type)
+        .transpose()?;
+
+    let filter = CommentFilter {
+        tenant_id: Some(DEFAULT_TENANT_ID),
+        incident_id: query.incident_id,
+        author_id: query.author_id,
+        comment_type,
+    };
+
+    let pagination = Pagination::new(page, per_page);
+    let repo = create_comment_repository(&state.db);
+    let result = repo
+        .list(&filter, &pagination)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to list comments: {}", e)))?;
+
     Ok(Json(PaginatedCommentsResponse {
-        data: vec![],
-        page,
-        per_page,
-        total_items: 0,
+        data: result.items.iter().map(comment_to_response).collect(),
+        page: result.page,
+        per_page: result.per_page,
+        total_items: result.total,
     }))
 }
 
 /// Create a new comment on an incident.
 async fn create_comment(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(user): RequireAnalyst,
     Json(request): Json<CreateCommentApiRequest>,
 ) -> Result<(StatusCode, Json<CommentResponse>), ApiError> {
@@ -130,42 +154,82 @@ async fn create_comment(
     let comment = IncidentComment::new(request.incident_id, user.id, request.content, comment_type)
         .with_mentions(request.mentions);
 
+    let repo = create_comment_repository(&state.db);
+    repo.create(&comment, DEFAULT_TENANT_ID)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to create comment: {}", e)))?;
+
     let response = comment_to_response(&comment);
     Ok((StatusCode::CREATED, Json(response)))
 }
 
 /// Get a specific comment by ID.
 async fn get_comment(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
     Path(id): Path<Uuid>,
 ) -> Result<Json<CommentResponse>, ApiError> {
-    Err(ApiError::NotFound(format!("Comment {} not found", id)))
+    let repo = create_comment_repository(&state.db);
+    let comment = repo
+        .get_for_tenant(id, DEFAULT_TENANT_ID)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to get comment: {}", e)))?
+        .ok_or_else(|| ApiError::NotFound(format!("Comment {} not found", id)))?;
+
+    Ok(Json(comment_to_response(&comment)))
 }
 
 /// Update a comment.
 async fn update_comment(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
     Path(id): Path<Uuid>,
     Json(request): Json<UpdateCommentApiRequest>,
 ) -> Result<Json<CommentResponse>, ApiError> {
     request.validate()?;
 
-    if let Some(ref ct) = request.comment_type {
-        parse_comment_type(ct)?;
-    }
+    let parsed_comment_type = request
+        .comment_type
+        .as_deref()
+        .map(parse_comment_type)
+        .transpose()?;
 
-    Err(ApiError::NotFound(format!("Comment {} not found", id)))
+    let update = tw_core::collaboration::comment::UpdateCommentRequest {
+        content: request.content,
+        comment_type: parsed_comment_type,
+    };
+
+    let repo = create_comment_repository(&state.db);
+    let comment = repo
+        .update(id, DEFAULT_TENANT_ID, &update)
+        .await
+        .map_err(|e| match e {
+            tw_core::db::DbError::NotFound { .. } => {
+                ApiError::NotFound(format!("Comment {} not found", id))
+            }
+            _ => ApiError::Internal(format!("Failed to update comment: {}", e)),
+        })?;
+
+    Ok(Json(comment_to_response(&comment)))
 }
 
 /// Delete a comment.
 async fn delete_comment(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    Err(ApiError::NotFound(format!("Comment {} not found", id)))
+    let repo = create_comment_repository(&state.db);
+    let deleted = repo
+        .delete(id, DEFAULT_TENANT_ID)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to delete comment: {}", e)))?;
+
+    if deleted {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::NotFound(format!("Comment {} not found", id)))
+    }
 }
 
 // ============================================================================

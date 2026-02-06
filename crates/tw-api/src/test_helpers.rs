@@ -245,6 +245,22 @@ async fn run_migrations(pool: &SqlitePool) {
     .execute(pool)
     .await
     .expect("Failed to run analyst feedback migration");
+
+    // Comments and activity entries tables
+    sqlx::query(include_str!(
+        "../../tw-core/src/db/migrations/sqlite/20240310_000001_create_comments_activity.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("Failed to run comments and activity migration");
+
+    // Lessons learned and shift handoffs tables
+    sqlx::query(include_str!(
+        "../../tw-core/src/db/migrations/sqlite/20240311_000001_create_lessons_handoffs.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("Failed to run lessons and handoffs migration");
 }
 
 // ============================================================================

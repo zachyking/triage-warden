@@ -13,7 +13,10 @@ use validator::Validate;
 use crate::auth::RequireAnalyst;
 use crate::error::ApiError;
 use crate::state::AppState;
-use tw_core::collaboration::activity::ActivityType;
+use tw_core::auth::DEFAULT_TENANT_ID;
+use tw_core::collaboration::activity::{ActivityFilter, ActivityType};
+use tw_core::db::create_activity_repository;
+use tw_core::db::pagination::Pagination;
 
 /// Creates activity feed routes.
 pub fn routes() -> Router<AppState> {
@@ -71,41 +74,104 @@ pub struct ActivityFeedResponse {
 
 /// Get the global activity feed with optional filters.
 async fn get_activity_feed(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
     Query(query): Query<ActivityFeedQuery>,
 ) -> Result<Json<ActivityFeedResponse>, ApiError> {
     query.validate()?;
 
-    // Validate activity types if provided
-    if let Some(ref types_str) = query.activity_types {
-        for type_str in types_str.split(',') {
-            parse_activity_type(type_str.trim())?;
-        }
-    }
+    let activity_types = query
+        .activity_types
+        .as_deref()
+        .map(|types_str| {
+            types_str
+                .split(',')
+                .map(|s| parse_activity_type(s.trim()))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?;
+
+    let limit = query.limit.unwrap_or(50);
+    let offset = query.offset.unwrap_or(0);
+
+    let filter = ActivityFilter {
+        activity_types,
+        actor_id: query.actor_id,
+        incident_id: query.incident_id,
+        since: query.since,
+        limit: Some(limit),
+        offset: Some(offset),
+    };
+
+    let pagination = Pagination::new((offset / limit) + 1, limit);
+    let repo = create_activity_repository(&state.db);
+    let result = repo
+        .list(&filter, DEFAULT_TENANT_ID, &pagination)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to list activity: {}", e)))?;
+
+    let has_more = (offset as u64 + result.items.len() as u64) < result.total;
 
     Ok(Json(ActivityFeedResponse {
-        entries: vec![],
-        total: 0,
-        has_more: false,
+        entries: result
+            .items
+            .iter()
+            .map(activity_entry_to_response)
+            .collect(),
+        total: result.total,
+        has_more,
     }))
 }
 
 /// Get activity feed for a specific incident.
 async fn get_incident_activity(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
     Path(id): Path<Uuid>,
     Query(query): Query<ActivityFeedQuery>,
 ) -> Result<Json<ActivityFeedResponse>, ApiError> {
     query.validate()?;
 
-    let _ = id;
+    let activity_types = query
+        .activity_types
+        .as_deref()
+        .map(|types_str| {
+            types_str
+                .split(',')
+                .map(|s| parse_activity_type(s.trim()))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?;
+
+    let limit = query.limit.unwrap_or(50);
+    let offset = query.offset.unwrap_or(0);
+
+    let filter = ActivityFilter {
+        activity_types,
+        actor_id: query.actor_id,
+        incident_id: Some(id),
+        since: query.since,
+        limit: Some(limit),
+        offset: Some(offset),
+    };
+
+    let pagination = Pagination::new((offset / limit) + 1, limit);
+    let repo = create_activity_repository(&state.db);
+    let result = repo
+        .list(&filter, DEFAULT_TENANT_ID, &pagination)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to list activity: {}", e)))?;
+
+    let has_more = (offset as u64 + result.items.len() as u64) < result.total;
 
     Ok(Json(ActivityFeedResponse {
-        entries: vec![],
-        total: 0,
-        has_more: false,
+        entries: result
+            .items
+            .iter()
+            .map(activity_entry_to_response)
+            .collect(),
+        total: result.total,
+        has_more,
     }))
 }
 
@@ -132,7 +198,6 @@ fn parse_activity_type(s: &str) -> Result<ActivityType, ApiError> {
     }
 }
 
-#[allow(dead_code)]
 fn activity_entry_to_response(
     entry: &tw_core::collaboration::activity::ActivityEntry,
 ) -> ActivityEntryResponse {

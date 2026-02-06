@@ -18,6 +18,7 @@ pub mod kill_switch;
 pub mod knowledge;
 pub mod lessons;
 pub mod metrics;
+pub mod nl_query;
 pub mod notifications;
 pub mod playbooks;
 pub mod policies;
@@ -73,6 +74,7 @@ fn api_routes() -> Router<AppState> {
             lessons::incident_lessons_routes(),
         )
         .nest("/analytics", analytics::routes())
+        .nest("/nl", nl_query::routes())
         .nest("/comments", comments::routes())
         .nest("/activity", activity::routes())
         .nest("/handoffs", handoff::routes())

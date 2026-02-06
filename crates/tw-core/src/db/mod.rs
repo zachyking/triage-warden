@@ -16,13 +16,17 @@ pub mod retry;
 mod schema;
 pub mod tenant_connection;
 
+pub mod activity_repo;
 pub mod api_key_repo;
 pub mod audit_repo;
+pub mod comment_repo;
 pub mod connector_repo;
 pub mod feature_flag_repo;
 pub mod feedback_repo;
+pub mod handoff_repo;
 pub mod incident_repo;
 pub mod knowledge_repo;
+pub mod lesson_repo;
 pub mod metrics_repo;
 pub mod notification_repo;
 pub mod playbook_repo;
@@ -41,12 +45,16 @@ pub use retry::{is_transient_error, with_retry, RetryConfig};
 pub use schema::run_migrations;
 
 // Re-export repository traits and types
+pub use activity_repo::ActivityRepository;
 pub use api_key_repo::{ApiKeyFilter, ApiKeyRepository};
 pub use audit_repo::AuditRepository;
+pub use comment_repo::{CommentFilter, CommentRepository};
 pub use connector_repo::{ConnectorFilter, ConnectorRepository, ConnectorUpdate};
 pub use feedback_repo::{FeedbackFilter, FeedbackRepository, FeedbackUpdate};
+pub use handoff_repo::HandoffRepository;
 pub use incident_repo::{IncidentFilter, IncidentRepository, IncidentUpdate};
 pub use knowledge_repo::KnowledgeRepository;
+pub use lesson_repo::LessonRepository;
 pub use metrics_repo::{
     ActionMetricsData, IncidentMetricsData, MetricsRepository, PerformanceMetricsData,
 };
@@ -61,10 +69,13 @@ pub use tenant_repo::{TenantFilter, TenantRepository, TenantUpdate};
 pub use user_repo::UserRepository;
 
 // Re-export factory functions
+pub use activity_repo::create_activity_repository;
 pub use api_key_repo::create_api_key_repository;
 pub use audit_repo::create_audit_repository;
+pub use comment_repo::create_comment_repository;
 pub use connector_repo::create_connector_repository;
 pub use feedback_repo::create_feedback_repository;
+pub use handoff_repo::create_handoff_repository;
 pub use incident_repo::create_incident_repository;
 pub use metrics_repo::create_metrics_repository;
 pub use notification_repo::create_notification_repository;
@@ -76,6 +87,7 @@ pub use user_repo::create_user_repository;
 
 pub use feature_flag_repo::create_feature_flag_store;
 pub use knowledge_repo::create_knowledge_repository;
+pub use lesson_repo::create_lesson_repository;
 
 pub use seed::ensure_admin_user;
 

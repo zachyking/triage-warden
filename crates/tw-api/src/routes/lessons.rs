@@ -18,7 +18,11 @@ use validator::Validate;
 use crate::auth::RequireAnalyst;
 use crate::error::ApiError;
 use crate::state::AppState;
-use tw_core::lesson::{CreateLessonRequest, LessonCategory, LessonLearned, LessonStatus};
+use tw_core::db::{create_lesson_repository, Pagination};
+use tw_core::lesson::{
+    CreateLessonRequest, LessonCategory, LessonFilter, LessonLearned, LessonStatus,
+    UpdateLessonRequest,
+};
 
 /// Creates lessons routes.
 pub fn routes() -> Router<AppState> {
@@ -151,13 +155,14 @@ pub struct LessonListResponse {
 
 /// Create a new lesson learned.
 async fn create_lesson(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
     Json(body): Json<CreateLessonBody>,
 ) -> Result<(StatusCode, Json<LessonResponse>), ApiError> {
     body.validate()?;
 
     let category = parse_category(&body.category)?;
+    let tenant_id = tw_core::auth::DEFAULT_TENANT_ID;
 
     let request = CreateLessonRequest {
         incident_id: body.incident_id,
@@ -169,86 +174,123 @@ async fn create_lesson(
         due_date: body.due_date,
     };
 
-    let lesson = request.build(tw_core::auth::DEFAULT_TENANT_ID);
+    let lesson = request.build(tenant_id);
+    let repo = create_lesson_repository(&state.db);
+    let created = repo.create(&lesson).await?;
 
-    // In a real implementation, we would persist to the database.
-    // For now, return the created lesson.
-    Ok((StatusCode::CREATED, Json(LessonResponse::from(lesson))))
+    Ok((StatusCode::CREATED, Json(LessonResponse::from(created))))
 }
 
 /// List lessons with optional filters.
 async fn list_lessons(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
     Query(query): Query<ListLessonsQuery>,
 ) -> Result<Json<LessonListResponse>, ApiError> {
     query.validate()?;
 
-    // Validate category if provided
-    if let Some(ref cat) = query.category {
-        parse_category(cat)?;
-    }
+    let tenant_id = tw_core::auth::DEFAULT_TENANT_ID;
 
-    // Validate status if provided
-    if let Some(ref status) = query.status {
-        parse_status(status)?;
-    }
+    let category = query.category.as_deref().map(parse_category).transpose()?;
+    let status = query.status.as_deref().map(parse_status).transpose()?;
+
+    let filter = LessonFilter {
+        category,
+        status,
+        incident_id: query.incident_id,
+        owner: query.owner,
+        limit: query.limit,
+        offset: query.offset,
+    };
+
+    let pagination = Pagination::new(1, filter.limit.unwrap_or(50) as u32);
+
+    let repo = create_lesson_repository(&state.db);
+    let result = repo.list(tenant_id, &filter, &pagination).await?;
+
     Ok(Json(LessonListResponse {
-        items: vec![],
-        total: 0,
+        items: result.items.into_iter().map(LessonResponse::from).collect(),
+        total: result.total as usize,
     }))
 }
 
 /// Get a specific lesson by ID.
 async fn get_lesson(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
     Path(id): Path<Uuid>,
 ) -> Result<Json<LessonResponse>, ApiError> {
-    // In a real implementation, we would query the database.
-    Err(ApiError::NotFound(format!("Lesson {} not found", id)))
+    let tenant_id = tw_core::auth::DEFAULT_TENANT_ID;
+    let repo = create_lesson_repository(&state.db);
+
+    let lesson = repo
+        .get_for_tenant(id, tenant_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Lesson {} not found", id)))?;
+
+    Ok(Json(LessonResponse::from(lesson)))
 }
 
 /// Update a lesson.
 async fn update_lesson(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateLessonBody>,
 ) -> Result<Json<LessonResponse>, ApiError> {
     body.validate()?;
 
-    // Validate category if provided
-    if let Some(ref cat) = body.category {
-        parse_category(cat)?;
-    }
+    let tenant_id = tw_core::auth::DEFAULT_TENANT_ID;
 
-    // Validate status if provided
-    if let Some(ref status) = body.status {
-        parse_status(status)?;
-    }
-    Err(ApiError::NotFound(format!("Lesson {} not found", id)))
+    let category = body.category.as_deref().map(parse_category).transpose()?;
+    let status = body.status.as_deref().map(parse_status).transpose()?;
+
+    let update = UpdateLessonRequest {
+        category,
+        title: body.title,
+        description: body.description,
+        recommendation: body.recommendation,
+        status,
+        owner: body.owner,
+        due_date: body.due_date,
+    };
+
+    let repo = create_lesson_repository(&state.db);
+    let updated = repo.update(id, tenant_id, &update).await?;
+
+    Ok(Json(LessonResponse::from(updated)))
 }
 
 /// Delete a lesson.
 async fn delete_lesson(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    // In a real implementation, we would delete from the database.
-    Err(ApiError::NotFound(format!("Lesson {} not found", id)))
+    let tenant_id = tw_core::auth::DEFAULT_TENANT_ID;
+    let repo = create_lesson_repository(&state.db);
+
+    let deleted = repo.delete(id, tenant_id).await?;
+    if deleted {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::NotFound(format!("Lesson {} not found", id)))
+    }
 }
 
 /// Get lessons for a specific incident.
 async fn get_lessons_for_incident(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
     Path(incident_id): Path<Uuid>,
 ) -> Result<Json<Vec<LessonResponse>>, ApiError> {
-    // In a real implementation, we would query by incident_id.
-    let _ = incident_id;
-    Ok(Json(vec![]))
+    let tenant_id = tw_core::auth::DEFAULT_TENANT_ID;
+    let repo = create_lesson_repository(&state.db);
+
+    let lessons = repo.get_for_incident(tenant_id, incident_id).await?;
+    Ok(Json(
+        lessons.into_iter().map(LessonResponse::from).collect(),
+    ))
 }
 
 // ============================================================================
