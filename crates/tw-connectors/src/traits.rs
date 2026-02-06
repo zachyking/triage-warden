@@ -134,6 +134,29 @@ pub trait Connector: Send + Sync {
     /// Returns the connector type (e.g., "siem", "edr", "ticketing").
     fn connector_type(&self) -> &str;
 
+    /// Returns the connector category.
+    fn category(&self) -> ConnectorCategory {
+        match self.connector_type() {
+            "siem" => ConnectorCategory::Siem,
+            "edr" => ConnectorCategory::Edr,
+            "threat_intel" => ConnectorCategory::ThreatIntel,
+            "ticketing" => ConnectorCategory::Ticketing,
+            "email" => ConnectorCategory::Email,
+            "cloud" => ConnectorCategory::Cloud,
+            "identity" => ConnectorCategory::Identity,
+            "network" => ConnectorCategory::Network,
+            "sandbox" => ConnectorCategory::Sandbox,
+            "collaboration" => ConnectorCategory::Collaboration,
+            "itsm" => ConnectorCategory::Itsm,
+            _ => ConnectorCategory::Cloud,
+        }
+    }
+
+    /// Returns the capabilities this connector provides.
+    fn capabilities(&self) -> Vec<String> {
+        vec!["health_check".to_string(), "test_connection".to_string()]
+    }
+
     /// Checks the health of the connector.
     async fn health_check(&self) -> ConnectorResult<ConnectorHealth>;
 
@@ -328,7 +351,7 @@ pub enum IndicatorType {
 }
 
 /// Threat verdict from analysis.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ThreatVerdict {
     /// Known malicious.
@@ -744,6 +767,408 @@ pub struct UrlClick {
     pub clicked_at: DateTime<Utc>,
     /// Verdict at time of click.
     pub verdict: String,
+}
+
+// ============================================================================
+// Framework Enhancement Types (3.1.1)
+// ============================================================================
+
+/// Category of a connector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectorCategory {
+    Siem,
+    Edr,
+    ThreatIntel,
+    Ticketing,
+    Email,
+    Cloud,
+    Identity,
+    Network,
+    Sandbox,
+    Collaboration,
+    Itsm,
+}
+
+impl std::fmt::Display for ConnectorCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Siem => "siem",
+            Self::Edr => "edr",
+            Self::ThreatIntel => "threat_intel",
+            Self::Ticketing => "ticketing",
+            Self::Email => "email",
+            Self::Cloud => "cloud",
+            Self::Identity => "identity",
+            Self::Network => "network",
+            Self::Sandbox => "sandbox",
+            Self::Collaboration => "collaboration",
+            Self::Itsm => "itsm",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+/// A raw alert from any alert source.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RawAlert {
+    /// Alert ID from the source system.
+    pub id: String,
+    /// Alert title/name.
+    pub title: String,
+    /// Alert description.
+    pub description: String,
+    /// Severity level.
+    pub severity: String,
+    /// Alert timestamp.
+    pub timestamp: DateTime<Utc>,
+    /// Source system.
+    pub source: String,
+    /// Raw data from the source.
+    pub raw_data: HashMap<String, serde_json::Value>,
+}
+
+/// Type of indicator of compromise.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IocType {
+    IpAddress,
+    Domain,
+    Url,
+    FileHash,
+    Email,
+    FileName,
+    Registry,
+    Process,
+}
+
+/// An indicator of compromise.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Ioc {
+    /// The IOC type.
+    pub ioc_type: IocType,
+    /// The IOC value.
+    pub value: String,
+}
+
+/// Result of enriching an IOC.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnrichmentResult {
+    /// The original IOC.
+    pub ioc: Ioc,
+    /// Whether the IOC was found in the source.
+    pub found: bool,
+    /// Risk score (0-100).
+    pub risk_score: Option<u8>,
+    /// Enrichment data.
+    pub data: HashMap<String, serde_json::Value>,
+    /// Source of the enrichment.
+    pub source: String,
+    /// Timestamp of the enrichment.
+    pub enriched_at: DateTime<Utc>,
+}
+
+/// Type of response action.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionType {
+    IsolateHost,
+    BlockIp,
+    BlockDomain,
+    BlockHash,
+    DisableUser,
+    QuarantineEmail,
+    CreateTicket,
+    Custom(String),
+}
+
+/// A response action to execute.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Action {
+    /// Action type.
+    pub action_type: ActionType,
+    /// Target of the action.
+    pub target: String,
+    /// Reason for the action.
+    pub reason: String,
+    /// Additional parameters.
+    pub parameters: HashMap<String, serde_json::Value>,
+}
+
+/// Result of a connection test.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectionTestResult {
+    /// Whether the connection succeeded.
+    pub success: bool,
+    /// Response time in milliseconds.
+    pub response_time_ms: u64,
+    /// Version or info about the connected system.
+    pub system_info: Option<String>,
+    /// Error message if connection failed.
+    pub error: Option<String>,
+}
+
+/// Trait for connectors that can fetch alerts.
+#[async_trait]
+pub trait AlertSource: Connector {
+    /// Fetches alerts since a given time, with optional limit.
+    async fn fetch_alerts(
+        &self,
+        since: DateTime<Utc>,
+        limit: Option<usize>,
+    ) -> ConnectorResult<Vec<RawAlert>>;
+
+    /// Acknowledges an alert.
+    async fn acknowledge_alert(&self, alert_id: &str) -> ConnectorResult<()>;
+}
+
+/// Trait for connectors that can enrich IOCs.
+#[async_trait]
+pub trait Enricher: Connector {
+    /// Returns the IOC types this enricher supports.
+    fn supported_ioc_types(&self) -> Vec<IocType>;
+
+    /// Enriches an IOC with additional context.
+    async fn enrich(&self, ioc: &Ioc) -> ConnectorResult<EnrichmentResult>;
+}
+
+/// Trait for connectors that can execute response actions.
+#[async_trait]
+pub trait ActionExecutor: Connector {
+    /// Returns the action types this executor supports.
+    fn supported_actions(&self) -> Vec<ActionType>;
+
+    /// Executes a response action.
+    async fn execute_action(&self, action: &Action) -> ConnectorResult<ActionResult>;
+}
+
+// ============================================================================
+// Identity Provider Types & Traits (3.1.3)
+// ============================================================================
+
+/// Identity user information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdentityUser {
+    /// User ID in the identity system.
+    pub id: String,
+    /// Username / login.
+    pub username: String,
+    /// Email address.
+    pub email: Option<String>,
+    /// Display name.
+    pub display_name: Option<String>,
+    /// Whether the user is active/enabled.
+    pub active: bool,
+    /// Whether MFA is enabled.
+    pub mfa_enabled: Option<bool>,
+    /// Last login timestamp.
+    pub last_login: Option<DateTime<Utc>>,
+    /// User groups/roles.
+    pub groups: Vec<String>,
+    /// Account status (e.g., "active", "suspended", "locked").
+    pub status: String,
+    /// Additional attributes.
+    pub attributes: HashMap<String, serde_json::Value>,
+}
+
+/// Authentication log entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthLogEntry {
+    /// Log entry ID.
+    pub id: String,
+    /// Timestamp.
+    pub timestamp: DateTime<Utc>,
+    /// User who authenticated.
+    pub user: String,
+    /// Authentication result.
+    pub result: String,
+    /// Source IP address.
+    pub source_ip: Option<String>,
+    /// User agent / client info.
+    pub client_info: Option<String>,
+    /// Authentication factor used.
+    pub factor: Option<String>,
+    /// Additional details.
+    pub details: HashMap<String, serde_json::Value>,
+}
+
+/// Identity provider connector.
+#[async_trait]
+pub trait IdentityConnector: Connector {
+    /// Gets a user by username or email.
+    async fn get_user(&self, identifier: &str) -> ConnectorResult<IdentityUser>;
+
+    /// Searches for users.
+    async fn search_users(&self, query: &str, limit: usize) -> ConnectorResult<Vec<IdentityUser>>;
+
+    /// Gets groups/roles for a user.
+    async fn get_user_groups(&self, user_id: &str) -> ConnectorResult<Vec<String>>;
+
+    /// Gets authentication logs for a user.
+    async fn get_auth_logs(
+        &self,
+        user_id: &str,
+        timerange: TimeRange,
+        limit: usize,
+    ) -> ConnectorResult<Vec<AuthLogEntry>>;
+
+    /// Suspends a user account.
+    async fn suspend_user(&self, user_id: &str) -> ConnectorResult<ActionResult>;
+
+    /// Resets MFA for a user.
+    async fn reset_mfa(&self, user_id: &str) -> ConnectorResult<ActionResult>;
+
+    /// Revokes all active sessions for a user.
+    async fn revoke_sessions(&self, user_id: &str) -> ConnectorResult<ActionResult>;
+}
+
+// ============================================================================
+// Network Security Types & Traits (3.1.4)
+// ============================================================================
+
+/// Network security event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkEvent {
+    /// Event ID.
+    pub id: String,
+    /// Event timestamp.
+    pub timestamp: DateTime<Utc>,
+    /// Event type/category.
+    pub event_type: String,
+    /// Severity level.
+    pub severity: String,
+    /// Source IP.
+    pub source_ip: Option<String>,
+    /// Destination IP.
+    pub destination_ip: Option<String>,
+    /// Source port.
+    pub source_port: Option<u16>,
+    /// Destination port.
+    pub destination_port: Option<u16>,
+    /// Protocol.
+    pub protocol: Option<String>,
+    /// Action taken (allow, block, etc.).
+    pub action: String,
+    /// Rule or policy that matched.
+    pub rule: Option<String>,
+    /// Additional details.
+    pub details: HashMap<String, serde_json::Value>,
+}
+
+/// Network security connector.
+#[async_trait]
+pub trait NetworkSecurityConnector: Connector {
+    /// Gets security events.
+    async fn get_events(
+        &self,
+        timerange: TimeRange,
+        limit: usize,
+    ) -> ConnectorResult<Vec<NetworkEvent>>;
+
+    /// Blocks an IP address.
+    async fn block_ip(&self, ip: &str, reason: &str) -> ConnectorResult<ActionResult>;
+
+    /// Blocks a domain.
+    async fn block_domain(&self, domain: &str, reason: &str) -> ConnectorResult<ActionResult>;
+
+    /// Gets traffic logs for a specific IP or host.
+    async fn get_traffic_logs(
+        &self,
+        target: &str,
+        timerange: TimeRange,
+        limit: usize,
+    ) -> ConnectorResult<Vec<NetworkEvent>>;
+}
+
+// ============================================================================
+// ITSM Types & Traits (3.1.7)
+// ============================================================================
+
+/// ITSM incident.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ITSMIncident {
+    /// Incident ID.
+    pub id: String,
+    /// Short description / title.
+    pub title: String,
+    /// Full description.
+    pub description: String,
+    /// Severity/priority.
+    pub severity: String,
+    /// Current state/status.
+    pub state: String,
+    /// Assigned to.
+    pub assigned_to: Option<String>,
+    /// Assigned group.
+    pub assignment_group: Option<String>,
+    /// Created timestamp.
+    pub created_at: DateTime<Utc>,
+    /// Updated timestamp.
+    pub updated_at: DateTime<Utc>,
+    /// URL to the incident.
+    pub url: Option<String>,
+    /// Additional fields.
+    pub fields: HashMap<String, serde_json::Value>,
+}
+
+/// On-call information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OnCallInfo {
+    /// User on call.
+    pub user: String,
+    /// Team or schedule name.
+    pub schedule: String,
+    /// Start of on-call period.
+    pub start: DateTime<Utc>,
+    /// End of on-call period.
+    pub end: DateTime<Utc>,
+}
+
+/// CMDB asset information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CMDBAsset {
+    /// Asset ID.
+    pub id: String,
+    /// Asset name.
+    pub name: String,
+    /// Asset class/type.
+    pub asset_class: String,
+    /// Owner.
+    pub owner: Option<String>,
+    /// Environment (prod, staging, dev).
+    pub environment: Option<String>,
+    /// Criticality level.
+    pub criticality: Option<String>,
+    /// Additional attributes.
+    pub attributes: HashMap<String, serde_json::Value>,
+}
+
+/// ITSM / Case management connector.
+#[async_trait]
+pub trait ITSMConnector: Connector {
+    /// Creates a new incident.
+    async fn create_incident(
+        &self,
+        title: &str,
+        description: &str,
+        severity: &str,
+    ) -> ConnectorResult<ITSMIncident>;
+
+    /// Gets an incident by ID.
+    async fn get_incident(&self, incident_id: &str) -> ConnectorResult<ITSMIncident>;
+
+    /// Updates an incident.
+    async fn update_incident(
+        &self,
+        incident_id: &str,
+        updates: HashMap<String, serde_json::Value>,
+    ) -> ConnectorResult<ITSMIncident>;
+
+    /// Gets who is currently on call.
+    async fn get_on_call(&self, schedule: &str) -> ConnectorResult<Vec<OnCallInfo>>;
+
+    /// Gets an asset from the CMDB by name or identifier.
+    async fn get_asset_from_cmdb(&self, identifier: &str) -> ConnectorResult<Option<CMDBAsset>>;
 }
 
 #[cfg(test)]

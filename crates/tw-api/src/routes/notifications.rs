@@ -1,12 +1,13 @@
-//! Notification channel management endpoints.
+//! Notification channel management and notification rules endpoints.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
     Form, Json, Router,
 };
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -15,6 +16,10 @@ use crate::state::AppState;
 use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::db::{create_notification_repository, NotificationChannelRepository};
 use tw_core::notification::{ChannelType, NotificationChannel, NotificationChannelUpdate};
+use tw_core::notifications::{
+    ChannelConfig, NotificationCondition, NotificationEngine, NotificationHistory,
+    NotificationRule, NotificationTrigger, ThrottleConfig,
+};
 
 /// Creates notification channel routes.
 pub fn routes() -> Router<AppState> {
@@ -26,6 +31,17 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/:id/toggle", post(toggle_channel))
         .route("/:id/test", post(test_channel))
+        // Notification rules sub-routes
+        .nest("/rules", rules_routes())
+        .route("/history", get(list_notification_history))
+}
+
+/// Creates notification rules routes.
+fn rules_routes() -> Router<AppState> {
+    Router::new()
+        .route("/", get(list_rules).post(create_rule))
+        .route("/:id", get(get_rule).put(update_rule).delete(delete_rule))
+        .route("/:id/test", post(test_rule))
 }
 
 /// Request for creating a new notification channel.
@@ -680,6 +696,442 @@ async fn send_test_notification(channel: &NotificationChannel) -> Result<String,
                 "Test notification would be sent to PagerDuty. Integration key is configured."
                     .to_string(),
             )
+        }
+    }
+}
+
+// =============================================================================
+// Notification Rules DTOs
+// =============================================================================
+
+/// Request for creating a new notification rule.
+#[derive(Debug, Deserialize)]
+pub struct CreateNotificationRuleRequest {
+    /// Human-readable name for the rule.
+    pub name: String,
+    /// Optional description.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// The trigger event type.
+    pub trigger: NotificationTrigger,
+    /// Additional conditions that must be met.
+    #[serde(default)]
+    pub conditions: Vec<NotificationCondition>,
+    /// Channels to send notifications to.
+    pub channels: Vec<ChannelConfig>,
+    /// Optional throttle configuration.
+    #[serde(default)]
+    pub throttle: Option<ThrottleConfig>,
+    /// Whether the rule is enabled (defaults to true).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Request for updating an existing notification rule.
+#[derive(Debug, Deserialize)]
+pub struct UpdateNotificationRuleRequest {
+    /// Updated name.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Updated description.
+    #[serde(default)]
+    pub description: Option<Option<String>>,
+    /// Updated trigger.
+    #[serde(default)]
+    pub trigger: Option<NotificationTrigger>,
+    /// Updated conditions.
+    #[serde(default)]
+    pub conditions: Option<Vec<NotificationCondition>>,
+    /// Updated channels.
+    #[serde(default)]
+    pub channels: Option<Vec<ChannelConfig>>,
+    /// Updated throttle config.
+    #[serde(default)]
+    pub throttle: Option<Option<ThrottleConfig>>,
+    /// Updated enabled status.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
+/// Response for a notification rule.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NotificationRuleResponse {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+    pub trigger: NotificationTrigger,
+    pub conditions: Vec<NotificationCondition>,
+    pub channels: Vec<ChannelConfig>,
+    pub throttle: Option<ThrottleConfig>,
+    pub enabled: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<NotificationRule> for NotificationRuleResponse {
+    fn from(rule: NotificationRule) -> Self {
+        Self {
+            id: rule.id,
+            tenant_id: rule.tenant_id,
+            name: rule.name,
+            description: rule.description,
+            trigger: rule.trigger,
+            conditions: rule.conditions,
+            channels: rule.channels,
+            throttle: rule.throttle,
+            enabled: rule.enabled,
+            created_at: rule.created_at,
+            updated_at: rule.updated_at,
+        }
+    }
+}
+
+/// Response for a notification delivery history entry.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NotificationHistoryResponse {
+    pub id: Uuid,
+    pub rule_id: Uuid,
+    pub trigger: String,
+    pub channel_type: String,
+    pub success: bool,
+    pub error: Option<String>,
+    pub sent_at: DateTime<Utc>,
+}
+
+impl From<NotificationHistory> for NotificationHistoryResponse {
+    fn from(h: NotificationHistory) -> Self {
+        Self {
+            id: h.id,
+            rule_id: h.rule_id,
+            trigger: h.trigger,
+            channel_type: h.channel_type,
+            success: h.success,
+            error: h.error,
+            sent_at: h.sent_at,
+        }
+    }
+}
+
+/// Response for testing a notification rule.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TestRuleResponse {
+    /// Whether the test event would trigger this rule.
+    pub would_trigger: bool,
+    /// The matching conditions that were evaluated.
+    pub conditions_met: bool,
+    /// Message describing the result.
+    pub message: String,
+}
+
+/// Query parameters for notification history.
+#[derive(Debug, Deserialize)]
+pub struct NotificationHistoryQuery {
+    /// Maximum number of history entries to return.
+    #[serde(default = "default_history_limit")]
+    pub limit: usize,
+}
+
+fn default_history_limit() -> usize {
+    100
+}
+
+// =============================================================================
+// Notification Rules Handlers
+// =============================================================================
+
+/// List all notification rules.
+async fn list_rules(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<NotificationRuleResponse>>, ApiError> {
+    let engine = get_notification_engine(&state);
+    let rules = engine.get_rules().await;
+    let response: Vec<NotificationRuleResponse> = rules
+        .into_iter()
+        .map(NotificationRuleResponse::from)
+        .collect();
+    Ok(Json(response))
+}
+
+/// Get a single notification rule by ID.
+async fn get_rule(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<NotificationRuleResponse>, ApiError> {
+    let engine = get_notification_engine(&state);
+    let rule = engine
+        .get_rule(id)
+        .await
+        .ok_or_else(|| ApiError::NotFound(format!("Notification rule {} not found", id)))?;
+    Ok(Json(NotificationRuleResponse::from(rule)))
+}
+
+/// Create a new notification rule.
+async fn create_rule(
+    State(state): State<AppState>,
+    Json(request): Json<CreateNotificationRuleRequest>,
+) -> Result<(StatusCode, Json<NotificationRuleResponse>), ApiError> {
+    // Validate name
+    if request.name.trim().is_empty() {
+        return Err(ApiError::BadRequest("Rule name is required".to_string()));
+    }
+
+    // Validate channels
+    if request.channels.is_empty() {
+        return Err(ApiError::BadRequest(
+            "At least one channel is required".to_string(),
+        ));
+    }
+
+    let tenant_id = DEFAULT_TENANT_ID;
+
+    let mut rule =
+        NotificationRule::new(tenant_id, request.name, request.trigger, request.channels);
+    rule.description = request.description;
+    rule.conditions = request.conditions;
+    rule.throttle = request.throttle;
+    rule.enabled = request.enabled;
+
+    let engine = get_notification_engine(&state);
+    engine.add_rule(rule.clone()).await;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(NotificationRuleResponse::from(rule)),
+    ))
+}
+
+/// Update an existing notification rule.
+async fn update_rule(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(request): Json<UpdateNotificationRuleRequest>,
+) -> Result<Json<NotificationRuleResponse>, ApiError> {
+    let engine = get_notification_engine(&state);
+
+    let mut rule = engine
+        .get_rule(id)
+        .await
+        .ok_or_else(|| ApiError::NotFound(format!("Notification rule {} not found", id)))?;
+
+    // Apply updates
+    if let Some(name) = request.name {
+        if name.trim().is_empty() {
+            return Err(ApiError::BadRequest(
+                "Rule name cannot be empty".to_string(),
+            ));
+        }
+        rule.name = name;
+    }
+    if let Some(description) = request.description {
+        rule.description = description;
+    }
+    if let Some(trigger) = request.trigger {
+        rule.trigger = trigger;
+    }
+    if let Some(conditions) = request.conditions {
+        rule.conditions = conditions;
+    }
+    if let Some(channels) = request.channels {
+        if channels.is_empty() {
+            return Err(ApiError::BadRequest(
+                "At least one channel is required".to_string(),
+            ));
+        }
+        rule.channels = channels;
+    }
+    if let Some(throttle) = request.throttle {
+        rule.throttle = throttle;
+    }
+    if let Some(enabled) = request.enabled {
+        rule.enabled = enabled;
+    }
+
+    rule.updated_at = Utc::now();
+
+    let updated = engine.update_rule(rule.clone()).await;
+    if !updated {
+        return Err(ApiError::Internal(
+            "Failed to update notification rule".to_string(),
+        ));
+    }
+
+    Ok(Json(NotificationRuleResponse::from(rule)))
+}
+
+/// Delete a notification rule.
+async fn delete_rule(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    let engine = get_notification_engine(&state);
+    let removed = engine.remove_rule(id).await;
+    if !removed {
+        return Err(ApiError::NotFound(format!(
+            "Notification rule {} not found",
+            id
+        )));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Test a notification rule with a simulated event.
+async fn test_rule(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<TestRuleResponse>, ApiError> {
+    let engine = get_notification_engine(&state);
+    let rule = engine
+        .get_rule(id)
+        .await
+        .ok_or_else(|| ApiError::NotFound(format!("Notification rule {} not found", id)))?;
+
+    // Build a test event based on the rule's trigger
+    let test_event = build_test_event(&rule.trigger);
+    let event_json = serde_json::to_value(&test_event).unwrap_or_default();
+
+    // Evaluate conditions against the test event
+    let conditions_met =
+        tw_core::notifications::rules::evaluate_conditions(&rule.conditions, &event_json);
+
+    let would_trigger = rule.enabled && conditions_met;
+
+    let message = if !rule.enabled {
+        "Rule is disabled and would not trigger.".to_string()
+    } else if conditions_met {
+        format!(
+            "Rule would trigger and send to {} channel(s).",
+            rule.channels.len()
+        )
+    } else {
+        "Rule conditions were not met for the test event.".to_string()
+    };
+
+    Ok(Json(TestRuleResponse {
+        would_trigger,
+        conditions_met,
+        message,
+    }))
+}
+
+/// List notification delivery history.
+async fn list_notification_history(
+    State(state): State<AppState>,
+    Query(query): Query<NotificationHistoryQuery>,
+) -> Result<Json<Vec<NotificationHistoryResponse>>, ApiError> {
+    let engine = get_notification_engine(&state);
+    let limit = query.limit.min(1000);
+    let history = engine.get_history(Some(limit)).await;
+    let response: Vec<NotificationHistoryResponse> = history
+        .into_iter()
+        .map(NotificationHistoryResponse::from)
+        .collect();
+    Ok(Json(response))
+}
+
+// =============================================================================
+// Helper Functions for Rules
+// =============================================================================
+
+/// Gets or creates the notification engine from app state.
+///
+/// The notification engine is stored as a shared resource.
+/// For now we use a lazily initialized global engine per app instance.
+fn get_notification_engine(_state: &AppState) -> &'static NotificationEngine {
+    use std::sync::OnceLock;
+    static ENGINE: OnceLock<NotificationEngine> = OnceLock::new();
+    ENGINE.get_or_init(NotificationEngine::new)
+}
+
+/// Builds a test event for rule testing purposes.
+fn build_test_event(trigger: &NotificationTrigger) -> tw_core::TriageEvent {
+    let test_id = Uuid::new_v4();
+    match trigger {
+        NotificationTrigger::IncidentCreated => tw_core::TriageEvent::IncidentCreated {
+            incident_id: test_id,
+            alert_id: "test-alert-001".to_string(),
+        },
+        NotificationTrigger::IncidentResolved => tw_core::TriageEvent::IncidentResolved {
+            incident_id: test_id,
+            resolution: tw_core::events::Resolution {
+                resolution_type: tw_core::events::ResolutionType::Remediated,
+                summary: "Test resolution".to_string(),
+                actions_taken: vec![],
+                lessons_learned: None,
+            },
+        },
+        NotificationTrigger::IncidentEscalated => tw_core::TriageEvent::IncidentEscalated {
+            incident_id: test_id,
+            escalation_level: 2,
+            reason: "Test escalation".to_string(),
+        },
+        NotificationTrigger::AnalysisCompleted => {
+            // Build a minimal TriageAnalysis for testing
+            let analysis = tw_core::incident::TriageAnalysis {
+                verdict: tw_core::incident::TriageVerdict::TruePositive,
+                confidence: 0.85,
+                calibrated_confidence: None,
+                summary: "Test analysis".to_string(),
+                reasoning: "Test reasoning".to_string(),
+                mitre_techniques: vec![],
+                iocs: vec![],
+                recommendations: vec!["Test recommendation".to_string()],
+                risk_score: 75,
+                analyzed_by: "test".to_string(),
+                timestamp: Utc::now(),
+                evidence: vec![],
+                investigation_steps: vec![],
+            };
+            tw_core::TriageEvent::AnalysisComplete {
+                incident_id: test_id,
+                analysis,
+            }
+        }
+        NotificationTrigger::ActionPendingApproval => tw_core::TriageEvent::ActionsProposed {
+            incident_id: test_id,
+            actions: vec![],
+        },
+        NotificationTrigger::ActionExecuted => tw_core::TriageEvent::ActionExecuted {
+            incident_id: test_id,
+            action_id: Uuid::new_v4(),
+            action_type: tw_core::incident::ActionType::IsolateHost,
+            result: tw_core::events::ActionResult {
+                success: true,
+                message: "Test action executed".to_string(),
+                data: None,
+                error: None,
+            },
+        },
+        NotificationTrigger::KillSwitchActivated => tw_core::TriageEvent::KillSwitchActivated {
+            reason: "Test kill switch activation".to_string(),
+            activated_by: "test-user".to_string(),
+        },
+        NotificationTrigger::SystemError => tw_core::TriageEvent::SystemError {
+            incident_id: None,
+            error: "Test system error".to_string(),
+            recoverable: true,
+        },
+        NotificationTrigger::FeedbackReceived => tw_core::TriageEvent::FeedbackReceived {
+            incident_id: test_id,
+            feedback_id: Uuid::new_v4(),
+            feedback_type: "correction".to_string(),
+            is_correction: true,
+        },
+        NotificationTrigger::SeverityChanged => tw_core::TriageEvent::StatusChanged {
+            incident_id: test_id,
+            old_status: tw_core::incident::IncidentStatus::New,
+            new_status: tw_core::incident::IncidentStatus::Enriching,
+        },
+        NotificationTrigger::PlaybookCompleted | NotificationTrigger::Custom(_) => {
+            // Use a generic incident created event for unsupported triggers
+            tw_core::TriageEvent::IncidentCreated {
+                incident_id: test_id,
+                alert_id: "test-alert-playbook".to_string(),
+            }
         }
     }
 }
@@ -2163,5 +2615,311 @@ mod tests {
         assert!(resp.enabled); // Default is true
         assert!(!resp.created_at.is_empty());
         assert!(!resp.updated_at.is_empty());
+    }
+
+    // =========================================================================
+    // Notification Rules API Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_list_rules_empty() {
+        let app = setup_test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/notifications/rules")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let rules: Vec<NotificationRuleResponse> = serde_json::from_slice(&body).unwrap();
+        // May or may not be empty depending on the global engine state from other tests
+        let _ = rules;
+    }
+
+    #[tokio::test]
+    async fn test_create_rule_success() {
+        let app = setup_test_app().await;
+
+        let payload = serde_json::json!({
+            "name": "Critical Incident Alert",
+            "description": "Notify on critical incidents",
+            "trigger": "incident_created",
+            "conditions": [{
+                "field": "severity",
+                "operator": "equals",
+                "value": "critical"
+            }],
+            "channels": [{
+                "type": "slack",
+                "channel_id": "#security-alerts",
+                "mention_users": ["@oncall"]
+            }],
+            "throttle": {
+                "max_per_hour": 10,
+                "cooldown_secs": 60
+            },
+            "enabled": true
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/notifications/rules")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&payload).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let rule: NotificationRuleResponse = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(rule.name, "Critical Incident Alert");
+        assert!(rule.enabled);
+        assert_eq!(rule.conditions.len(), 1);
+        assert_eq!(rule.channels.len(), 1);
+        assert!(rule.throttle.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_create_rule_missing_name() {
+        let app = setup_test_app().await;
+
+        let payload = serde_json::json!({
+            "name": "",
+            "trigger": "incident_created",
+            "channels": [{
+                "type": "slack",
+                "channel_id": "#alerts"
+            }]
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/notifications/rules")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&payload).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_create_rule_missing_channels() {
+        let app = setup_test_app().await;
+
+        let payload = serde_json::json!({
+            "name": "No Channels Rule",
+            "trigger": "incident_created",
+            "channels": []
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/notifications/rules")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&payload).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_get_rule_not_found() {
+        let app = setup_test_app().await;
+
+        let non_existent_id = Uuid::new_v4();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(&format!("/api/notifications/rules/{}", non_existent_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_delete_rule_not_found() {
+        let app = setup_test_app().await;
+
+        let non_existent_id = Uuid::new_v4();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(&format!("/api/notifications/rules/{}", non_existent_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_notification_history_empty() {
+        let app = setup_test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/notifications/history")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let history: Vec<NotificationHistoryResponse> = serde_json::from_slice(&body).unwrap();
+        let _ = history;
+    }
+
+    #[tokio::test]
+    async fn test_notification_history_with_limit() {
+        let app = setup_test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/notifications/history?limit=10")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_notification_rule_response_serialization() {
+        let rule = NotificationRule::new(
+            Uuid::new_v4(),
+            "Test Rule".to_string(),
+            NotificationTrigger::IncidentCreated,
+            vec![ChannelConfig::Slack {
+                channel_id: "#test".to_string(),
+                mention_users: vec![],
+            }],
+        );
+
+        let response = NotificationRuleResponse::from(rule.clone());
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("Test Rule"));
+        assert!(json.contains("incident_created"));
+    }
+
+    #[test]
+    fn test_create_rule_request_deserialization() {
+        let json = r#"{
+            "name": "Test",
+            "trigger": "kill_switch_activated",
+            "channels": [{"type": "teams", "webhook_url": "https://example.com/webhook"}],
+            "enabled": false
+        }"#;
+
+        let request: CreateNotificationRuleRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request.name, "Test");
+        assert!(!request.enabled);
+        assert!(request.conditions.is_empty());
+    }
+
+    #[test]
+    fn test_create_rule_request_defaults() {
+        let json = r#"{
+            "name": "Defaults Test",
+            "trigger": "system_error",
+            "channels": [{"type": "email", "recipients": ["admin@test.com"]}]
+        }"#;
+
+        let request: CreateNotificationRuleRequest = serde_json::from_str(json).unwrap();
+        assert!(request.enabled); // Default true
+        assert!(request.conditions.is_empty()); // Default empty
+        assert!(request.throttle.is_none()); // Default none
+        assert!(request.description.is_none()); // Default none
+    }
+
+    #[test]
+    fn test_build_test_event_incident_created() {
+        let event = build_test_event(&NotificationTrigger::IncidentCreated);
+        match event {
+            tw_core::TriageEvent::IncidentCreated { alert_id, .. } => {
+                assert_eq!(alert_id, "test-alert-001");
+            }
+            _ => panic!("Expected IncidentCreated event"),
+        }
+    }
+
+    #[test]
+    fn test_build_test_event_kill_switch() {
+        let event = build_test_event(&NotificationTrigger::KillSwitchActivated);
+        match event {
+            tw_core::TriageEvent::KillSwitchActivated { reason, .. } => {
+                assert!(reason.contains("Test"));
+            }
+            _ => panic!("Expected KillSwitchActivated event"),
+        }
+    }
+
+    #[test]
+    fn test_build_test_event_all_triggers() {
+        // Verify all triggers produce valid events without panicking
+        let triggers = vec![
+            NotificationTrigger::IncidentCreated,
+            NotificationTrigger::SeverityChanged,
+            NotificationTrigger::ActionPendingApproval,
+            NotificationTrigger::AnalysisCompleted,
+            NotificationTrigger::IncidentResolved,
+            NotificationTrigger::ActionExecuted,
+            NotificationTrigger::IncidentEscalated,
+            NotificationTrigger::KillSwitchActivated,
+            NotificationTrigger::SystemError,
+            NotificationTrigger::FeedbackReceived,
+            NotificationTrigger::PlaybookCompleted,
+            NotificationTrigger::Custom("test".to_string()),
+        ];
+
+        for trigger in triggers {
+            let _ = build_test_event(&trigger);
+        }
     }
 }

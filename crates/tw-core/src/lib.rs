@@ -5,11 +5,13 @@
 //! This crate provides the central orchestration loop, incident data models,
 //! workflow state machine, and event bus for the Triage Warden system.
 
+pub mod asset_store;
 pub mod auth;
 pub mod cache;
 pub mod calibration;
 pub mod connector;
 pub mod crypto;
+pub mod custom_ioc;
 pub mod enrichment;
 pub mod events;
 pub mod features;
@@ -18,10 +20,13 @@ pub mod incident;
 pub mod knowledge;
 pub mod leadership;
 pub mod messaging;
+pub mod models;
 pub mod notification;
+pub mod notifications;
 pub mod orchestrator;
 pub mod playbook;
 pub mod policy;
+pub mod sandbox_pipeline;
 pub mod tenant;
 pub mod training;
 pub mod validation;
@@ -46,6 +51,10 @@ pub use incident::{
 };
 pub use notification::{
     ChannelType, NotificationChannel, NotificationChannelUpdate, NOTIFICATION_EVENTS,
+};
+pub use notifications::{
+    ChannelConfig, ConditionOperator, NotificationCondition, NotificationEngine,
+    NotificationHistory, NotificationRule, NotificationTrigger, ThrottleConfig,
 };
 pub use orchestrator::Orchestrator;
 pub use playbook::{Playbook, PlaybookStage, PlaybookStep};
@@ -102,8 +111,9 @@ pub use features::{
 
 // Enrichment exports
 pub use enrichment::{
+    adjust_severity, enrich_with_asset_context, AssetContext, AssetEnrichmentResult,
     CachedEnrichment, CachedEnrichmentStats, EnrichmentCacheOptions, EnrichmentConfig,
-    EnrichmentError, EnrichmentResult, ThreatIntelRequest, ENRICHMENT_CACHE_FLAG,
+    EnrichmentError, EnrichmentResult, IdentityContext, ThreatIntelRequest, ENRICHMENT_CACHE_FLAG,
 };
 
 // Vector store exports
@@ -149,6 +159,33 @@ pub use knowledge::{
     KnowledgeEmbeddingService, KnowledgeFilter, KnowledgeIndexStats, KnowledgeSearchResult,
     KnowledgeStats, KnowledgeType, UpdateKnowledgeDocument, KNOWLEDGE_COLLECTION,
     MAX_KNOWLEDGE_TEXT_LENGTH,
+};
+
+// Asset & Identity Context Store exports
+pub use asset_store::sync::{
+    find_identity_match, AssetSyncJob, IdentityStitchResult, SyncResult, SyncType,
+};
+pub use asset_store::{
+    AssetSearchParams, AssetStore, AssetStoreError, AssetStoreResult, IdentitySearchParams,
+    IdentityStore, InMemoryAssetStore, InMemoryIdentityStore, InMemoryRelationshipStore,
+    RelationshipStore,
+};
+pub use models::{
+    Asset, AssetIdentifier, AssetType, Criticality, EntityRef, EntityRelationship, EntityType,
+    Environment, IdentifierType, Identity, IdentityStatus, IdentityType, RelationshipQuery,
+    RelationshipType,
+};
+
+// Custom IoC exports
+pub use custom_ioc::{
+    BulkImportError, BulkImportResult, CreateIocRequest, CustomIoc, IocClassification, IocList,
+    IocListType, IocSearchParams, IocType, UpdateIocRequest,
+};
+
+// Sandbox pipeline exports
+pub use sandbox_pipeline::{
+    ArtifactType, IncidentArtifact, PipelineStatus, PipelineSubmission, SandboxSubmissionRule,
+    SeverityFilter, SubmissionQueue,
 };
 
 #[cfg(feature = "vector-store")]

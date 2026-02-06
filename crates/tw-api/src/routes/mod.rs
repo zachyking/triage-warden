@@ -1,12 +1,15 @@
 //! API routes.
 
 pub mod api_keys;
+pub mod assets;
 pub mod auth;
 pub mod connectors;
 pub mod features;
 pub mod feedback;
 pub mod health;
+pub mod identities;
 pub mod incidents;
+pub mod iocs;
 pub mod kill_switch;
 pub mod knowledge;
 pub mod metrics;
@@ -56,4 +59,7 @@ fn api_routes() -> Router<AppState> {
         .nest("/training", training::routes())
         .nest("/knowledge", knowledge::routes())
         .nest("/webhooks", webhooks::routes())
+        .nest("/assets", assets::routes())
+        .nest("/identities", identities::routes())
+        .nest("/iocs", iocs::routes())
 }

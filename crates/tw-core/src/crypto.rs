@@ -378,6 +378,11 @@ pub fn generate_encryption_key() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Tests that manipulate environment variables must hold this lock
+    /// to avoid race conditions when running in parallel.
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     fn test_encryptor() -> Aes256GcmEncryptor {
         let key = [0u8; 32]; // All zeros for testing
@@ -534,6 +539,7 @@ mod tests {
 
     #[test]
     fn test_is_production_environment_default() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         // Clear all production env vars for this test
         std::env::remove_var("TW_ENV");
         std::env::remove_var("NODE_ENV");
@@ -544,6 +550,7 @@ mod tests {
 
     #[test]
     fn test_create_encryptor_with_valid_key() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         // Set a valid key
         let key = generate_encryption_key();
         std::env::set_var("TW_ENCRYPTION_KEY", &key);
@@ -558,6 +565,7 @@ mod tests {
 
     #[test]
     fn test_create_encryptor_dev_mode_no_key() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         // Ensure we're not in production
         std::env::remove_var("TW_ENV");
         std::env::remove_var("NODE_ENV");
@@ -577,6 +585,7 @@ mod tests {
 
     #[test]
     fn test_create_encryptor_production_no_key_fails() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         // Set production mode
         std::env::set_var("TW_ENV", "production");
         std::env::remove_var("TW_ENCRYPTION_KEY");
@@ -607,6 +616,7 @@ mod tests {
 
     #[test]
     fn test_create_encryptor_production_invalid_key_fails() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         // Set production mode with invalid key
         std::env::set_var("TW_ENV", "production");
         std::env::set_var("TW_ENCRYPTION_KEY", "not-valid-base64!!!");
@@ -621,6 +631,7 @@ mod tests {
 
     #[test]
     fn test_create_encryptor_production_short_key_fails() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         // Set production mode with key that's too short
         std::env::set_var("TW_ENV", "production");
         std::env::set_var("TW_ENCRYPTION_KEY", BASE64.encode([0u8; 16])); // Only 16 bytes

@@ -41,8 +41,13 @@
 //!     .await?;
 //! ```
 
+pub mod asset_context;
 mod types;
 
+pub use asset_context::{
+    adjust_severity, enrich_with_asset_context, AssetContext, AssetEnrichmentResult,
+    IdentityContext,
+};
 pub use types::{
     CachedEnrichmentStats, EnrichmentCacheOptions, EnrichmentConfig, EnrichmentError,
     EnrichmentResult, ThreatIntelRequest,
