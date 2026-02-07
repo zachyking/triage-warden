@@ -14,7 +14,7 @@ mod validator;
 
 use api_client::{ApiClient, ListIncidentsParams};
 use commands::{run_server, ServeConfig};
-use config::AppConfig;
+use config::{AppConfig, ConnectorConfig};
 use validator::ConfigValidator;
 
 #[derive(Parser)]
@@ -600,8 +600,53 @@ async fn cmd_incident(action: IncidentCommands, format: OutputFormat, api_url: &
             }
         },
         IncidentCommands::Update { id, status } => {
-            println!("Updating incident {} to status: {}", id.cyan(), status);
-            println!("(not implemented - use API directly)");
+            let incident_id = match uuid::Uuid::parse_str(&id) {
+                Ok(uuid) => uuid,
+                Err(_) => {
+                    println!("{}: Invalid UUID format", "Error".red());
+                    return Ok(());
+                }
+            };
+
+            let requested_status = status.to_ascii_lowercase();
+            let result = match requested_status.as_str() {
+                "dismissed" | "dismiss" => client.dismiss_incident(incident_id, None).await,
+                "resolved" | "resolve" => client.resolve_incident(incident_id, None).await,
+                "enriching" | "enrich" => client.enrich_incident(incident_id).await,
+                _ => {
+                    println!(
+                        "{}: Unsupported status '{}' for CLI update",
+                        "Error".red(),
+                        status
+                    );
+                    println!("Supported values: dismissed, resolved, enriching");
+                    return Ok(());
+                }
+            };
+
+            match result {
+                Ok(()) => {
+                    if format == OutputFormat::Json {
+                        let payload = serde_json::json!({
+                            "incident_id": incident_id,
+                            "status": requested_status,
+                            "updated": true
+                        });
+                        println!("{}", serde_json::to_string_pretty(&payload)?);
+                    } else {
+                        println!(
+                            "{} incident {} to {}",
+                            "Updated".green(),
+                            id.cyan(),
+                            requested_status
+                        );
+                    }
+                }
+                Err(e) => {
+                    println!("{}: {}", "Error".red(), e);
+                    println!("Make sure the API server is running (triage-warden serve)");
+                }
+            }
         }
     }
     Ok(())
@@ -610,7 +655,7 @@ async fn cmd_incident(action: IncidentCommands, format: OutputFormat, api_url: &
 async fn cmd_connector(
     action: ConnectorCommands,
     config: AppConfig,
-    _format: OutputFormat,
+    format: OutputFormat,
 ) -> Result<()> {
     match action {
         ConnectorCommands::List => {
@@ -635,7 +680,26 @@ async fn cmd_connector(
             if let Some(connector) = config.connectors.get(&name) {
                 println!("  Type: {}", connector.connector_type);
                 println!("  Base URL: {}", connector.base_url);
-                println!("  Status: {}", "Test not implemented".yellow());
+                let (healthy, message) = test_connector_connectivity(connector).await;
+                let status = if healthy {
+                    "reachable".green().to_string()
+                } else {
+                    "unreachable".red().to_string()
+                };
+
+                if format == OutputFormat::Json {
+                    let payload = serde_json::json!({
+                        "name": name,
+                        "type": connector.connector_type,
+                        "base_url": connector.base_url,
+                        "healthy": healthy,
+                        "status": message
+                    });
+                    println!("{}", serde_json::to_string_pretty(&payload)?);
+                } else {
+                    println!("  Status: {}", status);
+                    println!("  Details: {}", message);
+                }
             } else {
                 println!("{}", "Connector not found".red());
             }
@@ -644,12 +708,18 @@ async fn cmd_connector(
             println!("{}", "Connector Health".bold());
             println!("────────────────");
             for (name, connector) in &config.connectors {
-                let health = if connector.enabled {
-                    "Unknown (daemon not running)".yellow()
+                if !connector.enabled {
+                    println!("  {}: {}", name, "Disabled".red());
+                    continue;
+                }
+
+                let (healthy, message) = test_connector_connectivity(connector).await;
+                let health = if healthy {
+                    "Reachable".green()
                 } else {
-                    "Disabled".red()
+                    "Unreachable".red()
                 };
-                println!("  {}: {}", name, health);
+                println!("  {}: {} ({})", name, health, message);
             }
         }
     }
@@ -659,7 +729,7 @@ async fn cmd_connector(
 async fn cmd_action(
     action: ActionCommands,
     _config: AppConfig,
-    _format: OutputFormat,
+    format: OutputFormat,
 ) -> Result<()> {
     match action {
         ActionCommands::List => {
@@ -674,10 +744,52 @@ async fn cmd_action(
             println!("  {} - Create a ticket", "create_ticket".cyan());
             println!("  {} - Send a notification", "send_notification".cyan());
         }
-        ActionCommands::Show { name } => {
-            println!("Action: {}", name.cyan());
-            println!("(action details not implemented)");
-        }
+        ActionCommands::Show { name } => match get_action_details(&name) {
+            Some(details) => {
+                if format == OutputFormat::Json {
+                    let payload = serde_json::json!({
+                        "name": details.name,
+                        "description": details.description,
+                        "required_params": details.required_params,
+                        "optional_params": details.optional_params,
+                        "supports_dry_run": details.supports_dry_run
+                    });
+                    println!("{}", serde_json::to_string_pretty(&payload)?);
+                } else {
+                    println!("Action: {}", details.name.cyan());
+                    println!("─────────────────");
+                    println!("Description: {}", details.description);
+                    println!(
+                        "Required params: {}",
+                        if details.required_params.is_empty() {
+                            "none".to_string()
+                        } else {
+                            details.required_params.join(", ")
+                        }
+                    );
+                    println!(
+                        "Optional params: {}",
+                        if details.optional_params.is_empty() {
+                            "none".to_string()
+                        } else {
+                            details.optional_params.join(", ")
+                        }
+                    );
+                    println!(
+                        "Supports dry-run: {}",
+                        if details.supports_dry_run {
+                            "yes"
+                        } else {
+                            "no"
+                        }
+                    );
+                }
+            }
+            None => {
+                println!("{}: Unknown action '{}'", "Error".red(), name);
+                println!("Run `triage-warden action list` to see supported actions.");
+            }
+        },
         ActionCommands::Execute {
             name,
             params,
@@ -704,6 +816,87 @@ async fn cmd_action(
         }
     }
     Ok(())
+}
+
+async fn test_connector_connectivity(connector: &ConnectorConfig) -> (bool, String) {
+    if connector.base_url.is_empty() {
+        return (
+            false,
+            "No base URL configured for connectivity test".to_string(),
+        );
+    }
+
+    let timeout_secs = connector.timeout_secs.clamp(1, 120);
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .build()
+    {
+        Ok(client) => client,
+        Err(e) => return (false, format!("Failed to initialize HTTP client: {}", e)),
+    };
+
+    let response = client.get(&connector.base_url).send().await;
+    match response {
+        Ok(resp) => (
+            true,
+            format!(
+                "HTTP {} from {}",
+                resp.status().as_u16(),
+                connector.base_url
+            ),
+        ),
+        Err(e) => (false, e.to_string()),
+    }
+}
+
+struct ActionDetails {
+    name: &'static str,
+    description: &'static str,
+    required_params: &'static [&'static str],
+    optional_params: &'static [&'static str],
+    supports_dry_run: bool,
+}
+
+fn get_action_details(action_name: &str) -> Option<ActionDetails> {
+    let normalized = action_name.to_ascii_lowercase();
+    match normalized.as_str() {
+        "isolate_host" => Some(ActionDetails {
+            name: "isolate_host",
+            description: "Isolate a host from the network to contain active threats.",
+            required_params: &["hostname"],
+            optional_params: &["ip", "reason", "incident_id"],
+            supports_dry_run: true,
+        }),
+        "unisolate_host" => Some(ActionDetails {
+            name: "unisolate_host",
+            description: "Remove host isolation after remediation is complete.",
+            required_params: &["hostname"],
+            optional_params: &["ip", "reason", "incident_id"],
+            supports_dry_run: true,
+        }),
+        "disable_user" => Some(ActionDetails {
+            name: "disable_user",
+            description: "Disable a user account in the identity provider.",
+            required_params: &["username"],
+            optional_params: &["email", "reason", "incident_id"],
+            supports_dry_run: true,
+        }),
+        "create_ticket" => Some(ActionDetails {
+            name: "create_ticket",
+            description: "Create a ticket in the configured ticketing system.",
+            required_params: &["title", "description"],
+            optional_params: &["priority", "labels", "assignee"],
+            supports_dry_run: true,
+        }),
+        "send_notification" => Some(ActionDetails {
+            name: "send_notification",
+            description: "Send notifications to configured channels.",
+            required_params: &["template", "channel"],
+            optional_params: &["severity", "incident_id", "context"],
+            supports_dry_run: true,
+        }),
+        _ => None,
+    }
 }
 
 async fn cmd_metrics(format: OutputFormat, api_url: &str) -> Result<()> {

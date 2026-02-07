@@ -2334,6 +2334,16 @@ impl Default for MetricsBridge {
 // Legacy TriageWardenBridge (kept for backward compatibility)
 // ============================================================================
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct SubmittedAnalysis {
+    incident_id: String,
+    verdict: String,
+    confidence: f64,
+    summary: String,
+    recommended_actions: Vec<String>,
+    submitted_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// Main bridge class for Python interop (legacy).
 ///
 /// This class is maintained for backward compatibility.
@@ -2347,6 +2357,8 @@ pub struct TriageWardenBridge {
     threat_intel: Option<Arc<MockThreatIntelConnector>>,
     siem: Option<Arc<MockSIEMConnector>>,
     edr: Option<Arc<MockEDRConnector>>,
+    ticketing: Option<Arc<MockTicketingConnector>>,
+    submitted_analyses: Arc<std::sync::Mutex<Vec<SubmittedAnalysis>>>,
 }
 
 #[pymethods]
@@ -2358,6 +2370,8 @@ impl TriageWardenBridge {
             threat_intel: None,
             siem: None,
             edr: None,
+            ticketing: None,
+            submitted_analyses: Arc::new(std::sync::Mutex::new(Vec::new())),
         })
     }
 
@@ -2367,6 +2381,7 @@ impl TriageWardenBridge {
         self.threat_intel = Some(Arc::new(MockThreatIntelConnector::new("mock")));
         self.siem = Some(Arc::new(MockSIEMConnector::with_sample_data("mock")));
         self.edr = Some(Arc::new(MockEDRConnector::with_sample_data("mock")));
+        self.ticketing = Some(Arc::new(MockTicketingConnector::new("mock")));
 
         tracing::info!(
             "TriageWardenBridge initialized with config: {}",
@@ -2480,13 +2495,45 @@ impl TriageWardenBridge {
     /// Create a ticket.
     pub fn create_ticket(
         &self,
-        _title: &str,
-        _description: &str,
-        _priority: &str,
-        _labels: Vec<String>,
+        title: &str,
+        description: &str,
+        priority: &str,
+        labels: Vec<String>,
     ) -> PyResult<String> {
-        // Placeholder - returns a mock ticket ID
-        Ok(format!("MOCK-{}", Uuid::new_v4()))
+        let connector = self
+            .ticketing
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Bridge not initialized"))?;
+
+        let ticket_priority = match priority.to_lowercase().as_str() {
+            "lowest" => TicketPriority::Lowest,
+            "low" => TicketPriority::Low,
+            "medium" => TicketPriority::Medium,
+            "high" => TicketPriority::High,
+            "highest" => TicketPriority::Highest,
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "Invalid priority: {}. Must be one of: lowest, low, medium, high, highest",
+                    priority
+                )))
+            }
+        };
+
+        let request = CreateTicketRequest {
+            title: title.to_string(),
+            description: description.to_string(),
+            ticket_type: "Task".to_string(),
+            priority: ticket_priority,
+            labels,
+            assignee: None,
+            custom_fields: std::collections::HashMap::new(),
+        };
+
+        let ticket = get_runtime()
+            .block_on(async move { connector.create_ticket(request).await })
+            .map_err(connector_error_to_py)?;
+
+        Ok(ticket.key)
     }
 
     /// Submit triage analysis to the orchestrator.
@@ -2495,10 +2542,30 @@ impl TriageWardenBridge {
         incident_id: &str,
         verdict: &str,
         confidence: f64,
-        _summary: &str,
-        _recommended_actions: Vec<String>,
+        summary: &str,
+        recommended_actions: Vec<String>,
     ) -> PyResult<bool> {
-        // Placeholder - would submit to the orchestrator
+        if !(0.0..=1.0).contains(&confidence) {
+            return Err(PyValueError::new_err(
+                "confidence must be between 0.0 and 1.0",
+            ));
+        }
+
+        let analysis = SubmittedAnalysis {
+            incident_id: incident_id.to_string(),
+            verdict: verdict.to_string(),
+            confidence,
+            summary: summary.to_string(),
+            recommended_actions,
+            submitted_at: chrono::Utc::now(),
+        };
+
+        let mut submissions = self
+            .submitted_analyses
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to persist submitted analysis"))?;
+        submissions.push(analysis);
+
         tracing::info!(
             "Analysis submitted for incident {}: {} (confidence: {})",
             incident_id,
@@ -2506,6 +2573,15 @@ impl TriageWardenBridge {
             confidence
         );
         Ok(true)
+    }
+
+    /// Returns the number of persisted analysis submissions.
+    pub fn submitted_analysis_count(&self) -> PyResult<usize> {
+        let submissions = self
+            .submitted_analyses
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to read submitted analyses"))?;
+        Ok(submissions.len())
     }
 
     /// Check if the bridge is healthy.
@@ -2519,6 +2595,12 @@ impl TriageWardenBridge {
         self.threat_intel = None;
         self.siem = None;
         self.edr = None;
+        self.ticketing = None;
+
+        if let Ok(mut submissions) = self.submitted_analyses.lock() {
+            submissions.clear();
+        }
+
         Ok(())
     }
 }

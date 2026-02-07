@@ -1113,10 +1113,8 @@ impl Orchestrator {
     pub async fn run_cleanup_task(&self) -> Result<(), OrchestratorError> {
         let result = self
             .run_if_leader(LEADER_RESOURCE_CLEANUP, "cleanup", async {
-                // Placeholder for actual cleanup implementation
                 debug!("Running cleanup task");
 
-                // Example: Clean up old incidents
                 let cutoff = Utc::now() - chrono::Duration::days(30);
                 let incidents = self.incidents.read().await;
                 let old_incidents: Vec<Uuid> = incidents
@@ -1133,15 +1131,25 @@ impl Orchestrator {
                     .collect();
                 drop(incidents);
 
-                let cleaned_count = old_incidents.len();
-                if cleaned_count > 0 {
+                if !old_incidents.is_empty() {
                     let mut incidents = self.incidents.write().await;
-                    for id in old_incidents {
-                        incidents.remove(&id);
+                    for id in &old_incidents {
+                        incidents.remove(id);
                     }
+                    drop(incidents);
+
+                    let mut workflows = self.workflow_engine.write().await;
+                    let mut cleaned_workflows = 0usize;
+                    for id in &old_incidents {
+                        if workflows.remove_workflow(*id).is_some() {
+                            cleaned_workflows += 1;
+                        }
+                    }
+
                     info!(
                         instance_id = %self.instance_id,
-                        cleaned_count = cleaned_count,
+                        cleaned_incidents = old_incidents.len(),
+                        cleaned_workflows = cleaned_workflows,
                         "Cleaned up old incidents"
                     );
                 }
@@ -1168,12 +1176,51 @@ impl Orchestrator {
     pub async fn run_scheduler_task(&self) -> Result<(), OrchestratorError> {
         let result = self
             .run_if_leader(LEADER_RESOURCE_SCHEDULER, "scheduler", async {
-                // Placeholder for actual scheduler implementation
                 debug!("Running scheduler task");
 
-                // Example: Process any scheduled jobs
-                // In a real implementation, this would check a job queue
-                // and execute pending scheduled tasks
+                let stale_approvals = {
+                    let mut workflow_engine = self.workflow_engine.write().await;
+                    workflow_engine.process_all_stale_approvals()
+                };
+
+                let config = self.config.read().await.clone();
+                let now = Utc::now();
+                let incidents = self.incidents.read().await;
+
+                let overdue_enrichment = incidents
+                    .values()
+                    .filter(|incident| {
+                        incident.status == IncidentStatus::Enriching
+                            && (now - incident.updated_at).num_seconds()
+                                > config.enrichment_timeout_secs as i64
+                    })
+                    .count();
+
+                let overdue_analysis = incidents
+                    .values()
+                    .filter(|incident| {
+                        incident.status == IncidentStatus::Analyzing
+                            && (now - incident.updated_at).num_seconds()
+                                > config.analysis_timeout_secs as i64
+                    })
+                    .count();
+
+                if overdue_enrichment > 0 || overdue_analysis > 0 {
+                    warn!(
+                        instance_id = %self.instance_id,
+                        overdue_enrichment = overdue_enrichment,
+                        overdue_analysis = overdue_analysis,
+                        "Detected overdue incidents during scheduler sweep"
+                    );
+                }
+
+                info!(
+                    instance_id = %self.instance_id,
+                    stale_approvals = stale_approvals,
+                    overdue_enrichment = overdue_enrichment,
+                    overdue_analysis = overdue_analysis,
+                    "Scheduler sweep complete"
+                );
 
                 Ok::<_, std::convert::Infallible>(())
             })
@@ -1197,16 +1244,31 @@ impl Orchestrator {
     pub async fn run_metrics_task(&self) -> Result<(), OrchestratorError> {
         let result = self
             .run_if_leader(LEADER_RESOURCE_METRICS, "metrics", async {
-                // Placeholder for actual metrics aggregation implementation
                 debug!("Running metrics aggregation task");
 
-                // Example: Compute and log current stats
                 let stats = self.stats.read().await;
+                let incidents = self.incidents.read().await;
+                let mut status_counts: HashMap<String, usize> = HashMap::new();
+                for incident in incidents.values() {
+                    let key = format!("{:?}", incident.status).to_ascii_lowercase();
+                    *status_counts.entry(key).or_insert(0) += 1;
+                }
+                drop(incidents);
+
+                let workflow_engine = self.workflow_engine.read().await;
+                let active_workflows = workflow_engine.active_workflow_count();
+                let pending_approvals = workflow_engine.get_all_pending_approvals().len();
+
                 info!(
                     instance_id = %self.instance_id,
                     alerts_received = stats.alerts_received,
                     incidents_created = stats.incidents_created,
                     incidents_resolved = stats.incidents_resolved,
+                    actions_executed = stats.actions_executed,
+                    incidents_in_progress = stats.incidents_in_progress,
+                    active_workflows = active_workflows,
+                    pending_approvals = pending_approvals,
+                    status_counts = ?status_counts,
                     "Metrics aggregation complete"
                 );
 
@@ -2293,6 +2355,65 @@ mod tests {
 
         let counts = orchestrator.get_incident_counts().await;
         assert_eq!(*counts.get(&IncidentStatus::New).unwrap_or(&0), 3);
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_task_removes_old_incident_and_workflow_state() {
+        let orchestrator = Orchestrator::new();
+        let alert = create_test_alert();
+        let incident_id = orchestrator.process_alert(alert).await.unwrap();
+
+        orchestrator
+            .update_incident(incident_id, |incident| {
+                incident.status = IncidentStatus::Resolved;
+                incident.created_at = Utc::now() - chrono::Duration::days(45);
+            })
+            .await
+            .unwrap();
+
+        orchestrator.run_cleanup_task().await.unwrap();
+
+        assert!(orchestrator.get_incident(incident_id).await.is_none());
+        let workflow_engine = orchestrator.workflow_engine.read().await;
+        assert!(workflow_engine.get_workflow(incident_id).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_scheduler_task_times_out_stale_approvals() {
+        let orchestrator = Orchestrator::new();
+        let alert = create_test_alert();
+        let incident_id = orchestrator.process_alert(alert).await.unwrap();
+        let analyst_ctx = create_analyst_context();
+
+        {
+            let mut workflow_engine = orchestrator.workflow_engine.write().await;
+            workflow_engine
+                .request_manual_approval(
+                    incident_id,
+                    IncidentStatus::Executing,
+                    &analyst_ctx,
+                    Some(-1), // already expired
+                )
+                .unwrap();
+        }
+
+        {
+            let workflow_engine = orchestrator.workflow_engine.read().await;
+            let state = workflow_engine.get_workflow(incident_id).unwrap();
+            assert_eq!(
+                state.approval_requests[0].status,
+                crate::workflow::ManualApprovalStatus::Pending
+            );
+        }
+
+        orchestrator.run_scheduler_task().await.unwrap();
+
+        let workflow_engine = orchestrator.workflow_engine.read().await;
+        let state = workflow_engine.get_workflow(incident_id).unwrap();
+        assert_eq!(
+            state.approval_requests[0].status,
+            crate::workflow::ManualApprovalStatus::TimedOut
+        );
     }
 
     // ============================================================

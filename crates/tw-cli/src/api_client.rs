@@ -101,6 +101,30 @@ impl ApiClient {
         self.get("/api/metrics").await
     }
 
+    /// Dismisses an incident.
+    pub async fn dismiss_incident(&self, id: Uuid, reason: Option<&str>) -> Result<()> {
+        let form = IncidentStatusForm {
+            reason: reason.map(std::string::ToString::to_string),
+        };
+        self.post_form_empty(&format!("/api/incidents/{}/dismiss", id), &form)
+            .await
+    }
+
+    /// Resolves an incident.
+    pub async fn resolve_incident(&self, id: Uuid, reason: Option<&str>) -> Result<()> {
+        let form = IncidentStatusForm {
+            reason: reason.map(std::string::ToString::to_string),
+        };
+        self.post_form_empty(&format!("/api/incidents/{}/resolve", id), &form)
+            .await
+    }
+
+    /// Requests re-enrichment for an incident.
+    pub async fn enrich_incident(&self, id: Uuid) -> Result<()> {
+        self.post_empty(&format!("/api/incidents/{}/enrich", id))
+            .await
+    }
+
     // Helper methods
 
     async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
@@ -128,6 +152,31 @@ impl ApiClient {
         self.handle_response(response).await
     }
 
+    async fn post_form_empty<B: Serialize>(&self, path: &str, body: &B) -> Result<()> {
+        let url = format!("{}{}", self.base_url, path);
+        let response = self
+            .client
+            .post(&url)
+            .form(body)
+            .send()
+            .await
+            .context("Failed to send request")?;
+
+        self.handle_empty_response(response).await
+    }
+
+    async fn post_empty(&self, path: &str) -> Result<()> {
+        let url = format!("{}{}", self.base_url, path);
+        let response = self
+            .client
+            .post(&url)
+            .send()
+            .await
+            .context("Failed to send request")?;
+
+        self.handle_empty_response(response).await
+    }
+
     async fn handle_response<T: DeserializeOwned>(&self, response: reqwest::Response) -> Result<T> {
         let status = response.status();
 
@@ -148,6 +197,23 @@ impl ApiClient {
             anyhow::bail!("API error ({}): {} - {}", status, error.code, error.message)
         }
     }
+
+    async fn handle_empty_response(&self, response: reqwest::Response) -> Result<()> {
+        let status = response.status();
+
+        if status.is_success() {
+            return Ok(());
+        }
+
+        let error: ApiErrorResponse = response.json().await.unwrap_or_else(|_| ApiErrorResponse {
+            code: "UNKNOWN".to_string(),
+            message: "Unknown error".to_string(),
+            details: None,
+            request_id: None,
+        });
+
+        anyhow::bail!("API error ({}): {} - {}", status, error.code, error.message)
+    }
 }
 
 // Request/Response types (matching server DTOs)
@@ -158,6 +224,12 @@ pub struct ListIncidentsParams {
     pub severity: Option<String>,
     pub page: Option<u32>,
     pub per_page: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct IncidentStatusForm {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
 }
 
 #[allow(dead_code)]

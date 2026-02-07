@@ -23,6 +23,7 @@ use crate::auth::{AuthorizationContext, Permission};
 use crate::incident::{Incident, IncidentStatus};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use thiserror::Error;
 use tracing::{debug, info, instrument, warn};
@@ -738,9 +739,85 @@ impl WorkflowEngine {
                 }
             }
             TransitionCondition::Custom(name) => {
-                warn!("Custom condition '{}' not implemented", name);
-                Ok(false)
+                Ok(self.evaluate_custom_condition(incident.id, name))
             }
+        }
+    }
+
+    fn evaluate_custom_condition(&self, incident_id: Uuid, name: &str) -> bool {
+        let Some(state) = self.active_workflows.get(&incident_id) else {
+            warn!(
+                "Cannot evaluate custom condition '{}' for incident {}: workflow state not found",
+                name, incident_id
+            );
+            return false;
+        };
+
+        // Preferred format: context["custom_conditions"] = {"name": true/false}
+        if let Some(condition_map) = state
+            .context
+            .get("custom_conditions")
+            .and_then(|v| v.as_object())
+        {
+            if let Some(value) = condition_map.get(name) {
+                return Self::json_value_to_bool(value).unwrap_or_else(|| {
+                    warn!(
+                        "Custom condition '{}' for incident {} has non-boolean value '{}'",
+                        name, incident_id, value
+                    );
+                    false
+                });
+            }
+        }
+
+        // Backward-compatible formats:
+        // - context["<condition_name>"] = true/false
+        // - context["custom_condition.<condition_name>"] = true/false
+        if let Some(value) = state.context.get(name) {
+            return Self::json_value_to_bool(value).unwrap_or_else(|| {
+                warn!(
+                    "Custom condition '{}' for incident {} has non-boolean value '{}'",
+                    name, incident_id, value
+                );
+                false
+            });
+        }
+
+        let prefixed_key = format!("custom_condition.{}", name);
+        if let Some(value) = state.context.get(&prefixed_key) {
+            return Self::json_value_to_bool(value).unwrap_or_else(|| {
+                warn!(
+                    "Custom condition '{}' for incident {} has non-boolean value '{}'",
+                    name, incident_id, value
+                );
+                false
+            });
+        }
+
+        debug!(
+            "Custom condition '{}' not set for incident {}, defaulting to false",
+            name, incident_id
+        );
+        false
+    }
+
+    fn json_value_to_bool(value: &Value) -> Option<bool> {
+        match value {
+            Value::Bool(b) => Some(*b),
+            Value::Number(n) => n
+                .as_i64()
+                .map(|v| v != 0)
+                .or_else(|| n.as_u64().map(|v| v != 0))
+                .or_else(|| n.as_f64().map(|v| v != 0.0)),
+            Value::String(s) => {
+                let normalized = s.trim().to_ascii_lowercase();
+                match normalized.as_str() {
+                    "true" | "1" | "yes" | "on" => Some(true),
+                    "false" | "0" | "no" | "off" => Some(false),
+                    _ => None,
+                }
+            }
+            _ => None,
         }
     }
 
@@ -1139,6 +1216,69 @@ mod tests {
         state.resume();
         assert!(!state.paused);
         assert!(state.pause_reason.is_none());
+    }
+
+    #[test]
+    fn test_custom_condition_from_direct_context_key() {
+        let mut engine = WorkflowEngine::new();
+        let mut incident = create_test_incident();
+        let analyst_ctx = create_analyst_context();
+        engine.register_workflow(&incident);
+
+        engine.transitions.push(WorkflowTransition {
+            from: IncidentStatus::New,
+            to: IncidentStatus::PendingReview,
+            condition: Some(TransitionCondition::Custom("ready_for_review".to_string())),
+            actions: vec![],
+        });
+
+        let state = engine.get_workflow_mut(incident.id).unwrap();
+        state.set_context("ready_for_review", serde_json::json!(true));
+
+        let result = engine.transition(&mut incident, IncidentStatus::PendingReview, &analyst_ctx);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_custom_condition_from_condition_map() {
+        let mut engine = WorkflowEngine::new();
+        let mut incident = create_test_incident();
+        let analyst_ctx = create_analyst_context();
+        engine.register_workflow(&incident);
+
+        engine.transitions.push(WorkflowTransition {
+            from: IncidentStatus::New,
+            to: IncidentStatus::PendingReview,
+            condition: Some(TransitionCondition::Custom("ready_for_review".to_string())),
+            actions: vec![],
+        });
+
+        let state = engine.get_workflow_mut(incident.id).unwrap();
+        state.set_context(
+            "custom_conditions",
+            serde_json::json!({ "ready_for_review": "true" }),
+        );
+
+        let result = engine.transition(&mut incident, IncidentStatus::PendingReview, &analyst_ctx);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_custom_condition_defaults_to_false_when_missing() {
+        let mut engine = WorkflowEngine::new();
+        let mut incident = create_test_incident();
+        let analyst_ctx = create_analyst_context();
+        engine.register_workflow(&incident);
+
+        engine.transitions.push(WorkflowTransition {
+            from: IncidentStatus::New,
+            to: IncidentStatus::PendingReview,
+            condition: Some(TransitionCondition::Custom("ready_for_review".to_string())),
+            actions: vec![],
+        });
+
+        let result = engine.transition(&mut incident, IncidentStatus::PendingReview, &analyst_ctx);
+        assert!(matches!(result, Err(WorkflowError::ConditionNotMet(_))));
     }
 
     // ============================================================
