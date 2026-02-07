@@ -187,6 +187,41 @@ class TestIncidentIngester:
         assert "false_positive" in content
         assert "95" in content  # confidence
 
+    @pytest.mark.asyncio
+    async def test_ingest_batch_via_ingest(self, vector_store):
+        """Test batch incident ingestion through ingest()."""
+        from tw_ai.agents.models import TriageAnalysis
+        from tw_ai.rag.ingestion import IncidentIngester
+
+        analyses = [
+            {
+                "analysis": TriageAnalysis(
+                    verdict="true_positive",
+                    confidence=91,
+                    severity="high",
+                    summary="Credential phishing campaign detected",
+                ),
+                "alert_id": "ALERT-BATCH-001",
+                "alert_type": "phishing",
+            },
+            {
+                "analysis": TriageAnalysis(
+                    verdict="false_positive",
+                    confidence=87,
+                    severity="low",
+                    summary="Benign administrative script activity",
+                ),
+                "alert_id": "ALERT-BATCH-002",
+                "alert_type": "script",
+            },
+        ]
+
+        ingester = IncidentIngester(vector_store)
+        count = await ingester.ingest(analyses)
+
+        assert count == 2
+        assert vector_store.collection_count("triage_incidents") == 2
+
 
 class TestThreatIntelIngester:
     """Tests for ThreatIntelIngester."""
@@ -269,3 +304,30 @@ class TestThreatIntelIngester:
         assert metadata["verdict"] == "malicious"
         assert metadata["threat_actor"] == "FIN7"
         assert metadata["confidence"] == 88
+
+    @pytest.mark.asyncio
+    async def test_ingest_wrapper_uses_batch_path(self, vector_store):
+        """Test threat intel ingest() wrapper for batch payloads."""
+        from tw_ai.rag.ingestion import ThreatIntelIngester
+
+        indicators = [
+            {
+                "indicator": "bad.example",
+                "indicator_type": "domain",
+                "verdict": "malicious",
+                "context": "Known phishing landing domain",
+            },
+            {
+                "indicator": "203.0.113.10",
+                "indicator_type": "ip",
+                "verdict": "suspicious",
+                "context": "Observed scanning activity",
+                "confidence": 72,
+            },
+        ]
+
+        ingester = ThreatIntelIngester(vector_store)
+        count = await ingester.ingest(indicators)
+
+        assert count == 2
+        assert vector_store.collection_count("threat_intelligence") == 2

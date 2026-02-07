@@ -35,17 +35,20 @@ class ThreatIntelIngester(BaseIngester):
         """Get the threat intel collection name."""
         return self._vector_store._config.threat_intel_collection
 
-    async def ingest(self) -> int:
-        """Ingest threat intel - placeholder for batch ingestion.
-
-        For individual indicator ingestion, use ingest_indicator().
+    async def ingest(self, indicators: list[dict[str, Any]] | None = None) -> int:
+        """Ingest a batch of threat intelligence indicators.
 
         Returns:
-            Number of indicators ingested (0 for placeholder).
+            Number of indicators ingested.
         """
-        # This could be extended to ingest from threat feeds
-        logger.info("threat_intel_batch_ingestion_not_implemented")
-        return 0
+        if not indicators:
+            logger.info(
+                "threat_intel_batch_ingestion_skipped",
+                reason="no_indicators_provided",
+            )
+            return 0
+
+        return await self.ingest_batch(indicators)
 
     async def ingest_indicator(
         self,

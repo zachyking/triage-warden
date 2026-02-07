@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -38,17 +38,44 @@ class IncidentIngester(BaseIngester):
         """Get the incidents collection name."""
         return self._vector_store._config.incidents_collection
 
-    async def ingest(self) -> int:
-        """Ingest incidents - placeholder for batch ingestion.
+    async def ingest(self, analyses: list[dict[str, Any]] | None = None) -> int:
+        """Ingest a batch of completed triage analyses.
 
-        For individual incident ingestion, use ingest_analysis().
+        Each item in `analyses` must include:
+            - analysis: TriageAnalysis
+            - alert_id: str
+            - alert_type: str
 
         Returns:
-            Number of incidents ingested (0 for placeholder).
+            Number of incidents successfully ingested.
         """
-        # This could be extended to ingest from a database or file
-        logger.info("incident_batch_ingestion_not_implemented")
-        return 0
+        if not analyses:
+            logger.info("incident_batch_ingestion_skipped", reason="no_analyses_provided")
+            return 0
+
+        ingested = 0
+        for idx, item in enumerate(analyses):
+            try:
+                analysis = item["analysis"]
+                alert_id = str(item["alert_id"])
+                alert_type = str(item["alert_type"])
+            except KeyError as exc:
+                logger.warning(
+                    "incident_batch_item_skipped_missing_key",
+                    index=idx,
+                    missing_key=str(exc),
+                )
+                continue
+
+            await self.ingest_analysis(
+                analysis=analysis,
+                alert_id=alert_id,
+                alert_type=alert_type,
+            )
+            ingested += 1
+
+        logger.info("incident_batch_ingested", count=ingested, total=len(analyses))
+        return ingested
 
     async def ingest_analysis(
         self,
