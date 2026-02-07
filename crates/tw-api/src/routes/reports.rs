@@ -677,15 +677,15 @@ fn generate_html_report(report: &ReportData) -> Result<String, ApiError> {
 </body>
 </html>"#,
         incident_id = report.metadata.incident_id,
-        generated_at = report.metadata.generated_at,
-        generated_by = report.metadata.generated_by,
-        report_version = report.metadata.report_version,
-        alert_source = report.alert.source,
-        executive_summary = report.executive_summary,
-        verdict_class = report.verdict.verdict.replace('_', "-"),
-        verdict_display = report.verdict.verdict_display,
+        generated_at = html_escape(&report.metadata.generated_at),
+        generated_by = html_escape(&report.metadata.generated_by),
+        report_version = html_escape(&report.metadata.report_version),
+        alert_source = html_escape(&report.alert.source),
+        executive_summary = html_escape(&report.executive_summary),
+        verdict_class = verdict_css_class(&report.verdict.verdict),
+        verdict_display = html_escape(&report.verdict.verdict_display),
         confidence = (report.verdict.confidence * 100.0).round(),
-        severity = report.verdict.severity_display,
+        severity = html_escape(&report.verdict.severity_display),
         risk_score = report.verdict.risk_score,
         timeline_section = generate_timeline_html(&report.timeline),
         evidence_section = generate_evidence_html(&report.evidence, &report.evidence_summary),
@@ -709,10 +709,10 @@ fn generate_timeline_html(timeline: &[TimelineEntry]) -> String {
             format!(
                 "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
                 entry.order,
-                entry.action,
-                entry.result,
-                entry.tool.as_deref().unwrap_or("-"),
-                entry.status
+                html_escape(&entry.action),
+                html_escape(&entry.result),
+                html_escape(entry.tool.as_deref().unwrap_or("-")),
+                html_escape(&entry.status)
             )
         })
         .collect::<Vec<_>>()
@@ -743,13 +743,17 @@ fn generate_evidence_html(evidence: &[EvidenceEntry], summary: &EvidenceSummaryD
             format!(
                 "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}%</td><td>{}</td></tr>",
                 e.order,
-                e.source_name,
-                e.data_type,
-                e.finding,
+                html_escape(&e.source_name),
+                html_escape(&e.data_type),
+                html_escape(&e.finding),
                 (e.confidence * 100.0).round(),
                 e.link
                     .as_ref()
-                    .map(|l| format!("<a href=\"{}\" target=\"_blank\">View</a>", l))
+                    .and_then(|l| safe_href(l))
+                    .map(|href| format!(
+                        "<a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\">View</a>",
+                        href
+                    ))
                     .unwrap_or_else(|| "-".to_string())
             )
         })
@@ -780,13 +784,24 @@ fn generate_mitre_html(techniques: &[MitreTechniqueEntry]) -> String {
     let cards: String = techniques
         .iter()
         .map(|t| {
+            let safe_link = safe_href(&t.url).map_or_else(
+                || "Invalid reference URL".to_string(),
+                |href| format!(
+                    "<a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\">View on MITRE ATT&amp;CK</a>",
+                    href
+                ),
+            );
             format!(
                 r#"<div class="mitre-card">
                     <strong>{}</strong> - {} ({})
                     <br><small>{}</small>
-                    <br><a href="{}" target="_blank">View on MITRE ATT&CK</a>
+                    <br>{}
                 </div>"#,
-                t.technique_id, t.name, t.tactic, t.relevance, t.url
+                html_escape(&t.technique_id),
+                html_escape(&t.name),
+                html_escape(&t.tactic),
+                html_escape(&t.relevance),
+                safe_link
             )
         })
         .collect::<Vec<_>>()
@@ -805,10 +820,10 @@ fn generate_indicators_html(indicators: &[IndicatorEntry]) -> String {
         .map(|i| {
             format!(
                 "<tr><td>{}</td><td style=\"font-family: monospace;\">{}</td><td>{}</td><td>{}</td></tr>",
-                i.indicator_type.to_uppercase(),
-                i.value,
-                i.verdict,
-                i.context.as_deref().unwrap_or("-")
+                html_escape(&i.indicator_type.to_uppercase()),
+                html_escape(&i.value),
+                html_escape(&i.verdict),
+                html_escape(i.context.as_deref().unwrap_or("-"))
             )
         })
         .collect::<Vec<_>>()
@@ -836,16 +851,17 @@ fn generate_actions_html(actions: &[ActionEntry]) -> String {
     let cards: String = actions
         .iter()
         .map(|a| {
+            let priority_class = priority_css_class(&a.priority);
             format!(
                 r#"<div class="action-card">
                     <span class="priority-{}">{}</span>
                     <strong>{}</strong>
                     <br><small>{}</small>
                 </div>"#,
-                a.priority,
-                a.priority.to_uppercase(),
-                a.action,
-                a.reason
+                priority_class,
+                html_escape(&a.priority.to_uppercase()),
+                html_escape(&a.action),
+                html_escape(&a.reason)
             )
         })
         .collect::<Vec<_>>()
@@ -866,6 +882,34 @@ fn generate_reasoning_html(reasoning: &str) -> String {
         </div>"#,
         html_escape(reasoning)
     )
+}
+
+fn safe_href(url: &str) -> Option<String> {
+    let trimmed = url.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("https://") || lower.starts_with("http://") {
+        Some(html_escape(trimmed))
+    } else {
+        None
+    }
+}
+
+fn verdict_css_class(verdict: &str) -> &'static str {
+    match verdict {
+        "true_positive" => "true_positive",
+        "false_positive" => "false_positive",
+        "suspicious" => "suspicious",
+        _ => "suspicious",
+    }
+}
+
+fn priority_css_class(priority: &str) -> &'static str {
+    match priority {
+        "immediate" => "immediate",
+        "high" => "high",
+        "medium" => "medium",
+        _ => "medium",
+    }
 }
 
 /// Simple HTML escaping for text content.
@@ -902,6 +946,60 @@ mod tests {
         assert_eq!(html_escape("<script>"), "&lt;script&gt;");
         assert_eq!(html_escape("foo & bar"), "foo &amp; bar");
         assert_eq!(html_escape("\"quoted\""), "&quot;quoted&quot;");
+    }
+
+    #[test]
+    fn test_safe_href_allows_only_http_and_https() {
+        assert_eq!(
+            safe_href("https://example.com?q=1&x=2"),
+            Some("https://example.com?q=1&amp;x=2".to_string())
+        );
+        assert_eq!(
+            safe_href("http://example.com/path"),
+            Some("http://example.com/path".to_string())
+        );
+        assert_eq!(safe_href("javascript:alert(1)"), None);
+        assert_eq!(safe_href("data:text/html;base64,abcd"), None);
+    }
+
+    #[test]
+    fn test_generate_evidence_html_escapes_untrusted_content() {
+        let evidence = vec![EvidenceEntry {
+            order: 1,
+            source_type: "siem".to_string(),
+            source_name: "<img src=x onerror=alert(1)>".to_string(),
+            data_type: "log".to_string(),
+            finding: "<script>alert('xss')</script>".to_string(),
+            relevance: "High".to_string(),
+            confidence: 0.9,
+            link: Some("javascript:alert(1)".to_string()),
+            raw_value: serde_json::json!({}),
+        }];
+
+        let summary = EvidenceSummaryData {
+            total_evidence: 1,
+            average_confidence: 0.9,
+            high_confidence_count: 1,
+            medium_confidence_count: 0,
+            low_confidence_count: 0,
+            sources_used: vec!["siem".to_string()],
+            data_types_found: vec!["log".to_string()],
+        };
+
+        let html = generate_evidence_html(&evidence, &summary);
+
+        assert!(html.contains("&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;"));
+        assert!(!html.contains("<script>alert('xss')</script>"));
+        assert!(!html.contains("javascript:alert(1)"));
+    }
+
+    #[test]
+    fn test_css_class_helpers_use_allowlist() {
+        assert_eq!(verdict_css_class("true_positive"), "true_positive");
+        assert_eq!(verdict_css_class("unexpected"), "suspicious");
+
+        assert_eq!(priority_css_class("immediate"), "immediate");
+        assert_eq!(priority_css_class("unknown"), "medium");
     }
 
     #[test]

@@ -167,14 +167,12 @@ async fn list_users(
     let total = user_repo.count(&filter).await?;
     let total_pages = ((total as f64) / (per_page as f64)).ceil() as u32;
 
-    // Get all users and apply pagination in-memory
-    // TODO: For better performance, add pagination support to UserRepository
-    let all_users = user_repo.list(&filter).await?;
-    let start = ((page - 1) * per_page) as usize;
-    let users: Vec<UserResponse> = all_users
+    // Fetch only the requested page from the repository.
+    let offset = (page - 1) * per_page;
+    let users: Vec<UserResponse> = user_repo
+        .list_paginated(&filter, offset, per_page)
+        .await?
         .into_iter()
-        .skip(start)
-        .take(per_page as usize)
         .map(Into::into)
         .collect();
 

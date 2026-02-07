@@ -10,6 +10,7 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tracing::warn;
 use utoipa::ToSchema;
 use uuid::Uuid;
 use validator::Validate;
@@ -17,8 +18,11 @@ use validator::Validate;
 use crate::auth::{RequireAdmin, RequireAnalyst};
 use crate::error::ApiError;
 use crate::state::AppState;
-use tw_connectors::threat_intel::virustotal::{VirusTotalConfig, VirusTotalConnector};
-use tw_connectors::traits::{AuthConfig, Connector, ConnectorConfig as ConnectorTraitConfig};
+use tw_connectors::{
+    AuthConfig, Connector, ConnectorConfig as ConnectorTraitConfig, CrowdStrikeConfig,
+    CrowdStrikeConnector, JiraConfig, JiraConnector, SplunkConfig, SplunkConnector,
+    VirusTotalConfig, VirusTotalConnector,
+};
 use tw_core::connector::{ConnectorConfig, ConnectorStatus, ConnectorType};
 use tw_core::db::{create_connector_repository, ConnectorRepository, ConnectorUpdate};
 use tw_core::CredentialEncryptor;
@@ -445,7 +449,7 @@ async fn test_connection_for_type(
 /// Tests VirusTotal connection using the actual connector.
 async fn test_virustotal_connection(config: &serde_json::Value) -> InternalTestResult {
     let api_key = match config.get("api_key").and_then(|v| v.as_str()) {
-        Some(key) if !key.is_empty() => key,
+        Some(key) if !key.trim().is_empty() => key.trim(),
         _ => {
             return InternalTestResult {
                 success: false,
@@ -489,76 +493,304 @@ async fn test_virustotal_connection(config: &serde_json::Value) -> InternalTestR
                 success: false,
                 message: "VirusTotal API connection failed - authentication error.".to_string(),
             },
-            Err(e) => InternalTestResult {
+            Err(e) => {
+                warn!(error = %e, "VirusTotal connection test failed");
+                InternalTestResult {
+                    success: false,
+                    message:
+                        "VirusTotal connection error. Check endpoint reachability and credentials."
+                            .to_string(),
+                }
+            }
+        },
+        Err(e) => {
+            warn!(error = %e, "Failed to initialize VirusTotal connector");
+            InternalTestResult {
                 success: false,
-                message: format!("VirusTotal connection error: {}", e),
-            },
-        },
-        Err(e) => InternalTestResult {
-            success: false,
-            message: format!("Failed to initialize VirusTotal connector: {}", e),
-        },
-    }
-}
-
-/// Tests Jira connection - validates config for now (full implementation requires JiraConnector).
-async fn test_jira_connection(config: &serde_json::Value) -> InternalTestResult {
-    let has_url = config.get("base_url").and_then(|v| v.as_str()).is_some();
-    let has_auth = config.get("api_token").and_then(|v| v.as_str()).is_some()
-        || config.get("username").and_then(|v| v.as_str()).is_some();
-
-    if has_url && has_auth {
-        // TODO: Implement real Jira connection test when JiraConnector is available
-        InternalTestResult {
-            success: true,
-            message: "Jira configuration validated. Real connection test pending.".to_string(),
-        }
-    } else {
-        InternalTestResult {
-            success: false,
-            message: "Jira requires 'base_url' and authentication credentials.".to_string(),
+                message:
+                    "Failed to initialize VirusTotal connector. Check connector configuration."
+                        .to_string(),
+            }
         }
     }
 }
 
-/// Tests Splunk connection - validates config for now.
-async fn test_splunk_connection(config: &serde_json::Value) -> InternalTestResult {
-    let has_url = config.get("base_url").and_then(|v| v.as_str()).is_some();
-    let has_token = config.get("token").and_then(|v| v.as_str()).is_some();
-
-    if has_url && has_token {
-        // TODO: Implement real Splunk connection test
-        InternalTestResult {
-            success: true,
-            message: "Splunk configuration validated. Real connection test pending.".to_string(),
-        }
-    } else {
-        InternalTestResult {
-            success: false,
-            message: "Splunk requires 'base_url' and 'token'.".to_string(),
-        }
-    }
-}
-
-/// Tests CrowdStrike connection - validates config for now.
-async fn test_crowdstrike_connection(config: &serde_json::Value) -> InternalTestResult {
-    let has_client_id = config.get("client_id").and_then(|v| v.as_str()).is_some();
-    let has_client_secret = config
-        .get("client_secret")
+fn get_non_empty_str<'a>(config: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    config
+        .get(key)
         .and_then(|v| v.as_str())
-        .is_some();
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+}
 
-    if has_client_id && has_client_secret {
-        // TODO: Implement real CrowdStrike connection test
-        InternalTestResult {
-            success: true,
-            message: "CrowdStrike configuration validated. Real connection test pending."
-                .to_string(),
+/// Tests Jira connection using the actual connector.
+async fn test_jira_connection(config: &serde_json::Value) -> InternalTestResult {
+    let base_url = match get_non_empty_str(config, "base_url") {
+        Some(url) => url,
+        None => {
+            return InternalTestResult {
+                success: false,
+                message: "Jira requires a non-empty 'base_url'.".to_string(),
+            };
         }
-    } else {
-        InternalTestResult {
-            success: false,
-            message: "CrowdStrike requires 'client_id' and 'client_secret'.".to_string(),
+    };
+
+    let api_token = get_non_empty_str(config, "api_token");
+    let username = get_non_empty_str(config, "username");
+    let password = get_non_empty_str(config, "password");
+
+    let auth = match (api_token, username, password) {
+        (Some(token), Some(user), _) => AuthConfig::Basic {
+            username: user.to_string(),
+            password: token.to_string().into(),
+        },
+        (Some(token), None, _) => AuthConfig::BearerToken {
+            token: token.to_string().into(),
+        },
+        (None, Some(user), Some(pass)) => AuthConfig::Basic {
+            username: user.to_string(),
+            password: pass.to_string().into(),
+        },
+        _ => {
+            return InternalTestResult {
+                success: false,
+                message:
+                    "Jira requires 'base_url' and either 'api_token' or ('username' + 'password')."
+                        .to_string(),
+            };
+        }
+    };
+
+    let project_key = get_non_empty_str(config, "project_key")
+        .unwrap_or("SOC")
+        .to_string();
+    let default_issue_type = get_non_empty_str(config, "default_issue_type")
+        .unwrap_or("Task")
+        .to_string();
+    let is_server = config
+        .get("is_server")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let jira_config = JiraConfig {
+        connector: ConnectorTraitConfig {
+            name: "jira".to_string(),
+            base_url: base_url.to_string(),
+            auth,
+            timeout_secs: 30,
+            max_retries: 3,
+            verify_tls: true,
+            headers: std::collections::HashMap::new(),
+        },
+        project_key,
+        default_issue_type,
+        field_mappings: std::collections::HashMap::new(),
+        priority_mappings: std::collections::HashMap::new(),
+        is_server,
+        default_component: None,
+        security_level: None,
+    };
+
+    match JiraConnector::new(jira_config) {
+        Ok(connector) => match connector.test_connection().await {
+            Ok(true) => InternalTestResult {
+                success: true,
+                message: "Jira API connection successful.".to_string(),
+            },
+            Ok(false) => InternalTestResult {
+                success: false,
+                message: "Jira API connection failed - authentication error.".to_string(),
+            },
+            Err(e) => {
+                warn!(error = %e, "Jira connection test failed");
+                InternalTestResult {
+                    success: false,
+                    message: "Jira connection error. Check endpoint reachability and credentials."
+                        .to_string(),
+                }
+            }
+        },
+        Err(e) => {
+            warn!(error = %e, "Failed to initialize Jira connector");
+            InternalTestResult {
+                success: false,
+                message: "Failed to initialize Jira connector. Check connector configuration."
+                    .to_string(),
+            }
+        }
+    }
+}
+
+/// Tests Splunk connection using the actual connector.
+async fn test_splunk_connection(config: &serde_json::Value) -> InternalTestResult {
+    let base_url = match get_non_empty_str(config, "base_url") {
+        Some(url) => url,
+        None => {
+            return InternalTestResult {
+                success: false,
+                message: "Splunk requires a non-empty 'base_url'.".to_string(),
+            };
+        }
+    };
+
+    let token = match get_non_empty_str(config, "token") {
+        Some(token) => token,
+        None => {
+            return InternalTestResult {
+                success: false,
+                message: "Splunk requires a non-empty 'token'.".to_string(),
+            };
+        }
+    };
+
+    let splunk_config = SplunkConfig {
+        connector: ConnectorTraitConfig {
+            name: "splunk".to_string(),
+            base_url: base_url.to_string(),
+            auth: AuthConfig::BearerToken {
+                token: token.to_string().into(),
+            },
+            timeout_secs: 30,
+            max_retries: 3,
+            verify_tls: true,
+            headers: std::collections::HashMap::new(),
+        },
+        app: get_non_empty_str(config, "app")
+            .unwrap_or("search")
+            .to_string(),
+        owner: get_non_empty_str(config, "owner")
+            .unwrap_or("-")
+            .to_string(),
+        output_mode: get_non_empty_str(config, "output_mode")
+            .unwrap_or("json")
+            .to_string(),
+        search_timeout: config
+            .get("search_timeout")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(120),
+        max_results: config
+            .get("max_results")
+            .and_then(|v| v.as_u64())
+            .and_then(|v| u32::try_from(v).ok())
+            .unwrap_or(10_000),
+        requests_per_second: config
+            .get("requests_per_second")
+            .and_then(|v| v.as_u64())
+            .and_then(|v| u32::try_from(v).ok())
+            .unwrap_or(10),
+    };
+
+    match SplunkConnector::new(splunk_config) {
+        Ok(connector) => match connector.test_connection().await {
+            Ok(true) => InternalTestResult {
+                success: true,
+                message: "Splunk API connection successful.".to_string(),
+            },
+            Ok(false) => InternalTestResult {
+                success: false,
+                message: "Splunk API connection failed - authentication error.".to_string(),
+            },
+            Err(e) => {
+                warn!(error = %e, "Splunk connection test failed");
+                InternalTestResult {
+                    success: false,
+                    message:
+                        "Splunk connection error. Check endpoint reachability and credentials."
+                            .to_string(),
+                }
+            }
+        },
+        Err(e) => {
+            warn!(error = %e, "Failed to initialize Splunk connector");
+            InternalTestResult {
+                success: false,
+                message: "Failed to initialize Splunk connector. Check connector configuration."
+                    .to_string(),
+            }
+        }
+    }
+}
+
+/// Tests CrowdStrike connection using the actual connector.
+async fn test_crowdstrike_connection(config: &serde_json::Value) -> InternalTestResult {
+    let client_id = match get_non_empty_str(config, "client_id") {
+        Some(v) => v,
+        None => {
+            return InternalTestResult {
+                success: false,
+                message: "CrowdStrike requires a non-empty 'client_id'.".to_string(),
+            };
+        }
+    };
+    let client_secret = match get_non_empty_str(config, "client_secret") {
+        Some(v) => v,
+        None => {
+            return InternalTestResult {
+                success: false,
+                message: "CrowdStrike requires a non-empty 'client_secret'.".to_string(),
+            };
+        }
+    };
+
+    let region = get_non_empty_str(config, "region").unwrap_or("us-1");
+    let default_base = match region {
+        "us-2" => "https://api.us-2.crowdstrike.com",
+        "eu-1" => "https://api.eu-1.crowdstrike.com",
+        "us-gov-1" => "https://api.laggar.gcw.crowdstrike.com",
+        _ => "https://api.crowdstrike.com",
+    };
+    let base_url = get_non_empty_str(config, "base_url").unwrap_or(default_base);
+    let token_url = get_non_empty_str(config, "token_url")
+        .map(ToString::to_string)
+        .unwrap_or_else(|| format!("{}/oauth2/token", base_url.trim_end_matches('/')));
+
+    let crowdstrike_config = CrowdStrikeConfig {
+        connector: ConnectorTraitConfig {
+            name: "crowdstrike".to_string(),
+            base_url: base_url.to_string(),
+            auth: AuthConfig::OAuth2 {
+                client_id: client_id.to_string(),
+                client_secret: client_secret.to_string().into(),
+                token_url,
+                scopes: Vec::new(),
+            },
+            timeout_secs: 30,
+            max_retries: 3,
+            verify_tls: true,
+            headers: std::collections::HashMap::new(),
+        },
+        region: region.to_string(),
+        member_cid: get_non_empty_str(config, "member_cid").map(ToString::to_string),
+    };
+
+    match CrowdStrikeConnector::new(crowdstrike_config) {
+        Ok(connector) => match connector.test_connection().await {
+            Ok(true) => InternalTestResult {
+                success: true,
+                message: "CrowdStrike API connection successful.".to_string(),
+            },
+            Ok(false) => InternalTestResult {
+                success: false,
+                message: "CrowdStrike API connection failed - authentication error.".to_string(),
+            },
+            Err(e) => {
+                warn!(error = %e, "CrowdStrike connection test failed");
+                InternalTestResult {
+                    success: false,
+                    message:
+                        "CrowdStrike connection error. Check endpoint reachability and credentials."
+                            .to_string(),
+                }
+            }
+        },
+        Err(e) => {
+            warn!(error = %e, "Failed to initialize CrowdStrike connector");
+            InternalTestResult {
+                success: false,
+                message:
+                    "Failed to initialize CrowdStrike connector. Check connector configuration."
+                        .to_string(),
+            }
         }
     }
 }
@@ -2184,15 +2416,14 @@ mod api_tests {
     }
 
     #[tokio::test]
-    async fn test_test_connector_jira_success() {
+    async fn test_test_connector_jira_invalid_config() {
         let app = setup_test_app().await;
 
-        // Create a Jira connector with valid config
+        // Create a Jira connector with missing base_url
         let body = serde_json::json!({
             "name": "Jira Test",
             "connector_type": "jira",
             "config": {
-                "base_url": "https://jira.example.com",
                 "api_token": "jira-token"
             },
             "enabled": true
@@ -2229,8 +2460,8 @@ mod api_tests {
             .unwrap();
         let result: TestConnectionResponse = serde_json::from_slice(&body_bytes).unwrap();
 
-        assert!(result.success);
-        assert!(result.message.contains("Jira"));
+        assert!(!result.success);
+        assert!(result.message.contains("requires a non-empty 'base_url'"));
     }
 
     #[tokio::test]
@@ -2279,19 +2510,18 @@ mod api_tests {
         let result: TestConnectionResponse = serde_json::from_slice(&body_bytes).unwrap();
 
         assert!(!result.success);
-        assert!(result.message.contains("authentication"));
+        assert!(result.message.contains("requires"));
     }
 
     #[tokio::test]
-    async fn test_test_connector_splunk_success() {
+    async fn test_test_connector_splunk_invalid_config() {
         let app = setup_test_app().await;
 
         let body = serde_json::json!({
             "name": "Splunk Test",
             "connector_type": "splunk",
             "config": {
-                "base_url": "https://splunk.example.com",
-                "token": "splunk-token"
+                "base_url": "https://splunk.example.com"
             },
             "enabled": true
         });
@@ -2325,20 +2555,19 @@ mod api_tests {
             .unwrap();
         let result: TestConnectionResponse = serde_json::from_slice(&body_bytes).unwrap();
 
-        assert!(result.success);
-        assert!(result.message.contains("Splunk"));
+        assert!(!result.success);
+        assert!(result.message.contains("requires a non-empty 'token'"));
     }
 
     #[tokio::test]
-    async fn test_test_connector_crowdstrike_success() {
+    async fn test_test_connector_crowdstrike_invalid_config() {
         let app = setup_test_app().await;
 
         let body = serde_json::json!({
             "name": "CrowdStrike Test",
             "connector_type": "crowdstrike",
             "config": {
-                "client_id": "cs-client-id",
-                "client_secret": "cs-client-secret"
+                "client_id": "cs-client-id"
             },
             "enabled": true
         });
@@ -2372,8 +2601,10 @@ mod api_tests {
             .unwrap();
         let result: TestConnectionResponse = serde_json::from_slice(&body_bytes).unwrap();
 
-        assert!(result.success);
-        assert!(result.message.contains("CrowdStrike"));
+        assert!(!result.success);
+        assert!(result
+            .message
+            .contains("requires a non-empty 'client_secret'"));
     }
 
     #[tokio::test]

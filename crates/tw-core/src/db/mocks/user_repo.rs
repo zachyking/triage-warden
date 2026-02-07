@@ -459,6 +459,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_list_paginated() {
+        let repo = MockUserRepository::new();
+
+        repo.create(&test_user(Uuid::new_v4(), "alice", "alice@example.com"))
+            .await
+            .unwrap();
+        repo.create(&test_user(Uuid::new_v4(), "bob", "bob@example.com"))
+            .await
+            .unwrap();
+        repo.create(&test_user(Uuid::new_v4(), "carol", "carol@example.com"))
+            .await
+            .unwrap();
+
+        let page = repo
+            .list_paginated(&UserFilter::default(), 1, 1)
+            .await
+            .unwrap();
+
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].username, "bob");
+    }
+
+    #[tokio::test]
     async fn test_update_user() {
         let repo = MockUserRepository::new();
         let user = test_user(Uuid::new_v4(), "original", "original@example.com");

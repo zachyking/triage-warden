@@ -41,6 +41,23 @@ pub trait UserRepository: Send + Sync {
     /// Lists users with optional filtering.
     async fn list(&self, filter: &UserFilter) -> Result<Vec<User>, DbError>;
 
+    /// Lists users with optional filtering and pagination.
+    ///
+    /// `offset` is zero-based and `limit` is the maximum number of results to return.
+    async fn list_paginated(
+        &self,
+        filter: &UserFilter,
+        offset: u32,
+        limit: u32,
+    ) -> Result<Vec<User>, DbError> {
+        let users = self.list(filter).await?;
+        Ok(users
+            .into_iter()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .collect())
+    }
+
     /// Updates a user.
     async fn update(&self, id: Uuid, update: &UserUpdate) -> Result<User, DbError>;
 
@@ -254,6 +271,58 @@ impl UserRepository for SqliteUserRepository {
 
         let rows: Vec<SqliteUserRow> = sqlx_query.fetch_all(&self.pool).await?;
 
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn list_paginated(
+        &self,
+        filter: &UserFilter,
+        offset: u32,
+        limit: u32,
+    ) -> Result<Vec<User>, DbError> {
+        let mut query = String::from(
+            "SELECT id, tenant_id, email, username, password_hash, role, display_name, enabled, last_login_at, created_at, updated_at FROM users WHERE 1=1",
+        );
+        let mut params: Vec<String> = Vec::new();
+
+        if let Some(tenant_id) = &filter.tenant_id {
+            query.push_str(" AND tenant_id = ?");
+            params.push(tenant_id.to_string());
+        }
+
+        if let Some(role) = &filter.role {
+            query.push_str(" AND role = ?");
+            params.push(role.as_str().to_string());
+        }
+
+        if let Some(enabled) = filter.enabled {
+            query.push_str(" AND enabled = ?");
+            params.push(if enabled {
+                "1".to_string()
+            } else {
+                "0".to_string()
+            });
+        }
+
+        if let Some(search) = &filter.search {
+            query.push_str(" AND (username LIKE ? ESCAPE '\\' OR email LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\')");
+            // Escape special LIKE characters to prevent pattern injection
+            let pattern = format!("%{}%", escape_like_pattern(search));
+            params.push(pattern.clone());
+            params.push(pattern.clone());
+            params.push(pattern);
+        }
+
+        query.push_str(" ORDER BY username ASC LIMIT ? OFFSET ?");
+
+        let mut sqlx_query = sqlx::query_as::<_, SqliteUserRow>(&query);
+        for param in params {
+            sqlx_query = sqlx_query.bind(param);
+        }
+        sqlx_query = sqlx_query.bind(limit as i64);
+        sqlx_query = sqlx_query.bind(offset as i64);
+
+        let rows: Vec<SqliteUserRow> = sqlx_query.fetch_all(&self.pool).await?;
         rows.into_iter().map(TryInto::try_into).collect()
     }
 
@@ -671,6 +740,79 @@ impl UserRepository for PgUserRepository {
             .await?
         };
 
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn list_paginated(
+        &self,
+        filter: &UserFilter,
+        offset: u32,
+        limit: u32,
+    ) -> Result<Vec<User>, DbError> {
+        let mut conditions = vec!["1=1".to_string()];
+        let mut param_idx = 1;
+
+        if filter.tenant_id.is_some() {
+            conditions.push(format!("tenant_id = ${}", param_idx));
+            param_idx += 1;
+        }
+
+        if filter.role.is_some() {
+            conditions.push(format!("role = ${}", param_idx));
+            param_idx += 1;
+        }
+
+        if filter.enabled.is_some() {
+            conditions.push(format!("enabled = ${}", param_idx));
+            param_idx += 1;
+        }
+
+        if filter.search.is_some() {
+            conditions.push(format!(
+                "(username ILIKE ${} OR email ILIKE ${} OR display_name ILIKE ${})",
+                param_idx,
+                param_idx + 1,
+                param_idx + 2
+            ));
+            param_idx += 3;
+        }
+
+        let limit_param = param_idx;
+        let offset_param = param_idx + 1;
+
+        let query = format!(
+            "SELECT id, tenant_id, email, username, password_hash, role, display_name, enabled, last_login_at, created_at, updated_at FROM users WHERE {} ORDER BY username ASC LIMIT ${} OFFSET ${}",
+            conditions.join(" AND "),
+            limit_param,
+            offset_param
+        );
+
+        let mut sqlx_query = sqlx::query_as::<_, PgUserRow>(&query);
+
+        if let Some(tenant_id) = &filter.tenant_id {
+            sqlx_query = sqlx_query.bind(tenant_id);
+        }
+
+        if let Some(role) = &filter.role {
+            sqlx_query = sqlx_query.bind(role.as_str());
+        }
+
+        if let Some(enabled) = filter.enabled {
+            sqlx_query = sqlx_query.bind(enabled);
+        }
+
+        if let Some(search) = &filter.search {
+            // Escape special LIKE characters to prevent pattern injection
+            let pattern = format!("%{}%", escape_like_pattern(search));
+            sqlx_query = sqlx_query.bind(pattern.clone());
+            sqlx_query = sqlx_query.bind(pattern.clone());
+            sqlx_query = sqlx_query.bind(pattern);
+        }
+
+        sqlx_query = sqlx_query.bind(limit as i64);
+        sqlx_query = sqlx_query.bind(offset as i64);
+
+        let rows: Vec<PgUserRow> = sqlx_query.fetch_all(&self.pool).await?;
         rows.into_iter().map(TryInto::try_into).collect()
     }
 
