@@ -137,13 +137,14 @@ async fn dashboard(
     let repo = create_incident_repository(&state.db);
 
     // Fetch metrics
-    let metrics = fetch_dashboard_metrics(repo.as_ref()).await;
+    let metrics = fetch_dashboard_metrics(repo.as_ref(), user.tenant_id).await;
     let critical_count = metrics.critical_count;
     let open_count = metrics.open_count;
 
     // Fetch recent incidents (limit 10)
     let recent_incidents = fetch_incidents(
         repo.as_ref(),
+        user.tenant_id,
         None, // no severity filter
         Some(vec![
             IncidentStatus::New,
@@ -160,6 +161,7 @@ async fn dashboard(
 
     // Count pending approvals
     let approval_filter = IncidentFilter {
+        tenant_id: Some(user.tenant_id),
         status: Some(vec![IncidentStatus::PendingApproval]),
         ..Default::default()
     };
@@ -248,6 +250,7 @@ async fn incidents_list(
         severity: severity_filter.clone(),
         status: status_filter.clone(),
         query: search_query.clone(),
+        tenant_id: Some(user.tenant_id),
         ..Default::default()
     };
 
@@ -256,10 +259,12 @@ async fn incidents_list(
     let total_pages = (total_count as f32 / per_page as f32).ceil() as u32;
 
     // Fetch incidents
-    let incidents = fetch_incidents_with_filter(repo.as_ref(), &filter, per_page, query.page).await;
+    let incidents =
+        fetch_incidents_with_filter(repo.as_ref(), user.tenant_id, &filter, per_page, query.page)
+            .await;
 
     // Fetch nav counts (for badges)
-    let nav = fetch_nav_counts(repo.as_ref()).await;
+    let nav = fetch_nav_counts(repo.as_ref(), user.tenant_id).await;
 
     let template = IncidentsListTemplate {
         active_nav: "incidents".to_string(),
@@ -290,7 +295,7 @@ async fn incident_detail(
     let audit_repo = create_audit_repository(&state.db);
 
     // Fetch nav counts first
-    let nav = fetch_nav_counts(repo.as_ref()).await;
+    let nav = fetch_nav_counts(repo.as_ref(), user.tenant_id).await;
 
     match repo.get_for_tenant(id, user.tenant_id).await {
         Ok(Some(incident)) => {
@@ -335,10 +340,11 @@ async fn approvals(
     let repo = create_incident_repository(&state.db);
 
     // Fetch nav counts
-    let nav = fetch_nav_counts(repo.as_ref()).await;
+    let nav = fetch_nav_counts(repo.as_ref(), user.tenant_id).await;
 
     // Fetch incidents pending approval
     let filter = IncidentFilter {
+        tenant_id: Some(user.tenant_id),
         status: Some(vec![IncidentStatus::PendingApproval]),
         ..Default::default()
     };
@@ -392,11 +398,14 @@ async fn playbooks(
     AuthenticatedUser(user): AuthenticatedUser,
 ) -> Result<impl IntoResponse, ApiError> {
     let incident_repo = create_incident_repository(&state.db);
-    let nav = fetch_nav_counts(incident_repo.as_ref()).await;
+    let nav = fetch_nav_counts(incident_repo.as_ref(), user.tenant_id).await;
 
     // Fetch playbooks from repository
     let playbook_repo = create_playbook_repository(&state.db);
-    let filter = PlaybookFilter::default();
+    let filter = PlaybookFilter {
+        tenant_id: Some(user.tenant_id),
+        ..Default::default()
+    };
     let db_playbooks = playbook_repo.list(&filter).await.unwrap_or_default();
 
     // Convert to template data
@@ -440,11 +449,11 @@ async fn playbook_detail(
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     let incident_repo = create_incident_repository(&state.db);
-    let nav = fetch_nav_counts(incident_repo.as_ref()).await;
+    let nav = fetch_nav_counts(incident_repo.as_ref(), user.tenant_id).await;
 
     let playbook_repo = create_playbook_repository(&state.db);
 
-    match playbook_repo.get(id).await {
+    match playbook_repo.get_for_tenant(id, user.tenant_id).await {
         Ok(Some(playbook)) => {
             // Count triggers and steps
             let trigger_count = if playbook.trigger_condition.is_some() {
@@ -526,7 +535,7 @@ async fn settings(
 ) -> Result<impl IntoResponse, ApiError> {
     let tenant_id = user.tenant_id;
     let repo = create_incident_repository(&state.db);
-    let nav = fetch_nav_counts(repo.as_ref()).await;
+    let nav = fetch_nav_counts(repo.as_ref(), tenant_id).await;
 
     // Load general settings from database
     let settings_repo = create_settings_repository(&state.db, state.encryptor.clone());
@@ -691,10 +700,10 @@ async fn settings(
 
 async fn partials_kpis(
     State(state): State<AppState>,
-    AuthenticatedUser(_user): AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
 ) -> Result<impl IntoResponse, ApiError> {
     let repo = create_incident_repository(&state.db);
-    let metrics = fetch_dashboard_metrics(repo.as_ref()).await;
+    let metrics = fetch_dashboard_metrics(repo.as_ref(), user.tenant_id).await;
 
     let template = KpisPartialTemplate { metrics };
     Ok(HtmlTemplate(template))
@@ -711,7 +720,7 @@ struct PartialsQuery {
 
 async fn partials_incidents(
     State(state): State<AppState>,
-    AuthenticatedUser(_user): AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     Query(query): Query<PartialsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let repo = create_incident_repository(&state.db);
@@ -719,6 +728,7 @@ async fn partials_incidents(
     let severity_filter = parse_severity(&query.severity);
     let incidents = fetch_incidents(
         repo.as_ref(),
+        user.tenant_id,
         severity_filter,
         Some(vec![
             IncidentStatus::New,
@@ -939,12 +949,12 @@ async fn modal_add_stage(
 /// Modal for editing a stage.
 async fn modal_edit_stage(
     State(state): State<AppState>,
-    AuthenticatedUser(_user): AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     Path((id, stage_index)): Path<(Uuid, usize)>,
 ) -> Result<Response, ApiError> {
     let playbook_repo = create_playbook_repository(&state.db);
 
-    match playbook_repo.get(id).await {
+    match playbook_repo.get_for_tenant(id, user.tenant_id).await {
         Ok(Some(playbook)) if stage_index < playbook.stages.len() => {
             let stage = &playbook.stages[stage_index];
             let template = EditStageModalTemplate {
@@ -974,12 +984,12 @@ async fn modal_edit_stage(
 /// Modal for adding a step to a stage.
 async fn modal_add_step(
     State(state): State<AppState>,
-    AuthenticatedUser(_user): AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     Path((id, stage_index)): Path<(Uuid, usize)>,
 ) -> Result<Response, ApiError> {
     let playbook_repo = create_playbook_repository(&state.db);
 
-    match playbook_repo.get(id).await {
+    match playbook_repo.get_for_tenant(id, user.tenant_id).await {
         Ok(Some(playbook)) if stage_index < playbook.stages.len() => {
             let stage_name = playbook.stages[stage_index].name.clone();
             let template = AddStepModalTemplate {
@@ -996,12 +1006,12 @@ async fn modal_add_step(
 /// Modal for editing a step.
 async fn modal_edit_step(
     State(state): State<AppState>,
-    AuthenticatedUser(_user): AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     Path((id, stage_index, step_index)): Path<(Uuid, usize, usize)>,
 ) -> Result<Response, ApiError> {
     let playbook_repo = create_playbook_repository(&state.db);
 
-    match playbook_repo.get(id).await {
+    match playbook_repo.get_for_tenant(id, user.tenant_id).await {
         Ok(Some(playbook))
             if stage_index < playbook.stages.len()
                 && step_index < playbook.stages[stage_index].steps.len() =>
@@ -1133,7 +1143,7 @@ struct MitreMatrixQuery {
 /// Returns the MITRE ATT&CK matrix partial.
 async fn partials_mitre_matrix(
     State(state): State<AppState>,
-    AuthenticatedUser(_user): AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     Query(query): Query<MitreMatrixQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let mut detected_techniques: Vec<(String, String)> = Vec::new();
@@ -1141,7 +1151,7 @@ async fn partials_mitre_matrix(
     // If an incident_id is provided, fetch its techniques
     if let Some(id) = query.incident_id {
         let repo = create_incident_repository(&state.db);
-        if let Ok(Some(incident)) = repo.get(id).await {
+        if let Ok(Some(incident)) = repo.get_for_tenant(id, user.tenant_id).await {
             if let Some(analysis) = &incident.analysis {
                 for t in &analysis.mitre_techniques {
                     detected_techniques.push((t.id.clone(), t.name.clone()));
@@ -1315,7 +1325,7 @@ async fn knowledge_list(
     Query(query): Query<KnowledgeQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let incident_repo = create_incident_repository(&state.db);
-    let nav = fetch_nav_counts(incident_repo.as_ref()).await;
+    let nav = fetch_nav_counts(incident_repo.as_ref(), user.tenant_id).await;
     let knowledge_repo = create_knowledge_repository(&state.db);
 
     let filter = KnowledgeFilter {
@@ -1358,7 +1368,7 @@ async fn knowledge_detail(
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     let incident_repo = create_incident_repository(&state.db);
-    let nav = fetch_nav_counts(incident_repo.as_ref()).await;
+    let nav = fetch_nav_counts(incident_repo.as_ref(), user.tenant_id).await;
     let knowledge_repo = create_knowledge_repository(&state.db);
 
     let document = match knowledge_repo
@@ -1469,12 +1479,17 @@ async fn analytics(
     AuthenticatedUser(user): AuthenticatedUser,
 ) -> Result<impl IntoResponse, ApiError> {
     let repo = create_incident_repository(&state.db);
-    let nav = fetch_nav_counts(repo.as_ref()).await;
+    let nav = fetch_nav_counts(repo.as_ref(), user.tenant_id).await;
 
-    let total_incidents = repo.count(&IncidentFilter::default()).await.unwrap_or(0) as u32;
+    let tenant_filter = IncidentFilter {
+        tenant_id: Some(user.tenant_id),
+        ..Default::default()
+    };
+    let total_incidents = repo.count(&tenant_filter).await.unwrap_or(0) as u32;
 
     // Count resolved incidents to estimate AI accuracy
     let resolved_filter = IncidentFilter {
+        tenant_id: Some(user.tenant_id),
         status: Some(vec![IncidentStatus::Resolved, IncidentStatus::Closed]),
         ..Default::default()
     };
@@ -1498,7 +1513,7 @@ async fn analytics(
         per_page: 50,
     };
     let recent_incidents = repo
-        .list(&IncidentFilter::default(), &recent_pagination)
+        .list(&tenant_filter, &recent_pagination)
         .await
         .unwrap_or_default();
 
@@ -1557,9 +1572,10 @@ struct NavCounts {
 }
 
 /// Fetches the counts needed for navigation badges.
-async fn fetch_nav_counts(repo: &dyn IncidentRepository) -> NavCounts {
+async fn fetch_nav_counts(repo: &dyn IncidentRepository, tenant_id: Uuid) -> NavCounts {
     // Count critical open incidents
     let critical_filter = IncidentFilter {
+        tenant_id: Some(tenant_id),
         severity: Some(vec![Severity::Critical]),
         status: Some(vec![
             IncidentStatus::New,
@@ -1575,6 +1591,7 @@ async fn fetch_nav_counts(repo: &dyn IncidentRepository) -> NavCounts {
 
     // Count all open incidents
     let open_filter = IncidentFilter {
+        tenant_id: Some(tenant_id),
         status: Some(vec![
             IncidentStatus::New,
             IncidentStatus::Enriching,
@@ -1589,6 +1606,7 @@ async fn fetch_nav_counts(repo: &dyn IncidentRepository) -> NavCounts {
 
     // Count pending approvals
     let approval_filter = IncidentFilter {
+        tenant_id: Some(tenant_id),
         status: Some(vec![IncidentStatus::PendingApproval]),
         ..Default::default()
     };
@@ -1601,9 +1619,13 @@ async fn fetch_nav_counts(repo: &dyn IncidentRepository) -> NavCounts {
     }
 }
 
-async fn fetch_dashboard_metrics(repo: &dyn IncidentRepository) -> DashboardMetrics {
+async fn fetch_dashboard_metrics(
+    repo: &dyn IncidentRepository,
+    tenant_id: Uuid,
+) -> DashboardMetrics {
     // Count critical open incidents
     let critical_filter = IncidentFilter {
+        tenant_id: Some(tenant_id),
         severity: Some(vec![Severity::Critical]),
         status: Some(vec![
             IncidentStatus::New,
@@ -1619,6 +1641,7 @@ async fn fetch_dashboard_metrics(repo: &dyn IncidentRepository) -> DashboardMetr
 
     // Count all open incidents
     let open_filter = IncidentFilter {
+        tenant_id: Some(tenant_id),
         status: Some(vec![
             IncidentStatus::New,
             IncidentStatus::Enriching,
@@ -1633,6 +1656,7 @@ async fn fetch_dashboard_metrics(repo: &dyn IncidentRepository) -> DashboardMetr
 
     // Count by severity
     let high_filter = IncidentFilter {
+        tenant_id: Some(tenant_id),
         severity: Some(vec![Severity::High]),
         status: open_filter.status.clone(),
         ..Default::default()
@@ -1640,6 +1664,7 @@ async fn fetch_dashboard_metrics(repo: &dyn IncidentRepository) -> DashboardMetr
     let high_count = repo.count(&high_filter).await.unwrap_or(0) as u32;
 
     let medium_filter = IncidentFilter {
+        tenant_id: Some(tenant_id),
         severity: Some(vec![Severity::Medium]),
         status: open_filter.status.clone(),
         ..Default::default()
@@ -1647,6 +1672,7 @@ async fn fetch_dashboard_metrics(repo: &dyn IncidentRepository) -> DashboardMetr
     let medium_count = repo.count(&medium_filter).await.unwrap_or(0) as u32;
 
     let low_filter = IncidentFilter {
+        tenant_id: Some(tenant_id),
         severity: Some(vec![Severity::Low, Severity::Info]),
         status: open_filter.status.clone(),
         ..Default::default()
@@ -1656,6 +1682,7 @@ async fn fetch_dashboard_metrics(repo: &dyn IncidentRepository) -> DashboardMetr
     // Count resolved in last 24h for auto-resolved calculation
     let yesterday = Utc::now() - Duration::hours(24);
     let resolved_filter = IncidentFilter {
+        tenant_id: Some(tenant_id),
         status: Some(vec![IncidentStatus::Resolved, IncidentStatus::Closed]),
         since: Some(yesterday),
         ..Default::default()
@@ -1680,21 +1707,24 @@ async fn fetch_dashboard_metrics(repo: &dyn IncidentRepository) -> DashboardMetr
 
 async fn fetch_incidents(
     repo: &dyn IncidentRepository,
+    tenant_id: Uuid,
     severity: Option<Vec<Severity>>,
     status: Option<Vec<IncidentStatus>>,
     limit: u32,
     page: u32,
 ) -> Vec<IncidentRow> {
     let filter = IncidentFilter {
+        tenant_id: Some(tenant_id),
         severity,
         status,
         ..Default::default()
     };
-    fetch_incidents_with_filter(repo, &filter, limit, page).await
+    fetch_incidents_with_filter(repo, tenant_id, &filter, limit, page).await
 }
 
 async fn fetch_incidents_with_filter(
     repo: &dyn IncidentRepository,
+    tenant_id: Uuid,
     filter: &IncidentFilter,
     limit: u32,
     page: u32,
@@ -1704,7 +1734,13 @@ async fn fetch_incidents_with_filter(
         per_page: limit,
     };
 
-    let incidents = repo.list(filter, &pagination).await.unwrap_or_default();
+    let mut tenant_scoped_filter = filter.clone();
+    tenant_scoped_filter.tenant_id = Some(tenant_id);
+
+    let incidents = repo
+        .list(&tenant_scoped_filter, &pagination)
+        .await
+        .unwrap_or_default();
 
     incidents
         .into_iter()
