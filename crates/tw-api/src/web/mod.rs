@@ -18,11 +18,13 @@ use uuid::Uuid;
 use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::db::{
     create_api_key_repository, create_audit_repository, create_connector_repository,
-    create_incident_repository, create_notification_repository, create_playbook_repository,
-    create_policy_repository, create_settings_repository, GeneralSettings, IncidentFilter,
-    IncidentRepository, LlmSettings, Pagination, PlaybookFilter, PolicyRepository, RateLimits,
+    create_incident_repository, create_knowledge_repository, create_notification_repository,
+    create_playbook_repository, create_policy_repository, create_settings_repository,
+    GeneralSettings, IncidentFilter, IncidentRepository, LlmSettings, Pagination, PlaybookFilter,
+    PolicyRepository, RateLimits,
 };
 use tw_core::incident::{ApprovalStatus, IncidentStatus, Severity};
+use tw_core::knowledge::{KnowledgeFilter, KnowledgeType};
 
 use crate::auth::AuthenticatedUser;
 use crate::error::ApiError;
@@ -1310,11 +1312,27 @@ async fn knowledge_list(
     AuthenticatedUser(user): AuthenticatedUser,
     Query(query): Query<KnowledgeQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let repo = create_incident_repository(&state.db);
-    let nav = fetch_nav_counts(repo.as_ref()).await;
+    let incident_repo = create_incident_repository(&state.db);
+    let nav = fetch_nav_counts(incident_repo.as_ref()).await;
+    let knowledge_repo = create_knowledge_repository(&state.db);
 
-    // Knowledge articles not yet persisted; will be wired to the knowledge store
-    let articles: Vec<KnowledgeArticle> = vec![];
+    let filter = KnowledgeFilter {
+        doc_types: knowledge_type_filter_from_query(&query.type_filter),
+        is_active: Some(true),
+        search_query: normalize_search_query(&query.q),
+        ..Default::default()
+    };
+    let pagination = Pagination::new(1, 60);
+
+    let result = knowledge_repo
+        .list(DEFAULT_TENANT_ID, &filter, &pagination)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let articles = result
+        .items
+        .into_iter()
+        .map(knowledge_document_to_article)
+        .collect();
 
     let template = KnowledgeListTemplate {
         active_nav: "knowledge".to_string(),
@@ -1337,21 +1355,20 @@ async fn knowledge_detail(
     AuthenticatedUser(user): AuthenticatedUser,
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
-    let repo = create_incident_repository(&state.db);
-    let nav = fetch_nav_counts(repo.as_ref()).await;
+    let incident_repo = create_incident_repository(&state.db);
+    let nav = fetch_nav_counts(incident_repo.as_ref()).await;
+    let knowledge_repo = create_knowledge_repository(&state.db);
 
-    // Article store not yet wired; shows placeholder
-    let article = KnowledgeArticleDetail {
-        id,
-        title: "Article not found".to_string(),
-        article_type: "reference".to_string(),
-        tags: vec![],
-        content: "This article could not be found. The knowledge base is being populated."
-            .to_string(),
-        author: "System".to_string(),
-        created_at: "N/A".to_string(),
-        updated_at: "N/A".to_string(),
+    let document = match knowledge_repo
+        .get_for_tenant(id, DEFAULT_TENANT_ID)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+    {
+        Some(doc) => doc,
+        None => return Ok(Redirect::to("/knowledge").into_response()),
     };
+
+    let article = knowledge_document_to_detail(document);
 
     let template = KnowledgeDetailTemplate {
         active_nav: "knowledge".to_string(),
@@ -1364,6 +1381,84 @@ async fn knowledge_detail(
     };
 
     Ok(HtmlTemplate(template).into_response())
+}
+
+fn knowledge_type_filter_from_query(type_filter: &str) -> Option<Vec<KnowledgeType>> {
+    let normalized = type_filter.trim().to_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    match normalized.as_str() {
+        "runbook" | "playbook" => Some(vec![KnowledgeType::Runbook]),
+        "procedure" => Some(vec![
+            KnowledgeType::SecurityPolicy,
+            KnowledgeType::PostMortem,
+        ]),
+        "reference" => Some(vec![
+            KnowledgeType::ThreatIntelReport,
+            KnowledgeType::VendorDocumentation,
+            KnowledgeType::ThreatProfile,
+            KnowledgeType::BestPractice,
+            KnowledgeType::ToolGuide,
+        ]),
+        _ => KnowledgeType::parse(&normalized).map(|t| vec![t]),
+    }
+}
+
+fn knowledge_category(doc_type: KnowledgeType) -> &'static str {
+    match doc_type {
+        KnowledgeType::Runbook => "runbook",
+        KnowledgeType::ThreatIntelReport
+        | KnowledgeType::VendorDocumentation
+        | KnowledgeType::ThreatProfile
+        | KnowledgeType::BestPractice
+        | KnowledgeType::ToolGuide => "reference",
+        KnowledgeType::SecurityPolicy | KnowledgeType::PostMortem => "procedure",
+    }
+}
+
+fn summarize_knowledge_content(content: &str, max_chars: usize) -> String {
+    let normalized = content.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.len() <= max_chars {
+        normalized
+    } else {
+        format!("{}...", &normalized[..max_chars])
+    }
+}
+
+fn format_dashboard_timestamp(dt: chrono::DateTime<chrono::Utc>) -> String {
+    dt.format("%Y-%m-%d %H:%M UTC").to_string()
+}
+
+fn knowledge_document_to_article(doc: tw_core::knowledge::KnowledgeDocument) -> KnowledgeArticle {
+    let excerpt = doc
+        .summary
+        .unwrap_or_else(|| summarize_knowledge_content(&doc.content, 180));
+
+    KnowledgeArticle {
+        id: doc.id,
+        title: doc.title,
+        article_type: knowledge_category(doc.doc_type).to_string(),
+        tags: doc.metadata.tags,
+        excerpt,
+        updated_at: format_time_ago(doc.updated_at),
+    }
+}
+
+fn knowledge_document_to_detail(
+    doc: tw_core::knowledge::KnowledgeDocument,
+) -> KnowledgeArticleDetail {
+    KnowledgeArticleDetail {
+        id: doc.id,
+        title: doc.title,
+        article_type: knowledge_category(doc.doc_type).to_string(),
+        tags: doc.metadata.tags,
+        content: doc.content,
+        author: doc.metadata.author.unwrap_or_else(|| "Unknown".to_string()),
+        created_at: format_dashboard_timestamp(doc.created_at),
+        updated_at: format_dashboard_timestamp(doc.updated_at),
+    }
 }
 
 /// Analytics dashboard page.
@@ -2117,6 +2212,13 @@ mod tests {
                 });
         }
 
+        sqlx::query(include_str!(
+            "../../../tw-core/src/db/migrations/sqlite/20240302_000001_create_knowledge_base.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("Failed to run knowledge base schema");
+
         let db = DbPool::Sqlite(pool);
         let event_bus = EventBus::new(100);
         let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
@@ -2243,6 +2345,13 @@ mod tests {
                     )
                 });
         }
+
+        sqlx::query(include_str!(
+            "../../../tw-core/src/db/migrations/sqlite/20240302_000001_create_knowledge_base.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("Failed to run knowledge base schema");
 
         let db = DbPool::Sqlite(pool);
         let event_bus = EventBus::new(100);
@@ -3296,6 +3405,143 @@ mod tests {
             normalize_search_query("  phishing user  "),
             Some("phishing user".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn test_knowledge_list_with_persisted_article() {
+        use tw_core::db::create_knowledge_repository;
+        use tw_core::knowledge::{CreateKnowledgeDocument, KnowledgeType};
+
+        let (app, state) = setup_test_app_with_state().await;
+        let repo = create_knowledge_repository(&state.db);
+        let create = CreateKnowledgeDocument {
+            doc_type: KnowledgeType::Runbook,
+            title: "Containment Runbook".to_string(),
+            content: "Step 1: isolate host".to_string(),
+            summary: Some("IR containment procedure".to_string()),
+            metadata: None,
+        };
+        let document = create.build(DEFAULT_TENANT_ID, None);
+        repo.create(&document).await.unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/knowledge")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body_str.contains("Containment Runbook"));
+    }
+
+    #[tokio::test]
+    async fn test_knowledge_list_query_filter() {
+        use tw_core::db::create_knowledge_repository;
+        use tw_core::knowledge::{CreateKnowledgeDocument, KnowledgeType};
+
+        let (app, state) = setup_test_app_with_state().await;
+        let repo = create_knowledge_repository(&state.db);
+
+        let runbook = CreateKnowledgeDocument {
+            doc_type: KnowledgeType::Runbook,
+            title: "Email Triage Runbook".to_string(),
+            content: "Handle suspicious emails".to_string(),
+            summary: None,
+            metadata: None,
+        }
+        .build(DEFAULT_TENANT_ID, None);
+        repo.create(&runbook).await.unwrap();
+
+        let reference = CreateKnowledgeDocument {
+            doc_type: KnowledgeType::ThreatIntelReport,
+            title: "APT Activity Digest".to_string(),
+            content: "Known indicators and TTPs".to_string(),
+            summary: None,
+            metadata: None,
+        }
+        .build(DEFAULT_TENANT_ID, None);
+        repo.create(&reference).await.unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/knowledge?type_filter=runbook&q=email")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body_str.contains("Email Triage Runbook"));
+        assert!(!body_str.contains("APT Activity Digest"));
+    }
+
+    #[tokio::test]
+    async fn test_knowledge_detail_existing_document() {
+        use tw_core::db::create_knowledge_repository;
+        use tw_core::knowledge::{CreateKnowledgeDocument, KnowledgeType};
+
+        let (app, state) = setup_test_app_with_state().await;
+        let repo = create_knowledge_repository(&state.db);
+        let create = CreateKnowledgeDocument {
+            doc_type: KnowledgeType::SecurityPolicy,
+            title: "Password Policy".to_string(),
+            content: "Use strong passwords and MFA.".to_string(),
+            summary: None,
+            metadata: None,
+        };
+        let document = create.build(DEFAULT_TENANT_ID, None);
+        let created = repo.create(&document).await.unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/knowledge/{}", created.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body_str.contains("Password Policy"));
+        assert!(body_str.contains("Use strong passwords and MFA."));
+    }
+
+    #[tokio::test]
+    async fn test_knowledge_detail_redirects_when_missing() {
+        let app = setup_test_app().await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/knowledge/{}", Uuid::new_v4()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        let location = response.headers().get("location").unwrap();
+        assert_eq!(location.to_str().unwrap(), "/knowledge");
     }
 
     #[tokio::test]
