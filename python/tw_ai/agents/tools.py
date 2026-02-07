@@ -1426,6 +1426,62 @@ def _mock_check_sender_reputation(sender_email: str) -> dict[str, Any]:
     }
 
 
+def _extract_sender_domain(sender_email: str) -> str:
+    """Extract and normalize sender domain from an email address."""
+    normalized = sender_email.strip().lower()
+    if "@" in normalized:
+        return normalized.rsplit("@", 1)[1]
+    return normalized
+
+
+def _reputation_from_domain_lookup(
+    sender_email: str, lookup_result: dict[str, Any]
+) -> dict[str, Any]:
+    """Build sender reputation payload from a threat-intel domain lookup result."""
+    domain = _extract_sender_domain(sender_email)
+
+    malicious_score_raw = lookup_result.get("malicious_score", 0)
+    try:
+        malicious_score = int(float(malicious_score_raw))
+    except (TypeError, ValueError):
+        malicious_score = 0
+    malicious_score = max(0, min(100, malicious_score))
+
+    score = max(0, min(100, 100 - malicious_score))
+    verdict = str(lookup_result.get("verdict", "unknown")).strip().lower()
+
+    if verdict == "malicious" or score <= 25:
+        risk_level = "high"
+    elif verdict == "suspicious" or score <= 60:
+        risk_level = "medium"
+    else:
+        risk_level = "low"
+
+    categories = lookup_result.get("categories")
+    if isinstance(categories, list) and categories:
+        category = str(categories[0])
+    elif isinstance(categories, str) and categories:
+        category = categories
+    else:
+        category = verdict if verdict in {"malicious", "suspicious", "clean"} else "unknown"
+
+    domain_age_raw = lookup_result.get("domain_age_days")
+    domain_age_days: int | None = None
+    if isinstance(domain_age_raw, (int, float)):
+        domain_age_days = int(domain_age_raw)
+
+    return {
+        "sender_email": sender_email,
+        "domain": domain,
+        "score": score,
+        "is_known_sender": (verdict == "clean" and score >= 85),
+        "domain_age_days": domain_age_days,
+        "category": category,
+        "risk_level": risk_level,
+        "is_mock": False,
+    }
+
+
 # =============================================================================
 # Policy Helper Functions
 # =============================================================================
@@ -2534,14 +2590,27 @@ def create_triage_tools() -> ToolRegistry:
         start_time = time.perf_counter()
 
         try:
-            # Currently only mock implementation available
+            from tw_ai.analysis.mitre import map_to_mitre as map_behavior_to_mitre
+
+            mapped = map_behavior_to_mitre(description)
+            tactics = sorted({technique.tactic for technique in mapped if technique.tactic})
+
             execution_time_ms = int((time.perf_counter() - start_time) * 1000)
             return ToolResult.ok(
                 data={
-                    "techniques": [],
-                    "tactics": [],
+                    "techniques": [
+                        {
+                            "id": technique.id,
+                            "name": technique.name,
+                            "tactic": technique.tactic,
+                            "relevance": technique.relevance,
+                        }
+                        for technique in mapped
+                    ],
+                    "tactics": tactics,
                     "description": description,
-                    "is_mock": True,
+                    "match_count": len(mapped),
+                    "is_mock": False,
                 },
                 execution_time_ms=execution_time_ms,
             )
@@ -3151,9 +3220,6 @@ def create_triage_tools() -> ToolRegistry:
         Performs reputation lookup for the sender email address,
         including domain age, known sender status, and reputation score.
 
-        NOTE: This is currently a mock implementation for development.
-        Production will integrate with email reputation services.
-
         Args:
             sender_email: The sender's email address to check.
 
@@ -3170,7 +3236,13 @@ def create_triage_tools() -> ToolRegistry:
         start_time = time.perf_counter()
 
         try:
-            result_data = _mock_check_sender_reputation(sender_email)
+            bridge = get_threat_intel_bridge()
+            if bridge is not None:
+                domain = _extract_sender_domain(sender_email)
+                lookup_result = bridge.lookup_domain(domain)
+                result_data = _reputation_from_domain_lookup(sender_email, lookup_result)
+            else:
+                result_data = _mock_check_sender_reputation(sender_email)
 
             execution_time_ms = int((time.perf_counter() - start_time) * 1000)
 

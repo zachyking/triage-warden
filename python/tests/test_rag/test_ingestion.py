@@ -464,3 +464,14 @@ class TestThreatIntelIngester:
 
         assert count == 1
         assert vector_store.collection_count("threat_intelligence") == 1
+
+    @pytest.mark.asyncio
+    async def test_ingest_from_url_blocks_localhost(self, vector_store):
+        """Test URL ingestion blocks localhost/private destinations."""
+        from tw_ai.rag.ingestion import ThreatIntelIngester
+
+        ingester = ThreatIntelIngester(vector_store)
+        count = await ingester.ingest("http://localhost/threat-feed.json")
+
+        assert count == 0
+        assert vector_store.collection_count("threat_intelligence") == 0

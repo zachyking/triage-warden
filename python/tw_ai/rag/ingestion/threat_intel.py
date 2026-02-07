@@ -8,11 +8,14 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import ipaddress
 import json
 import re
+import socket
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
+from urllib.parse import urlparse
 
 import structlog
 
@@ -52,6 +55,16 @@ VERDICT_MAP: dict[str, str] = {
 STIX_VALUE_PATTERN = re.compile(r"^\[(?P<kind>[a-zA-Z0-9_-]+):value\s*=\s*'(?P<value>[^']+)'\]$")
 STIX_HASH_PATTERN = re.compile(
     r"^\[file:hashes\.'(?P<algo>MD5|SHA-1|SHA-256)'\s*=\s*'(?P<value>[^']+)'\]$"
+)
+
+MAX_FEED_SIZE_BYTES = 5 * 1024 * 1024
+DISALLOWED_FEED_HOSTNAMES = frozenset(
+    {
+        "localhost",
+        "metadata",
+        "metadata.google.internal",
+        "169.254.169.254",
+    }
 )
 
 
@@ -254,24 +267,62 @@ class ThreatIntelIngester(BaseIngester):
         """Ingest indicators from an external HTTP(S) threat feed."""
         import httpx
 
+        if not self._is_safe_feed_url(url):
+            logger.warning("threat_intel_feed_blocked", source=url, reason="unsafe_url")
+            return 0
+
         try:
             async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=True) as client:
-                response = await client.get(url)
-                response.raise_for_status()
+                async with client.stream("GET", url) as response:
+                    response.raise_for_status()
+                    content_length = response.headers.get("content-length")
+                    if content_length is not None:
+                        try:
+                            declared_size = int(content_length)
+                        except ValueError:
+                            declared_size = 0
+
+                        if declared_size > MAX_FEED_SIZE_BYTES:
+                            logger.warning(
+                                "threat_intel_feed_too_large",
+                                source=url,
+                                declared_size=declared_size,
+                                max_size=MAX_FEED_SIZE_BYTES,
+                            )
+                            return 0
+
+                    body_chunks: list[bytes] = []
+                    total_bytes = 0
+                    async for chunk in response.aiter_bytes():
+                        total_bytes += len(chunk)
+                        if total_bytes > MAX_FEED_SIZE_BYTES:
+                            logger.warning(
+                                "threat_intel_feed_too_large",
+                                source=url,
+                                received_size=total_bytes,
+                                max_size=MAX_FEED_SIZE_BYTES,
+                            )
+                            return 0
+                        body_chunks.append(chunk)
+
+                    response_text = b"".join(body_chunks).decode(
+                        response.encoding or "utf-8",
+                        errors="replace",
+                    )
+                    content_type = response.headers.get("content-type", "").lower()
         except Exception as exc:
             logger.error("threat_intel_feed_fetch_failed", source=url, error=str(exc))
             return 0
 
-        content_type = response.headers.get("content-type", "").lower()
         url_lc = url.lower()
 
         if "text/csv" in content_type or url_lc.endswith(".csv"):
-            csv_rows = list(csv.DictReader(io.StringIO(response.text)))
+            csv_rows = list(csv.DictReader(io.StringIO(response_text)))
             return await self.ingest_batch([dict(row) for row in csv_rows])
 
         if url_lc.endswith(".jsonl"):
             jsonl_records: list[dict[str, Any]] = []
-            for line in response.text.splitlines():
+            for line in response_text.splitlines():
                 stripped = line.strip()
                 if not stripped:
                     continue
@@ -284,12 +335,74 @@ class ThreatIntelIngester(BaseIngester):
             return await self.ingest_batch(jsonl_records)
 
         try:
-            payload = response.json()
+            payload = json.loads(response_text)
         except json.JSONDecodeError:
             logger.error("threat_intel_feed_parse_failed", source=url, reason="invalid_json")
             return 0
 
         return await self.ingest_batch(self._records_from_json(payload))
+
+    def _is_safe_feed_url(self, url: str) -> bool:
+        parsed = urlparse(url)
+        if parsed.scheme.lower() not in {"http", "https"}:
+            logger.warning("threat_intel_feed_url_invalid_scheme", source=url, scheme=parsed.scheme)
+            return False
+
+        hostname = parsed.hostname
+        if not hostname:
+            logger.warning("threat_intel_feed_url_missing_host", source=url)
+            return False
+
+        host_lc = hostname.lower().strip()
+        if host_lc in DISALLOWED_FEED_HOSTNAMES or host_lc.endswith(".local"):
+            logger.warning("threat_intel_feed_url_disallowed_host", source=url, host=host_lc)
+            return False
+
+        if self._is_non_public_ip(host_lc):
+            logger.warning("threat_intel_feed_url_private_ip", source=url, host=host_lc)
+            return False
+
+        # Resolve DNS and block destinations mapped to private/reserved address space.
+        try:
+            default_port = 443 if parsed.scheme.lower() == "https" else 80
+            addr_info = socket.getaddrinfo(
+                host_lc,
+                parsed.port or default_port,
+                proto=socket.IPPROTO_TCP,
+            )
+        except socket.gaierror as exc:
+            logger.warning("threat_intel_feed_dns_resolution_failed", source=url, error=str(exc))
+            return False
+
+        resolved_ips = {
+            str(info[4][0])
+            for info in addr_info
+            if info and len(info) > 4 and info[4] and isinstance(info[4][0], str)
+        }
+        for ip_str in resolved_ips:
+            if self._is_non_public_ip(ip_str):
+                logger.warning(
+                    "threat_intel_feed_url_private_resolution",
+                    source=url,
+                    resolved_ip=ip_str,
+                )
+                return False
+        return True
+
+    def _is_non_public_ip(self, value: str) -> bool:
+        try:
+            ip_obj = ipaddress.ip_address(value)
+        except ValueError:
+            return False
+
+        return (
+            ip_obj.is_private
+            or ip_obj.is_loopback
+            or ip_obj.is_link_local
+            or ip_obj.is_multicast
+            or ip_obj.is_reserved
+            or ip_obj.is_unspecified
+        )
 
     def _records_from_json(self, payload: Any) -> list[dict[str, Any]]:
         if isinstance(payload, list):
