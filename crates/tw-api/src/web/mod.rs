@@ -193,6 +193,15 @@ fn default_page() -> u32 {
     1
 }
 
+fn normalize_search_query(query: &str) -> Option<String> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 async fn incidents_list(
     State(state): State<AppState>,
     AuthenticatedUser(user): AuthenticatedUser,
@@ -229,15 +238,13 @@ async fn incidents_list(
     };
 
     let per_page = 20u32;
+    let search_query = normalize_search_query(&query.q);
 
     // Build filter
-    // TODO: IncidentFilter does not currently support text search (query.q).
-    // To enable search, add a `query: Option<String>` field to IncidentFilter
-    // and implement full-text search in the repository layer (e.g., search
-    // alert_data JSON, title, hostname, username, IP addresses, etc.)
     let filter = IncidentFilter {
         severity: severity_filter.clone(),
         status: status_filter.clone(),
+        query: search_query.clone(),
         ..Default::default()
     };
 
@@ -262,7 +269,7 @@ async fn incidents_list(
         total_count,
         severity_filter: query.severity,
         status_filter: query.status,
-        query: query.q,
+        query: search_query.unwrap_or_default(),
         page: query.page.max(1),
         total_pages: total_pages.max(1),
     };
@@ -2973,6 +2980,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_incidents_list_with_query_filter() {
+        use tw_core::db::create_incident_repository;
+        use tw_core::incident::{IncidentStatus, Severity};
+
+        let (app, state) = setup_test_app_with_state().await;
+        let repo = create_incident_repository(&state.db);
+        repo.create(&create_test_incident(
+            "Suspicious Login Alert",
+            Severity::High,
+            IncidentStatus::New,
+        ))
+        .await
+        .unwrap();
+        repo.create(&create_test_incident(
+            "Malware Detection Alert",
+            Severity::High,
+            IncidentStatus::New,
+        ))
+        .await
+        .unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/incidents?q=malware")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body_str.contains("Malware Detection Alert"));
+        assert!(!body_str.contains("Suspicious Login Alert"));
+    }
+
+    #[tokio::test]
     async fn test_incident_detail_returns_html_for_existing_incident() {
         use tw_core::db::create_incident_repository;
         use tw_core::incident::{IncidentStatus, Severity};
@@ -3238,6 +3286,16 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_normalize_search_query() {
+        assert_eq!(normalize_search_query(""), None);
+        assert_eq!(normalize_search_query("   "), None);
+        assert_eq!(
+            normalize_search_query("  phishing user  "),
+            Some("phishing user".to_string())
+        );
     }
 
     #[tokio::test]
