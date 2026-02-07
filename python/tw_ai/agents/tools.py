@@ -47,6 +47,23 @@ def _mock_fallbacks_allowed() -> bool:
     return override in {"1", "true", "yes", "on"}
 
 
+def _resolve_bridge_mode(env_var: str) -> str:
+    """Resolve bridge mode from environment with production-safe defaults."""
+    configured = os.environ.get(env_var, "").strip().lower()
+    if not configured:
+        return "mock" if _mock_fallbacks_allowed() else "production"
+
+    if configured == "mock" and not _mock_fallbacks_allowed():
+        logger.warning(
+            "bridge_mock_mode_blocked_in_production",
+            env_var=env_var,
+            requested_mode=configured,
+        )
+        return "production"
+
+    return configured
+
+
 # =============================================================================
 # Bridge Imports with Graceful Fallback
 # =============================================================================
@@ -812,7 +829,7 @@ def get_threat_intel_bridge() -> Any:
         and _ThreatIntelBridgeClass is not None
     ):
         try:
-            mode = os.environ.get("TW_THREAT_INTEL_MODE", "mock")
+            mode = _resolve_bridge_mode("TW_THREAT_INTEL_MODE")
             _threat_intel_bridge = _ThreatIntelBridgeClass(mode)
             logger.info("ThreatIntelBridge initialized", mode=mode)
         except Exception as e:
@@ -825,7 +842,7 @@ def get_edr_bridge() -> Any:
     global _edr_bridge
     if _edr_bridge is None and _EDR_BRIDGE_AVAILABLE and _EDRBridgeClass is not None:
         try:
-            mode = os.environ.get("TW_EDR_MODE", "mock")
+            mode = _resolve_bridge_mode("TW_EDR_MODE")
             with_sample_data = os.environ.get("TW_BRIDGE_SAMPLE_DATA", "true").lower() == "true"
             _edr_bridge = _EDRBridgeClass(mode, with_sample_data=with_sample_data)
             logger.info("EDRBridge initialized", mode=mode, with_sample_data=with_sample_data)
@@ -839,7 +856,7 @@ def get_siem_bridge() -> Any:
     global _siem_bridge
     if _siem_bridge is None and _SIEM_BRIDGE_AVAILABLE and _SIEMBridgeClass is not None:
         try:
-            mode = os.environ.get("TW_SIEM_MODE", "mock")
+            mode = _resolve_bridge_mode("TW_SIEM_MODE")
             with_sample_data = os.environ.get("TW_BRIDGE_SAMPLE_DATA", "true").lower() == "true"
             _siem_bridge = _SIEMBridgeClass(mode, with_sample_data=with_sample_data)
             logger.info("SIEMBridge initialized", mode=mode, with_sample_data=with_sample_data)
@@ -924,7 +941,7 @@ def get_ticketing_bridge() -> Any:
         and _TicketingBridgeClass is not None
     ):
         try:
-            mode = os.environ.get("TW_TICKETING_MODE", "mock")
+            mode = _resolve_bridge_mode("TW_TICKETING_MODE")
             _ticketing_bridge = _TicketingBridgeClass(mode)
             logger.info("TicketingBridge initialized", mode=mode)
         except Exception as e:
@@ -957,7 +974,7 @@ def get_email_gateway_bridge() -> Any:
         and _EmailGatewayBridgeClass is not None
     ):
         try:
-            mode = os.environ.get("TW_EMAIL_GATEWAY_MODE", "mock")
+            mode = _resolve_bridge_mode("TW_EMAIL_GATEWAY_MODE")
             _email_gateway_bridge = _EmailGatewayBridgeClass(mode)
             logger.info("EmailGatewayBridge initialized", mode=mode)
         except Exception as e:
