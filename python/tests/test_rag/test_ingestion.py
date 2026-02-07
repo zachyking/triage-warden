@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import socket
 import sqlite3
 from unittest.mock import patch
 
@@ -529,3 +531,33 @@ class TestThreatIntelIngester:
 
         assert count == 0
         assert vector_store.collection_count("threat_intelligence") == 0
+
+    def test_safe_feed_url_blocks_http_by_default(self, vector_store):
+        """Test feed URL validation blocks insecure HTTP by default."""
+        from tw_ai.rag.ingestion import ThreatIntelIngester
+
+        ingester = ThreatIntelIngester(vector_store)
+        assert ingester._is_safe_feed_url("http://example.com/threat-feed.json") is False
+
+    def test_safe_feed_url_allows_http_with_explicit_override(self, vector_store):
+        """Test feed URL validation can allow HTTP only with explicit override."""
+        from tw_ai.rag.ingestion import ThreatIntelIngester
+        from tw_ai.rag.ingestion.threat_intel import ALLOW_INSECURE_FEED_ENV
+
+        ingester = ThreatIntelIngester(vector_store)
+        fake_addrinfo = [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("93.184.216.34", 80),
+            )
+        ]
+
+        with patch.dict(os.environ, {ALLOW_INSECURE_FEED_ENV: "true"}):
+            with patch(
+                "tw_ai.rag.ingestion.threat_intel.socket.getaddrinfo",
+                return_value=fake_addrinfo,
+            ):
+                assert ingester._is_safe_feed_url("http://example.com/threat-feed.json") is True

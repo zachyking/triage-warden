@@ -10,6 +10,7 @@ import hashlib
 import io
 import ipaddress
 import json
+import os
 import re
 import socket
 from datetime import datetime
@@ -58,6 +59,7 @@ STIX_HASH_PATTERN = re.compile(
 )
 
 MAX_FEED_SIZE_BYTES = 5 * 1024 * 1024
+ALLOW_INSECURE_FEED_ENV = "TW_ALLOW_INSECURE_FEED_URLS"
 DISALLOWED_FEED_HOSTNAMES = frozenset(
     {
         "localhost",
@@ -352,7 +354,15 @@ class ThreatIntelIngester(BaseIngester):
 
     def _is_safe_feed_url(self, url: str) -> bool:
         parsed = urlparse(url)
-        if parsed.scheme.lower() not in {"http", "https"}:
+        scheme = parsed.scheme.lower()
+        allow_insecure = os.environ.get(ALLOW_INSECURE_FEED_ENV, "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        allowed_schemes = {"https"} if not allow_insecure else {"http", "https"}
+        if scheme not in allowed_schemes:
             logger.warning("threat_intel_feed_url_invalid_scheme", source=url, scheme=parsed.scheme)
             return False
 
