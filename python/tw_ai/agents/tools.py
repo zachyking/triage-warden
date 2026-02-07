@@ -27,6 +27,26 @@ from tw_ai.llm.base import ToolDefinition
 
 logger = structlog.get_logger()
 
+MOCK_FALLBACK_OVERRIDE_ENV = "TW_ALLOW_MOCK_FALLBACKS"
+
+
+def _is_production_environment() -> bool:
+    """Check if running in a production environment."""
+    for var in ("TW_ENV", "NODE_ENV", "ENVIRONMENT"):
+        value = os.environ.get(var, "").strip().lower()
+        if value in {"production", "prod"}:
+            return True
+    return False
+
+
+def _mock_fallbacks_allowed() -> bool:
+    """Whether mock fallbacks are allowed for unavailable bridges."""
+    if not _is_production_environment():
+        return True
+    override = os.environ.get(MOCK_FALLBACK_OVERRIDE_ENV, "").strip().lower()
+    return override in {"1", "true", "yes", "on"}
+
+
 # =============================================================================
 # Bridge Imports with Graceful Fallback
 # =============================================================================
@@ -1682,6 +1702,15 @@ def create_triage_tools() -> ToolRegistry:
                 result = bridge.lookup_hash(hash)
                 is_mock = False
             else:
+                if not _mock_fallbacks_allowed():
+                    execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                    return ToolResult.fail(
+                        error=(
+                            "Hash lookup unavailable: threat intel connector required when "
+                            "mock fallback is disabled"
+                        ),
+                        execution_time_ms=execution_time_ms,
+                    )
                 result = _mock_hash_lookup(hash)
                 is_mock = True
 
@@ -1748,6 +1777,15 @@ def create_triage_tools() -> ToolRegistry:
                 result = bridge.lookup_ip(ip)
                 is_mock = False
             else:
+                if not _mock_fallbacks_allowed():
+                    execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                    return ToolResult.fail(
+                        error=(
+                            "IP lookup unavailable: threat intel connector required when "
+                            "mock fallback is disabled"
+                        ),
+                        execution_time_ms=execution_time_ms,
+                    )
                 result = _mock_ip_lookup(ip)
                 is_mock = True
 
@@ -1815,6 +1853,15 @@ def create_triage_tools() -> ToolRegistry:
                 result = bridge.lookup_domain(domain)
                 is_mock = False
             else:
+                if not _mock_fallbacks_allowed():
+                    execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                    return ToolResult.fail(
+                        error=(
+                            "Domain lookup unavailable: threat intel connector required when "
+                            "mock fallback is disabled"
+                        ),
+                        execution_time_ms=execution_time_ms,
+                    )
                 result = _mock_domain_lookup(domain)
                 is_mock = True
 
@@ -2673,6 +2720,15 @@ def create_triage_tools() -> ToolRegistry:
                 kill_switch_active = bridge.is_kill_switch_active()
                 is_mock = False
             else:
+                if not _mock_fallbacks_allowed():
+                    execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                    return ToolResult.fail(
+                        error=(
+                            "Policy check unavailable: policy connector required when "
+                            "mock fallback is disabled"
+                        ),
+                        execution_time_ms=execution_time_ms,
+                    )
                 result = _mock_check_action(action_type, target, confidence)
                 operation_mode = _mock_get_operation_mode()
                 kill_switch_active = _mock_is_kill_switch_active()
@@ -2766,6 +2822,15 @@ def create_triage_tools() -> ToolRegistry:
                 request_id = bridge.submit_approval_request(action_type, target, level)
                 is_mock = False
             else:
+                if not _mock_fallbacks_allowed():
+                    execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                    return ToolResult.fail(
+                        error=(
+                            "Approval submission unavailable: policy connector required when "
+                            "mock fallback is disabled"
+                        ),
+                        execution_time_ms=execution_time_ms,
+                    )
                 request_id = _mock_submit_approval_request(action_type, target, level)
                 is_mock = True
 
@@ -2850,6 +2915,15 @@ def create_triage_tools() -> ToolRegistry:
                 result = bridge.check_approval_status(request_id)
                 is_mock = False
             else:
+                if not _mock_fallbacks_allowed():
+                    execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                    return ToolResult.fail(
+                        error=(
+                            "Approval status unavailable: policy connector required when "
+                            "mock fallback is disabled"
+                        ),
+                        execution_time_ms=execution_time_ms,
+                    )
                 result = _mock_check_approval_status(request_id)
                 is_mock = True
 
@@ -3242,6 +3316,15 @@ def create_triage_tools() -> ToolRegistry:
                 lookup_result = bridge.lookup_domain(domain)
                 result_data = _reputation_from_domain_lookup(sender_email, lookup_result)
             else:
+                if not _mock_fallbacks_allowed():
+                    execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                    return ToolResult.fail(
+                        error=(
+                            "Sender reputation unavailable: threat intel connector required "
+                            "when mock fallback is disabled"
+                        ),
+                        execution_time_ms=execution_time_ms,
+                    )
                 result_data = _mock_check_sender_reputation(sender_email)
 
             execution_time_ms = int((time.perf_counter() - start_time) * 1000)
