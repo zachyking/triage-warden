@@ -15,6 +15,7 @@ use chrono::{Duration, Utc};
 use serde::Deserialize;
 use uuid::Uuid;
 
+#[cfg(test)]
 use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::db::{
     create_api_key_repository, create_audit_repository, create_connector_repository,
@@ -291,11 +292,11 @@ async fn incident_detail(
     // Fetch nav counts first
     let nav = fetch_nav_counts(repo.as_ref()).await;
 
-    match repo.get(id).await {
+    match repo.get_for_tenant(id, user.tenant_id).await {
         Ok(Some(incident)) => {
             // Fetch audit log
             let audit_entries = audit_repo
-                .get_for_incident(DEFAULT_TENANT_ID, id)
+                .get_for_incident(user.tenant_id, id)
                 .await
                 .unwrap_or_default()
                 .into_iter()
@@ -523,13 +524,14 @@ async fn settings(
     AuthenticatedUser(user): AuthenticatedUser,
     Query(query): Query<SettingsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let tenant_id = user.tenant_id;
     let repo = create_incident_repository(&state.db);
     let nav = fetch_nav_counts(repo.as_ref()).await;
 
     // Load general settings from database
     let settings_repo = create_settings_repository(&state.db, state.encryptor.clone());
     let general_settings = settings_repo
-        .get_general(DEFAULT_TENANT_ID)
+        .get_general(tenant_id)
         .await
         .unwrap_or(GeneralSettings {
             org_name: "Triage Warden".to_string(),
@@ -559,7 +561,7 @@ async fn settings(
     // Load connectors from repository
     let connector_repo = create_connector_repository(&state.db);
     let connectors: Vec<ConnectorData> = connector_repo
-        .list()
+        .list_for_tenant(tenant_id)
         .await
         .unwrap_or_default()
         .into_iter()
@@ -574,11 +576,11 @@ async fn settings(
 
     // Load policies from repository
     let policy_repo = create_policy_repository(&state.db);
-    let policies = fetch_policies(policy_repo.as_ref()).await;
+    let policies = fetch_policies(policy_repo.as_ref(), tenant_id).await;
 
     // Load rate limits from database
     let db_rate_limits = settings_repo
-        .get_rate_limits(DEFAULT_TENANT_ID)
+        .get_rate_limits(tenant_id)
         .await
         .unwrap_or(RateLimits {
             isolate_host_hour: 5,
@@ -608,7 +610,7 @@ async fn settings(
     // Load notification channels from repository
     let notification_repo = create_notification_repository(&state.db);
     let notification_channels: Vec<NotificationChannel> = notification_repo
-        .list()
+        .list_for_tenant(tenant_id)
         .await
         .unwrap_or_default()
         .into_iter()
@@ -623,7 +625,7 @@ async fn settings(
 
     // Load LLM settings from repository
     let llm = settings_repo
-        .get_llm(DEFAULT_TENANT_ID)
+        .get_llm(tenant_id)
         .await
         .unwrap_or(LlmSettings::default());
     let llm_settings = LlmSettingsData {
@@ -771,12 +773,12 @@ async fn modal_add_api_key(
 
 async fn modal_edit_notification(
     State(state): State<AppState>,
-    AuthenticatedUser(_user): AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     let notification_repo = create_notification_repository(&state.db);
 
-    match notification_repo.get(id).await {
+    match notification_repo.get_for_tenant(id, user.tenant_id).await {
         Ok(Some(channel)) => {
             let template = EditNotificationModalTemplate {
                 channel: EditNotificationChannel::from_channel(
@@ -800,11 +802,11 @@ async fn modal_edit_notification(
 /// Partial for notifications table (used by HTMX refresh).
 async fn partials_notifications(
     State(state): State<AppState>,
-    AuthenticatedUser(_user): AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
 ) -> Result<impl IntoResponse, ApiError> {
     let notification_repo = create_notification_repository(&state.db);
     let notification_channels: Vec<NotificationChannel> = notification_repo
-        .list()
+        .list_for_tenant(user.tenant_id)
         .await
         .unwrap_or_default()
         .into_iter()
@@ -826,12 +828,12 @@ async fn partials_notifications(
 /// Edit policy modal handler.
 async fn modal_edit_policy(
     State(state): State<AppState>,
-    AuthenticatedUser(_user): AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     let policy_repo = create_policy_repository(&state.db);
 
-    match policy_repo.get(id).await {
+    match policy_repo.get_for_tenant(id, user.tenant_id).await {
         Ok(Some(policy)) => {
             // Map approval level to the requires format used in the form
             let requires = match (&policy.action, &policy.approval_level) {
@@ -863,10 +865,10 @@ async fn modal_edit_policy(
 /// Partial for policies table (used by HTMX refresh).
 async fn partials_policies(
     State(state): State<AppState>,
-    AuthenticatedUser(_user): AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
 ) -> Result<impl IntoResponse, ApiError> {
     let policy_repo = create_policy_repository(&state.db);
-    let policies = fetch_policies(policy_repo.as_ref()).await;
+    let policies = fetch_policies(policy_repo.as_ref(), user.tenant_id).await;
 
     let template = PoliciesPartialTemplate { policies };
     Ok(HtmlTemplate(template))
@@ -875,12 +877,12 @@ async fn partials_policies(
 /// Edit connector modal handler.
 async fn modal_edit_connector(
     State(state): State<AppState>,
-    AuthenticatedUser(_user): AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     let connector_repo = create_connector_repository(&state.db);
 
-    match connector_repo.get(id).await {
+    match connector_repo.get_for_tenant(id, user.tenant_id).await {
         Ok(Some(connector)) => {
             let template = EditConnectorModalTemplate {
                 connector: EditConnectorData::from_connector(
@@ -900,11 +902,11 @@ async fn modal_edit_connector(
 /// Partial for connectors grid (used by HTMX refresh).
 async fn partials_connectors(
     State(state): State<AppState>,
-    AuthenticatedUser(_user): AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
 ) -> Result<impl IntoResponse, ApiError> {
     let connector_repo = create_connector_repository(&state.db);
     let connectors: Vec<ConnectorData> = connector_repo
-        .list()
+        .list_for_tenant(user.tenant_id)
         .await
         .unwrap_or_default()
         .into_iter()
@@ -1071,13 +1073,13 @@ async fn web_nl_query(
 /// Returns the incident timeline partial with color-coded events.
 async fn partials_incident_timeline(
     State(state): State<AppState>,
-    AuthenticatedUser(_user): AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
     let audit_repo = create_audit_repository(&state.db);
 
     let entries = audit_repo
-        .get_for_incident(DEFAULT_TENANT_ID, id)
+        .get_for_incident(user.tenant_id, id)
         .await
         .unwrap_or_default();
 
@@ -1266,12 +1268,12 @@ async fn web_assign_incident(
 /// Returns the global activity feed partial.
 async fn partials_activity_feed(
     State(state): State<AppState>,
-    AuthenticatedUser(_user): AuthenticatedUser,
+    AuthenticatedUser(user): AuthenticatedUser,
 ) -> Result<impl IntoResponse, ApiError> {
     // Fetch recent audit entries as activity
     let audit_repo = create_audit_repository(&state.db);
     let entries = audit_repo
-        .get_recent_for_tenant(DEFAULT_TENANT_ID, 20)
+        .get_recent_for_tenant(user.tenant_id, 20)
         .await
         .unwrap_or_default();
 
@@ -1325,7 +1327,7 @@ async fn knowledge_list(
     let pagination = Pagination::new(1, 60);
 
     let result = knowledge_repo
-        .list(DEFAULT_TENANT_ID, &filter, &pagination)
+        .list(user.tenant_id, &filter, &pagination)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let articles = result
@@ -1360,7 +1362,7 @@ async fn knowledge_detail(
     let knowledge_repo = create_knowledge_repository(&state.db);
 
     let document = match knowledge_repo
-        .get_for_tenant(id, DEFAULT_TENANT_ID)
+        .get_for_tenant(id, user.tenant_id)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?
     {
@@ -1724,8 +1726,8 @@ async fn fetch_incidents_with_filter(
 }
 
 /// Fetches policies from the repository and converts them to template data.
-async fn fetch_policies(repo: &dyn PolicyRepository) -> Vec<PolicyData> {
-    let policies = repo.list().await.unwrap_or_default();
+async fn fetch_policies(repo: &dyn PolicyRepository, tenant_id: Uuid) -> Vec<PolicyData> {
+    let policies = repo.list_for_tenant(tenant_id).await.unwrap_or_default();
 
     policies
         .into_iter()
