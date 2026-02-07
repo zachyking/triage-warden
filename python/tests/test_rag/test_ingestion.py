@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from unittest.mock import patch
 
 import pytest
 
@@ -472,6 +473,59 @@ class TestThreatIntelIngester:
 
         ingester = ThreatIntelIngester(vector_store)
         count = await ingester.ingest("http://localhost/threat-feed.json")
+
+        assert count == 0
+        assert vector_store.collection_count("threat_intelligence") == 0
+
+    @pytest.mark.asyncio
+    async def test_ingest_from_url_blocks_redirects(self, vector_store):
+        """Test URL ingestion blocks HTTP redirect responses to avoid redirect abuse."""
+        import httpx
+
+        from tw_ai.rag.ingestion import ThreatIntelIngester
+
+        class FakeResponse:
+            status_code = 302
+            headers = {
+                "location": "http://localhost/internal-feed",
+                "content-type": "application/json",
+            }
+            encoding = "utf-8"
+
+            def raise_for_status(self) -> None:
+                return None
+
+            async def aiter_bytes(self):
+                if False:
+                    yield b""
+
+        class FakeStreamContext:
+            async def __aenter__(self) -> FakeResponse:
+                return FakeResponse()
+
+            async def __aexit__(self, exc_type, exc, tb) -> bool:
+                return False
+
+        class FakeAsyncClient:
+            def __init__(self, *, timeout: float, follow_redirects: bool):
+                self.timeout = timeout
+                self.follow_redirects = follow_redirects
+
+            async def __aenter__(self) -> FakeAsyncClient:
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb) -> bool:
+                return False
+
+            def stream(self, method: str, request_url: str) -> FakeStreamContext:
+                assert method == "GET"
+                assert request_url == "https://feed.example.com/iocs.json"
+                return FakeStreamContext()
+
+        ingester = ThreatIntelIngester(vector_store)
+        with patch.object(ingester, "_is_safe_feed_url", return_value=True):
+            with patch.object(httpx, "AsyncClient", FakeAsyncClient):
+                count = await ingester.ingest_from_url("https://feed.example.com/iocs.json")
 
         assert count == 0
         assert vector_store.collection_count("threat_intelligence") == 0

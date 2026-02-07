@@ -272,8 +272,16 @@ class ThreatIntelIngester(BaseIngester):
             return 0
 
         try:
-            async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=False) as client:
                 async with client.stream("GET", url) as response:
+                    if 300 <= response.status_code < 400:
+                        logger.warning(
+                            "threat_intel_feed_redirect_blocked",
+                            source=url,
+                            status_code=response.status_code,
+                            location=response.headers.get("location"),
+                        )
+                        return 0
                     response.raise_for_status()
                     content_length = response.headers.get("content-length")
                     if content_length is not None:
