@@ -33,9 +33,9 @@ class SQLBackend(QueryBackend):
             logs_table: Name of the events/logs table.
             ioc_table: Name of the IOC/indicators table.
         """
-        self._incidents_table = incidents_table
-        self._logs_table = logs_table
-        self._ioc_table = ioc_table
+        self._incidents_table = _sanitize_table_name(incidents_table, fallback="incidents")
+        self._logs_table = _sanitize_table_name(logs_table, fallback="events")
+        self._ioc_table = _sanitize_table_name(ioc_table, fallback="indicators")
 
     @property
     def backend_name(self) -> str:
@@ -321,6 +321,14 @@ def _sanitize_column_name(name: str) -> str:
     sanitized = re.sub(r"[^a-zA-Z0-9_]", "", name)
     if not sanitized:
         return "unknown"
+    return sanitized
+
+
+def _sanitize_table_name(name: str, fallback: str) -> str:
+    """Sanitize table name identifiers used in SQL query templates."""
+    sanitized = _sanitize_column_name(name)
+    if sanitized == "unknown":
+        return fallback
     return sanitized
 
 

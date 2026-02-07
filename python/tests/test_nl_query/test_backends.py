@@ -101,9 +101,7 @@ class TestSQLBackend:
     def test_backend_name(self, sql: SQLBackend):
         assert sql.backend_name == "sql"
 
-    def test_incident_search_parameterized(
-        self, sql: SQLBackend, translator: NLQueryTranslator
-    ):
+    def test_incident_search_parameterized(self, sql: SQLBackend, translator: NLQueryTranslator):
         translated = translator.translate("show me critical incidents")
         result = sql.generate(translated)
         assert result.query_type == "SQL"
@@ -112,26 +110,20 @@ class TestSQLBackend:
         # Verify parameterized (no raw values in query)
         assert ":limit" in result.query_string or ":p" in result.query_string
 
-    def test_log_search_parameterized(
-        self, sql: SQLBackend, translator: NLQueryTranslator
-    ):
+    def test_log_search_parameterized(self, sql: SQLBackend, translator: NLQueryTranslator):
         translated = translator.translate("search authentication logs for user: admin")
         result = sql.generate(translated)
         assert "events" in result.query_string
         # User should be in parameters, not in query string
         assert "admin" in str(result.parameters.values())
 
-    def test_ioc_lookup_parameterized(
-        self, sql: SQLBackend, translator: NLQueryTranslator
-    ):
+    def test_ioc_lookup_parameterized(self, sql: SQLBackend, translator: NLQueryTranslator):
         translated = translator.translate("lookup 10.0.0.1")
         result = sql.generate(translated)
         assert "indicators" in result.query_string
         assert result.parameters.get("value") == "10.0.0.1"
 
-    def test_timeline_ordered_by_timestamp(
-        self, sql: SQLBackend, translator: NLQueryTranslator
-    ):
+    def test_timeline_ordered_by_timestamp(self, sql: SQLBackend, translator: NLQueryTranslator):
         translated = translator.translate("show timeline for last 24 hours")
         result = sql.generate(translated)
         assert "ORDER BY timestamp ASC" in result.query_string
@@ -158,3 +150,17 @@ class TestSQLBackend:
         result = sql.generate(translated)
         # Column names should be safe
         assert "severity" in result.query_string
+
+    def test_table_name_sanitization(self, translator: NLQueryTranslator):
+        sql = SQLBackend(
+            incidents_table="incidents; DROP TABLE users --",
+            logs_table="events; DELETE FROM events",
+            ioc_table="indicators; TRUNCATE indicators",
+        )
+
+        translated = translator.translate("show me critical incidents")
+        result = sql.generate(translated)
+
+        assert ";" not in result.query_string
+        assert "--" not in result.query_string
+        assert "DROP TABLE" not in result.query_string
