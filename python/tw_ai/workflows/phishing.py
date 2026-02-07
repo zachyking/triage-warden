@@ -665,8 +665,22 @@ class PhishingTriageWorkflow:
         if "@" in sender_email:
             domain = sender_email.split("@")[-1].lower().strip()
 
-        # Mock reputation check - in production this would call a real service
-        reputation_data = self._mock_sender_reputation(sender_email, domain)
+        bridge = self._get_threat_intel_bridge()
+        if bridge is not None and domain:
+            try:
+                lookup_result = bridge.lookup_domain(domain)
+                reputation_data = self._reputation_from_lookup(
+                    sender_email=sender_email,
+                    domain=domain,
+                    lookup_result=lookup_result,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "sender_reputation_bridge_failed", sender=sender_email, error=str(exc)
+                )
+                reputation_data = self._mock_sender_reputation(sender_email, domain)
+        else:
+            reputation_data = self._mock_sender_reputation(sender_email, domain)
 
         result = SenderReputationResult(
             sender_email=sender_email,
@@ -675,7 +689,7 @@ class PhishingTriageWorkflow:
             is_known_sender=reputation_data["is_known_sender"],
             domain_age_days=reputation_data["domain_age_days"],
             risk_level=reputation_data["risk_level"],
-            is_mock=True,
+            is_mock=bool(reputation_data.get("is_mock", True)),
         )
 
         logger.debug(
@@ -686,6 +700,57 @@ class PhishingTriageWorkflow:
         )
 
         return result
+
+    def _reputation_from_lookup(
+        self,
+        sender_email: str,
+        domain: str,
+        lookup_result: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Convert threat-intel domain lookup data into reputation fields."""
+        malicious_score_raw = lookup_result.get("malicious_score", 0)
+        try:
+            malicious_score = int(float(malicious_score_raw))
+        except (TypeError, ValueError):
+            malicious_score = 0
+        malicious_score = max(0, min(100, malicious_score))
+
+        score = max(0, min(100, 100 - malicious_score))
+        verdict = str(lookup_result.get("verdict", "unknown")).strip().lower()
+
+        if verdict == "malicious" or score <= 25:
+            risk_level = "high"
+        elif verdict == "suspicious" or score <= 60:
+            risk_level = "medium"
+        else:
+            risk_level = "low"
+
+        domain_age_raw = lookup_result.get("domain_age_days")
+        domain_age_days: int | None = None
+        if isinstance(domain_age_raw, (int, float)):
+            domain_age_days = int(domain_age_raw)
+
+        return {
+            "sender_email": sender_email,
+            "domain": domain,
+            "score": score,
+            "is_known_sender": (verdict == "clean" and score >= 85),
+            "domain_age_days": domain_age_days,
+            "risk_level": risk_level,
+            "is_mock": False,
+        }
+
+    def _get_threat_intel_bridge(self) -> Any | None:
+        """Get threat-intel bridge if available."""
+        try:
+            from tw_ai.agents.tools import get_threat_intel_bridge
+        except Exception:
+            return None
+        try:
+            return get_threat_intel_bridge()
+        except Exception as exc:
+            logger.warning("threat_intel_bridge_unavailable", error=str(exc))
+            return None
 
     def _mock_sender_reputation(self, sender_email: str, domain: str) -> dict[str, Any]:
         """Mock sender reputation lookup.
@@ -720,6 +785,7 @@ class PhishingTriageWorkflow:
                 "is_known_sender": True,
                 "domain_age_days": trusted_info["domain_age_days"],
                 "risk_level": "low",
+                "is_mock": True,
             }
 
         if domain in suspicious_domains:
@@ -729,6 +795,7 @@ class PhishingTriageWorkflow:
                 "is_known_sender": False,
                 "domain_age_days": suspicious_info["domain_age_days"],
                 "risk_level": "high",
+                "is_mock": True,
             }
 
         # Check for suspicious patterns (typosquatting)
@@ -740,6 +807,7 @@ class PhishingTriageWorkflow:
                     "is_known_sender": False,
                     "domain_age_days": 30,
                     "risk_level": "high",
+                    "is_mock": True,
                 }
 
         # Default: unknown sender
@@ -748,6 +816,7 @@ class PhishingTriageWorkflow:
             "is_known_sender": False,
             "domain_age_days": None,
             "risk_level": "medium",
+            "is_mock": True,
         }
 
     async def _check_urls(self, email_analysis: EmailAnalysis) -> list[URLCheckResult]:
@@ -789,16 +858,56 @@ class PhishingTriageWorkflow:
         Returns:
             URLCheckResult with safety verdict.
         """
-        # Mock URL safety check - in production this would call a real service
-        result = self._mock_url_check(url, domain)
+        bridge = self._get_threat_intel_bridge()
+        if bridge is not None and domain:
+            try:
+                lookup_result = bridge.lookup_domain(domain)
+                categories_raw = lookup_result.get("categories", [])
+                categories = (
+                    [str(item) for item in categories_raw]
+                    if isinstance(categories_raw, list)
+                    else []
+                )
+                score_raw = lookup_result.get("malicious_score", 0)
+                try:
+                    score = int(float(score_raw))
+                except (TypeError, ValueError):
+                    score = 0
+                score = max(0, min(100, score))
+                result = {
+                    "verdict": str(lookup_result.get("verdict", "unknown")).lower(),
+                    "score": score,
+                    "categories": categories,
+                    "is_mock": False,
+                }
+            except Exception as exc:
+                logger.warning("url_bridge_lookup_failed", url=url, domain=domain, error=str(exc))
+                result = self._mock_url_check(url, domain)
+        else:
+            result = self._mock_url_check(url, domain)
+
+        verdict = str(result.get("verdict", "unknown"))
+        score_raw = result.get("score", 0)
+        if isinstance(score_raw, (int, float, str)):
+            try:
+                score = int(float(score_raw))
+            except (TypeError, ValueError):
+                score = 0
+        else:
+            score = 0
+        categories_raw = result.get("categories", [])
+        categories = (
+            [str(item) for item in categories_raw] if isinstance(categories_raw, list) else []
+        )
+        is_mock = bool(result.get("is_mock", True))
 
         return URLCheckResult(
             url=url,
             domain=domain,
-            verdict=result["verdict"],
-            score=result["score"],
-            categories=result.get("categories", []),
-            is_mock=True,
+            verdict=verdict,
+            score=score,
+            categories=categories,
+            is_mock=is_mock,
         )
 
     def _mock_url_check(self, url: str, domain: str) -> dict[str, Any]:
@@ -833,6 +942,7 @@ class PhishingTriageWorkflow:
                 "verdict": "malicious",
                 "score": 95,
                 "categories": ["phishing", "malware"],
+                "is_mock": True,
             }
 
         if domain_lower in safe_domains:
@@ -840,6 +950,7 @@ class PhishingTriageWorkflow:
                 "verdict": "clean",
                 "score": 0,
                 "categories": [],
+                "is_mock": True,
             }
 
         # Check for IP-based URLs (suspicious)
@@ -848,6 +959,7 @@ class PhishingTriageWorkflow:
                 "verdict": "suspicious",
                 "score": 60,
                 "categories": ["ip_based_url"],
+                "is_mock": True,
             }
 
         # Check for suspicious patterns
@@ -858,6 +970,7 @@ class PhishingTriageWorkflow:
                     "verdict": "suspicious",
                     "score": 75,
                     "categories": ["typosquatting"],
+                    "is_mock": True,
                 }
 
         # Default: unknown
@@ -865,6 +978,7 @@ class PhishingTriageWorkflow:
             "verdict": "unknown",
             "score": 30,
             "categories": [],
+            "is_mock": True,
         }
 
     def _make_decision(
