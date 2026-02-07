@@ -3023,6 +3023,26 @@ class TestQuarantineEmailTool:
                 assert result.data["success"] is False
                 assert "denied" in result.data["message"].lower() or "approval" in result.data["message"].lower()
 
+    @pytest.mark.asyncio
+    async def test_quarantine_email_uses_email_gateway_bridge_when_available(self):
+        """Test quarantine_email uses email gateway bridge when available."""
+        mock_bridge = MagicMock()
+        mock_bridge.quarantine_email.return_value = True
+
+        with patch.object(_tools, "get_email_gateway_bridge", return_value=mock_bridge):
+            with patch.object(_tools, "_POLICY_BRIDGE_AVAILABLE", False):
+                with patch.object(_tools, "_policy_bridge", None):
+                    registry = create_triage_tools()
+                    result = await registry.execute(
+                        "quarantine_email",
+                        {"message_id": "MSG-BRIDGE", "reason": "phishing"}
+                    )
+
+        assert result.success is True
+        assert result.data["success"] is True
+        assert result.data["is_mock"] is False
+        mock_bridge.quarantine_email.assert_called_once_with("MSG-BRIDGE")
+
 
 # ============================================================================
 # block_sender Tool Tests
@@ -3108,6 +3128,30 @@ class TestBlockSenderTool:
 
                 assert result.data["success"] is True
                 assert "repeated spam" in result.data["message"]
+
+    @pytest.mark.asyncio
+    async def test_block_sender_uses_email_gateway_bridge_when_available(self):
+        """Test block_sender uses email gateway bridge when available."""
+        mock_bridge = MagicMock()
+        mock_bridge.block_sender.return_value = True
+
+        with patch.object(_tools, "get_email_gateway_bridge", return_value=mock_bridge):
+            with patch.object(_tools, "_POLICY_BRIDGE_AVAILABLE", False):
+                with patch.object(_tools, "_policy_bridge", None):
+                    registry = create_triage_tools()
+                    result = await registry.execute(
+                        "block_sender",
+                        {
+                            "sender": "attacker@evil.com",
+                            "block_type": "email",
+                            "reason": "phishing sender"
+                        }
+                    )
+
+        assert result.success is True
+        assert result.data["success"] is True
+        assert result.data["is_mock"] is False
+        mock_bridge.block_sender.assert_called_once_with("attacker@evil.com")
 
 
 # ============================================================================
@@ -3234,11 +3278,12 @@ class TestCreateSecurityTicketTool:
         assert result.success is True
         assert result.data["success"] is True
         assert result.data["ticket_id"] is not None
-        assert result.data["ticket_id"].startswith("SEC-")
         assert "ticket_url" in result.data
-        assert "tickets.example.com" in result.data["ticket_url"]
+        assert result.data["ticket_url"] is not None
+        assert str(result.data["ticket_url"]).startswith("http")
         assert result.data["severity"] == "high"
         assert result.data["indicators_count"] == 3
+        assert "is_mock" in result.data
 
     @pytest.mark.asyncio
     async def test_create_security_ticket_with_all_severities(self):
@@ -3329,6 +3374,40 @@ class TestCreateSecurityTicketTool:
 
         # All ticket IDs should be unique
         assert len(ticket_ids) == 5
+
+    @pytest.mark.asyncio
+    async def test_create_security_ticket_uses_ticketing_bridge_when_available(self):
+        """Test create_security_ticket uses ticketing bridge when available."""
+        mock_bridge = MagicMock()
+        mock_bridge.create_ticket.return_value = {
+            "id": "1001",
+            "key": "SEC-1001",
+            "url": "https://jira.example.com/browse/SEC-1001",
+        }
+
+        with patch.object(_tools, "get_ticketing_bridge", return_value=mock_bridge):
+            with patch.object(_tools, "_POLICY_BRIDGE_AVAILABLE", False):
+                with patch.object(_tools, "_policy_bridge", None):
+                    registry = create_triage_tools()
+                    result = await registry.execute(
+                        "create_security_ticket",
+                        {
+                            "title": "Bridge-backed ticket",
+                            "description": "Created through ticketing connector",
+                            "severity": "critical",
+                            "indicators": ["ioc-1"]
+                        }
+                    )
+
+        assert result.success is True
+        assert result.data["ticket_id"] == "SEC-1001"
+        assert result.data["is_mock"] is False
+        mock_bridge.create_ticket.assert_called_once_with(
+            "Bridge-backed ticket",
+            "Created through ticketing connector",
+            "highest",
+            ["security", "severity-critical", "ioc-present"],
+        )
 
 
 # ============================================================================

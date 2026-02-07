@@ -1554,6 +1554,15 @@ def is_action_allowed(action_type: str, target: str, confidence: float) -> bool:
             return False
 
     # Mock fallback
+    if not _mock_fallbacks_allowed():
+        logger.warning(
+            "action_policy_decision_blocked_without_connector",
+            action_type=action_type,
+            target=target,
+            confidence=confidence,
+        )
+        return False
+
     result = _mock_check_action(action_type, target, confidence)
     return bool(result.get("decision") == "allowed")
 
@@ -3487,21 +3496,44 @@ def create_triage_tools() -> ToolRegistry:
 
             action_id = f"qe-{uuid.uuid4().hex[:12]}"
 
-            # Mock implementation - log the action
+            bridge = get_email_gateway_bridge()
+            if bridge is not None:
+                was_quarantined = bool(bridge.quarantine_email(message_id))
+                is_mock = False
+            else:
+                if not _mock_fallbacks_allowed():
+                    execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                    return ToolResult.fail(
+                        error=(
+                            "Email quarantine unavailable: email gateway connector required "
+                            "when mock fallback is disabled"
+                        ),
+                        execution_time_ms=execution_time_ms,
+                    )
+                was_quarantined = _mock_quarantine_email(message_id)
+                is_mock = True
+
             logger.info(
                 "quarantine_email_executed",
                 action_id=action_id,
                 message_id=message_id,
                 reason=reason,
+                success=was_quarantined,
+                is_mock=is_mock,
             )
 
             execution_time_ms = int((time.perf_counter() - start_time) * 1000)
 
             return ToolResult.ok(
                 data={
-                    "success": True,
-                    "action_id": action_id,
-                    "message": f"Email {message_id} quarantined successfully. Reason: {reason}",
+                    "success": was_quarantined,
+                    "action_id": action_id if was_quarantined else None,
+                    "message": (
+                        f"Email {message_id} quarantined successfully. Reason: {reason}"
+                        if was_quarantined
+                        else f"Failed to quarantine email {message_id}. Reason: {reason}"
+                    ),
+                    "is_mock": is_mock,
                 },
                 execution_time_ms=execution_time_ms,
             )
@@ -3602,24 +3634,47 @@ def create_triage_tools() -> ToolRegistry:
 
             action_id = f"bs-{uuid.uuid4().hex[:12]}"
 
-            # Mock implementation - log the action
+            bridge = get_email_gateway_bridge()
+            if bridge is not None:
+                was_blocked = bool(bridge.block_sender(sender))
+                is_mock = False
+            else:
+                if not _mock_fallbacks_allowed():
+                    execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                    return ToolResult.fail(
+                        error=(
+                            "Sender blocking unavailable: email gateway connector required "
+                            "when mock fallback is disabled"
+                        ),
+                        execution_time_ms=execution_time_ms,
+                    )
+                was_blocked = _mock_block_sender(sender)
+                is_mock = True
+
             logger.info(
                 "block_sender_executed",
                 action_id=action_id,
                 sender=sender,
                 block_type=block_type,
                 reason=reason,
+                success=was_blocked,
+                is_mock=is_mock,
             )
 
             execution_time_ms = int((time.perf_counter() - start_time) * 1000)
 
             return ToolResult.ok(
                 data={
-                    "success": True,
-                    "action_id": action_id,
-                    "blocked": sender,
+                    "success": was_blocked,
+                    "action_id": action_id if was_blocked else None,
+                    "blocked": sender if was_blocked else None,
                     "block_type": block_type,
-                    "message": f"Successfully blocked {block_type}: {sender}. Reason: {reason}",
+                    "message": (
+                        f"Successfully blocked {block_type}: {sender}. Reason: {reason}"
+                        if was_blocked
+                        else f"Failed to block {block_type}: {sender}. Reason: {reason}"
+                    ),
+                    "is_mock": is_mock,
                 },
                 execution_time_ms=execution_time_ms,
             )
@@ -3705,6 +3760,34 @@ def create_triage_tools() -> ToolRegistry:
                     execution_time_ms=execution_time_ms,
                 )
 
+            if not is_action_allowed("send_notification", recipient, 0.9):
+                execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                logger.warning(
+                    "notify_user_denied_by_policy",
+                    recipient=recipient,
+                    notification_type=notification_type,
+                )
+                return ToolResult.ok(
+                    data={
+                        "success": False,
+                        "notification_id": None,
+                        "recipient": recipient,
+                        "notification_type": notification_type,
+                        "message": "Action denied by policy. Requires approval.",
+                    },
+                    execution_time_ms=execution_time_ms,
+                )
+
+            if not _mock_fallbacks_allowed():
+                execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                return ToolResult.fail(
+                    error=(
+                        "User notification unavailable: notification connector required when "
+                        "mock fallback is disabled"
+                    ),
+                    execution_time_ms=execution_time_ms,
+                )
+
             # Generate notification ID
             import uuid
 
@@ -3717,6 +3800,7 @@ def create_triage_tools() -> ToolRegistry:
                 recipient=recipient,
                 notification_type=notification_type,
                 subject=subject,
+                is_mock=True,
             )
 
             execution_time_ms = int((time.perf_counter() - start_time) * 1000)
@@ -3728,6 +3812,7 @@ def create_triage_tools() -> ToolRegistry:
                     "recipient": recipient,
                     "notification_type": notification_type,
                     "message": f"Notification sent to {recipient}",
+                    "is_mock": True,
                 },
                 execution_time_ms=execution_time_ms,
             )
@@ -3814,19 +3899,63 @@ def create_triage_tools() -> ToolRegistry:
                     execution_time_ms=execution_time_ms,
                 )
 
-            # Generate ticket ID
-            import uuid
+            if not is_action_allowed("create_ticket", title, 0.9):
+                execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                logger.warning(
+                    "create_security_ticket_denied_by_policy",
+                    title=title,
+                    severity=severity,
+                )
+                return ToolResult.ok(
+                    data={
+                        "success": False,
+                        "ticket_id": None,
+                        "ticket_url": None,
+                        "title": title,
+                        "severity": severity.lower(),
+                        "indicators_count": len(indicators) if indicators else 0,
+                        "message": "Action denied by policy. Requires approval.",
+                    },
+                    execution_time_ms=execution_time_ms,
+                )
 
-            ticket_id = f"SEC-{uuid.uuid4().hex[:8].upper()}"
-            ticket_url = f"https://tickets.example.com/security/{ticket_id}"
+            priority = {
+                "critical": "highest",
+                "high": "high",
+                "medium": "medium",
+                "low": "low",
+            }[severity.lower()]
+            labels = ["security", f"severity-{severity.lower()}"]
+            if indicators:
+                labels.append("ioc-present")
 
-            # Mock implementation - log the ticket creation
+            bridge = get_ticketing_bridge()
+            if bridge is not None:
+                ticket = bridge.create_ticket(title, description, priority, labels)
+                is_mock = False
+            else:
+                if not _mock_fallbacks_allowed():
+                    execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                    return ToolResult.fail(
+                        error=(
+                            "Ticket creation unavailable: ticketing connector required when "
+                            "mock fallback is disabled"
+                        ),
+                        execution_time_ms=execution_time_ms,
+                    )
+                ticket = _mock_create_ticket(title, description, priority, labels)
+                is_mock = True
+
+            ticket_id = str(ticket.get("key") or ticket.get("id") or "")
+            ticket_url = ticket.get("url")
+
             logger.info(
                 "create_security_ticket_executed",
                 ticket_id=ticket_id,
                 title=title,
                 severity=severity,
                 indicators_count=len(indicators) if indicators else 0,
+                is_mock=is_mock,
             )
 
             execution_time_ms = int((time.perf_counter() - start_time) * 1000)
@@ -3840,6 +3969,7 @@ def create_triage_tools() -> ToolRegistry:
                     "severity": severity.lower(),
                     "indicators_count": len(indicators) if indicators else 0,
                     "message": f"Security ticket {ticket_id} created successfully",
+                    "is_mock": is_mock,
                 },
                 execution_time_ms=execution_time_ms,
             )

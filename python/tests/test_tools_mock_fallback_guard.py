@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -141,6 +141,148 @@ async def test_siem_and_edr_tools_allow_mock_with_production_override(
         with patch.object(_tools, bridge_getter, return_value=None):
             registry = _tools.create_triage_tools()
             result = await registry.execute(tool_name, arguments)
+
+    assert result.success is True
+    assert result.data is not None
+    assert result.data.get("is_mock") is True
+
+
+def test_is_action_allowed_fails_closed_without_policy_bridge_in_production() -> None:
+    """In production, helper policy checks should fail closed without connector."""
+    with patch.dict(os.environ, {"TW_ENV": "production"}):
+        with patch.object(_tools, "get_policy_bridge", return_value=None):
+            assert _tools.is_action_allowed("create_ticket", "test-target", 0.9) is False
+
+
+def test_is_action_allowed_allows_mock_with_production_override() -> None:
+    """Production can explicitly allow mock helper policy checks with override."""
+    with patch.dict(
+        os.environ,
+        {
+            "TW_ENV": "production",
+            _tools.MOCK_FALLBACK_OVERRIDE_ENV: "true",
+        },
+    ):
+        with patch.object(_tools, "get_policy_bridge", return_value=None):
+            assert _tools.is_action_allowed("create_ticket", "test-target", 0.9) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "bridge_getter"),
+    [
+        (
+            "quarantine_email",
+            {"message_id": "MSG-123", "reason": "phishing"},
+            "get_email_gateway_bridge",
+        ),
+        (
+            "block_sender",
+            {"sender": "attacker@evil.com", "block_type": "email", "reason": "phishing"},
+            "get_email_gateway_bridge",
+        ),
+        (
+            "create_security_ticket",
+            {
+                "title": "Malicious email campaign",
+                "description": "Detected malicious sender and links",
+                "severity": "high",
+                "indicators": ["attacker@evil.com"],
+            },
+            "get_ticketing_bridge",
+        ),
+        (
+            "notify_user",
+            {
+                "recipient": "user@example.com",
+                "notification_type": "phishing_warning",
+                "subject": "Warning",
+                "body": "A phishing message was detected.",
+            },
+            None,
+        ),
+    ],
+)
+async def test_action_tools_fail_closed_when_mock_fallback_disabled(
+    tool_name: str, arguments: dict[str, object], bridge_getter: str | None
+) -> None:
+    """In production, action tools should fail closed without required connectors."""
+    policy_bridge = MagicMock()
+    policy_bridge.check_action.return_value = {"decision": "allowed"}
+
+    with patch.dict(os.environ, {"TW_ENV": "production"}):
+        with patch.object(_tools, "get_policy_bridge", return_value=policy_bridge):
+            if bridge_getter is not None:
+                with patch.object(_tools, bridge_getter, return_value=None):
+                    registry = _tools.create_triage_tools()
+                    result = await registry.execute(tool_name, arguments)
+            else:
+                registry = _tools.create_triage_tools()
+                result = await registry.execute(tool_name, arguments)
+
+    assert result.success is False
+    assert result.error is not None
+    assert "mock fallback is disabled" in result.error.lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "bridge_getter"),
+    [
+        (
+            "quarantine_email",
+            {"message_id": "MSG-123", "reason": "phishing"},
+            "get_email_gateway_bridge",
+        ),
+        (
+            "block_sender",
+            {"sender": "attacker@evil.com", "block_type": "email", "reason": "phishing"},
+            "get_email_gateway_bridge",
+        ),
+        (
+            "create_security_ticket",
+            {
+                "title": "Malicious email campaign",
+                "description": "Detected malicious sender and links",
+                "severity": "high",
+                "indicators": ["attacker@evil.com"],
+            },
+            "get_ticketing_bridge",
+        ),
+        (
+            "notify_user",
+            {
+                "recipient": "user@example.com",
+                "notification_type": "phishing_warning",
+                "subject": "Warning",
+                "body": "A phishing message was detected.",
+            },
+            None,
+        ),
+    ],
+)
+async def test_action_tools_allow_mock_with_production_override(
+    tool_name: str, arguments: dict[str, object], bridge_getter: str | None
+) -> None:
+    """Production can explicitly allow action-tool mock fallbacks with override."""
+    policy_bridge = MagicMock()
+    policy_bridge.check_action.return_value = {"decision": "allowed"}
+
+    with patch.dict(
+        os.environ,
+        {
+            "TW_ENV": "production",
+            _tools.MOCK_FALLBACK_OVERRIDE_ENV: "true",
+        },
+    ):
+        with patch.object(_tools, "get_policy_bridge", return_value=policy_bridge):
+            if bridge_getter is not None:
+                with patch.object(_tools, bridge_getter, return_value=None):
+                    registry = _tools.create_triage_tools()
+                    result = await registry.execute(tool_name, arguments)
+            else:
+                registry = _tools.create_triage_tools()
+                result = await registry.execute(tool_name, arguments)
 
     assert result.success is True
     assert result.data is not None
