@@ -193,6 +193,18 @@ impl IdentityConnector for Auth0Connector {
         })
     }
 
+    async fn unsuspend_user(&self, user_id: &str) -> ConnectorResult<ActionResult> {
+        let path = format!("/api/v2/users/{}", urlencoding::encode(user_id));
+        let body = serde_json::json!({"blocked": false});
+        let response = self.client.put(&path, &body).await?;
+        Ok(ActionResult {
+            success: response.status().is_success(),
+            action_id: format!("auth0-unblock-{}", user_id),
+            message: format!("User {} unblocked", user_id),
+            timestamp: Utc::now(),
+        })
+    }
+
     async fn reset_mfa(&self, user_id: &str) -> ConnectorResult<ActionResult> {
         let path = format!(
             "/api/v2/users/{}/multifactor/actions/invalidate-remember-browser",

@@ -74,7 +74,7 @@ impl Action for DisableUserAction {
     }
 
     fn supports_rollback(&self) -> bool {
-        false
+        true
     }
 
     #[instrument(skip(self, context))]
@@ -181,6 +181,11 @@ impl Action for DisableUserAction {
             "idp_action_id".to_string(),
             serde_json::json!(suspend_result.action_id),
         );
+        output.insert("was_active_before".to_string(), serde_json::json!(true));
+        output.insert(
+            "previous_status".to_string(),
+            serde_json::json!(user.status.clone()),
+        );
         output.insert("reason".to_string(), serde_json::json!(reason));
         output.insert(
             "revoke_sessions_requested".to_string(),
@@ -191,12 +196,17 @@ impl Action for DisableUserAction {
             serde_json::json!(revoke_sessions_success),
         );
 
-        Ok(ActionResult::success(
-            self.name(),
-            &message,
-            started_at,
-            output,
-        ))
+        let rollback_data = serde_json::json!({
+            "username": user.username,
+            "user_id": user.id,
+            "was_active_before": true,
+            "previous_status": user.status,
+        });
+
+        Ok(
+            ActionResult::success(self.name(), &message, started_at, output)
+                .with_rollback(rollback_data),
+        )
     }
 
     #[instrument(skip(self, rollback_data))]
@@ -204,20 +214,66 @@ impl Action for DisableUserAction {
         &self,
         rollback_data: serde_json::Value,
     ) -> Result<ActionResult, ActionError> {
+        let started_at = Utc::now();
         let username = rollback_data["username"].as_str().ok_or_else(|| {
             ActionError::InvalidParameters("Missing username in rollback data".to_string())
         })?;
+        let user_id = rollback_data["user_id"].as_str().unwrap_or(username);
+        let was_active_before = rollback_data["was_active_before"].as_bool().unwrap_or(true);
 
-        warn!(
-            "DisableUserAction rollback requested for '{}', but unsuspend is not supported.",
-            username
+        if !was_active_before {
+            let mut output = HashMap::new();
+            output.insert("username".to_string(), serde_json::json!(username));
+            output.insert("user_id".to_string(), serde_json::json!(user_id));
+            output.insert("noop".to_string(), serde_json::json!(true));
+            output.insert(
+                "reason".to_string(),
+                serde_json::json!("User was already disabled before execution"),
+            );
+            return Ok(ActionResult::success(
+                "rollback_disable_user",
+                &format!(
+                    "Rollback skipped for '{}': account was already disabled before action execution",
+                    username
+                ),
+                started_at,
+                output,
+            ));
+        }
+
+        let connector = self.identity_connector.as_ref().ok_or_else(|| {
+            ActionError::NotSupported(
+                "disable_user rollback requires a configured identity connector".to_string(),
+            )
+        })?;
+
+        info!(
+            "Attempting to rollback disable_user for '{}' (id: {})",
+            username, user_id
         );
 
-        Err(ActionError::NotSupported(format!(
-            "disable_user rollback is not supported because identity connectors do not provide \
-                 an unsuspend operation. Re-enable '{}' manually in your identity provider.",
-            username
-        )))
+        let unsuspend_result = connector.unsuspend_user(user_id).await.map_err(|e| {
+            ActionError::RollbackFailed(format!("Failed to re-enable user '{}': {}", username, e))
+        })?;
+
+        if !unsuspend_result.success {
+            return Err(ActionError::RollbackFailed(unsuspend_result.message));
+        }
+
+        let mut output = HashMap::new();
+        output.insert("username".to_string(), serde_json::json!(username));
+        output.insert("user_id".to_string(), serde_json::json!(user_id));
+        output.insert(
+            "idp_action_id".to_string(),
+            serde_json::json!(unsuspend_result.action_id),
+        );
+
+        Ok(ActionResult::success(
+            "rollback_disable_user",
+            &format!("User '{}' re-enabled successfully", username),
+            started_at,
+            output,
+        ))
     }
 }
 
@@ -280,11 +336,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_rollback_returns_not_supported() {
+    async fn test_rollback_returns_not_supported_without_connector() {
         let action = DisableUserAction::new();
 
         let rollback_data = serde_json::json!({
             "username": "jsmith@company.com",
+            "user_id": "user-001",
             "previous_state": "enabled",
         });
 
@@ -316,9 +373,36 @@ mod tests {
         assert!(unchanged_user.active);
     }
 
+    #[tokio::test]
+    async fn test_rollback_success_with_identity_connector() {
+        let connector: Arc<dyn IdentityConnector> =
+            Arc::new(MockIdentityConnector::with_sample_data("mock-idp"));
+        let action = DisableUserAction::with_identity_connector(connector.clone());
+
+        // Disable first so rollback has work to do
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("username", serde_json::json!("jdoe"))
+            .with_param("revoke_sessions", serde_json::json!(false));
+        action.execute(context).await.unwrap();
+
+        let rollback_data = serde_json::json!({
+            "username": "jdoe",
+            "user_id": "user-001",
+            "was_active_before": true,
+        });
+
+        let result = action.rollback(rollback_data).await.unwrap();
+        assert!(result.success);
+        assert!(result.message.contains("re-enabled successfully"));
+
+        let updated_user = connector.get_user("jdoe").await.unwrap();
+        assert!(updated_user.active);
+        assert_eq!(updated_user.status, "active");
+    }
+
     #[test]
-    fn test_supports_rollback_false() {
+    fn test_supports_rollback_true() {
         let action = DisableUserAction::new();
-        assert!(!action.supports_rollback());
+        assert!(action.supports_rollback());
     }
 }

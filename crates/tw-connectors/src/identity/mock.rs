@@ -158,6 +158,23 @@ impl IdentityConnector for MockIdentityConnector {
         })
     }
 
+    async fn unsuspend_user(&self, user_id: &str) -> ConnectorResult<ActionResult> {
+        let mut users = self.users.write().await;
+        if let Some(u) = users
+            .values_mut()
+            .find(|u| u.id == user_id || u.username == user_id)
+        {
+            u.active = true;
+            u.status = "active".into();
+        }
+        Ok(ActionResult {
+            success: true,
+            action_id: format!("mock-unsuspend-{}", user_id),
+            message: format!("User {} unsuspended", user_id),
+            timestamp: Utc::now(),
+        })
+    }
+
     async fn reset_mfa(&self, user_id: &str) -> ConnectorResult<ActionResult> {
         Ok(ActionResult {
             success: true,
@@ -197,6 +214,17 @@ mod tests {
         assert!(result.success);
         let user = c.get_user("jdoe").await.unwrap();
         assert!(!user.active);
+    }
+
+    #[tokio::test]
+    async fn test_unsuspend_user() {
+        let c = MockIdentityConnector::with_sample_data("test");
+        c.suspend_user("jdoe").await.unwrap();
+        let result = c.unsuspend_user("jdoe").await.unwrap();
+        assert!(result.success);
+        let user = c.get_user("jdoe").await.unwrap();
+        assert!(user.active);
+        assert_eq!(user.status, "active");
     }
 
     #[tokio::test]

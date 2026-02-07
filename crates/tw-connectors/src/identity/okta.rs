@@ -81,6 +81,7 @@ impl crate::traits::Connector for OktaConnector {
             "search_users",
             "get_auth_logs",
             "suspend_user",
+            "unsuspend_user",
             "reset_mfa",
             "revoke_sessions",
         ]
@@ -223,6 +224,24 @@ impl IdentityConnector for OktaConnector {
                 format!("User {} suspended", user_id)
             } else {
                 "Suspend failed".into()
+            },
+            timestamp: Utc::now(),
+        })
+    }
+
+    async fn unsuspend_user(&self, user_id: &str) -> ConnectorResult<ActionResult> {
+        let path = format!(
+            "/api/v1/users/{}/lifecycle/unsuspend",
+            urlencoding::encode(user_id)
+        );
+        let response = self.client.post(&path, &serde_json::json!({})).await?;
+        Ok(ActionResult {
+            success: response.status().is_success(),
+            action_id: format!("okta-unsuspend-{}", user_id),
+            message: if response.status().is_success() {
+                format!("User {} unsuspended", user_id)
+            } else {
+                "Unsuspend failed".into()
             },
             timestamp: Utc::now(),
         })

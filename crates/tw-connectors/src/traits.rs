@@ -1015,6 +1015,9 @@ pub trait IdentityConnector: Connector {
     /// Suspends a user account.
     async fn suspend_user(&self, user_id: &str) -> ConnectorResult<ActionResult>;
 
+    /// Re-enables a previously suspended/blocked user account.
+    async fn unsuspend_user(&self, user_id: &str) -> ConnectorResult<ActionResult>;
+
     /// Resets MFA for a user.
     async fn reset_mfa(&self, user_id: &str) -> ConnectorResult<ActionResult>;
 

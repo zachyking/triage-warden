@@ -195,6 +195,18 @@ impl IdentityConnector for DuoConnector {
         })
     }
 
+    async fn unsuspend_user(&self, user_id: &str) -> ConnectorResult<ActionResult> {
+        let path = format!("/admin/v1/users/{}", urlencoding::encode(user_id));
+        let body = serde_json::json!({"status": "active"});
+        let response = self.client.post(&path, &body).await?;
+        Ok(ActionResult {
+            success: response.status().is_success(),
+            action_id: format!("duo-enable-{}", user_id),
+            message: format!("User {} enabled", user_id),
+            timestamp: Utc::now(),
+        })
+    }
+
     async fn reset_mfa(&self, user_id: &str) -> ConnectorResult<ActionResult> {
         // Duo doesn't have a direct "reset MFA" - we'd delete phones
         Ok(ActionResult {
