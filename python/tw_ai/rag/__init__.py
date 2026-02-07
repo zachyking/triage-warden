@@ -168,6 +168,30 @@ class RAGService:
         ingester = IncidentIngester(self.vector_store)
         return await ingester.ingest_analysis(analysis, alert_id, alert_type)
 
+    async def ingest_incidents_from_source(
+        self,
+        source: str,
+        *,
+        limit: int | None = None,
+    ) -> int:
+        """Ingest historical incidents from an external source.
+
+        Supported sources include:
+        - SQLite incident database files (`.db`, `.sqlite`, `.sqlite3`)
+        - JSON / JSONL files with incident records
+
+        Args:
+            source: Path to the external source.
+            limit: Optional max number of records to ingest.
+
+        Returns:
+            Number of incidents ingested.
+        """
+        from tw_ai.rag.ingestion import IncidentIngester
+
+        ingester = IncidentIngester(self.vector_store)
+        return await ingester.ingest(source, limit=limit)
+
     async def ingest_threat_intel(
         self,
         indicator: str,
@@ -204,6 +228,24 @@ class RAGService:
             context=context,
             threat_actor=threat_actor,
         )
+
+    async def ingest_threat_intel_from_source(self, source: str) -> int:
+        """Ingest threat intelligence indicators from a feed source.
+
+        Supported sources include:
+        - Local JSON / JSONL / CSV files
+        - HTTP(S) feed URLs returning JSON / JSONL / CSV
+
+        Args:
+            source: Feed path or URL.
+
+        Returns:
+            Number of indicators ingested.
+        """
+        from tw_ai.rag.ingestion import ThreatIntelIngester
+
+        ingester = ThreatIntelIngester(self.vector_store)
+        return await ingester.ingest(source)
 
 
 def create_rag_service(config: RAGConfig | None = None) -> RAGService:

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import json
+import sqlite3
 
 import pytest
 
@@ -105,13 +106,13 @@ class TestIncidentIngester:
     @pytest.mark.asyncio
     async def test_ingest_analysis(self, vector_store):
         """Test incident ingestion from TriageAnalysis."""
-        from tw_ai.rag.ingestion import IncidentIngester
         from tw_ai.agents.models import (
-            TriageAnalysis,
             Indicator,
             MITRETechnique,
             RecommendedAction,
+            TriageAnalysis,
         )
+        from tw_ai.rag.ingestion import IncidentIngester
 
         analysis = TriageAnalysis(
             verdict="true_positive",
@@ -158,8 +159,8 @@ class TestIncidentIngester:
     @pytest.mark.asyncio
     async def test_ingest_analysis_content(self, vector_store):
         """Test incident content format."""
-        from tw_ai.rag.ingestion import IncidentIngester
         from tw_ai.agents.models import TriageAnalysis
+        from tw_ai.rag.ingestion import IncidentIngester
 
         analysis = TriageAnalysis(
             verdict="false_positive",
@@ -221,6 +222,80 @@ class TestIncidentIngester:
 
         assert count == 2
         assert vector_store.collection_count("triage_incidents") == 2
+
+    @pytest.mark.asyncio
+    async def test_ingest_from_sqlite_source(self, vector_store, tmp_path):
+        """Test importing historical incidents from SQLite."""
+        from tw_ai.rag.ingestion import IncidentIngester
+
+        db_path = tmp_path / "historical-incidents.sqlite"
+        conn = sqlite3.connect(db_path)
+        conn.execute("""
+            CREATE TABLE incidents (
+                id TEXT PRIMARY KEY,
+                alert_data TEXT NOT NULL,
+                analysis TEXT,
+                severity TEXT,
+                created_at TEXT
+            )
+            """)
+
+        rust_analysis = {
+            "verdict": "true_positive",
+            "confidence": 0.92,
+            "summary": "Credential phishing targeting cloud identities",
+            "reasoning": "Domain and URL intelligence indicate credential theft.",
+            "mitre_techniques": [
+                {
+                    "id": "T1566.002",
+                    "name": "Spearphishing Link",
+                    "tactic": "Initial Access",
+                    "confidence": 0.88,
+                }
+            ],
+            "iocs": [
+                {
+                    "ioc_type": "domain",
+                    "value": "evil-login.example",
+                    "context": "Observed in sender links",
+                    "score": 0.9,
+                }
+            ],
+            "recommendations": ["Block sender domain", "Quarantine matching messages"],
+            "risk_score": 84,
+            "analyzed_by": "triage-agent",
+            "timestamp": "2025-01-01T00:00:00Z",
+            "evidence": [],
+            "investigation_steps": [],
+        }
+
+        alert_data = {
+            "id": "ALERT-DB-001",
+            "alert_type": "phishing",
+            "title": "Credential phishing email detected",
+        }
+
+        insert_query = (
+            "INSERT INTO incidents (id, alert_data, analysis, severity, created_at) "
+            "VALUES (?, ?, ?, ?, datetime('now'))"
+        )
+        conn.execute(
+            insert_query,
+            (
+                "INCIDENT-DB-001",
+                json.dumps(alert_data),
+                json.dumps(rust_analysis),
+                "high",
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        ingester = IncidentIngester(vector_store)
+        count = await ingester.ingest(db_path)
+
+        assert count == 1
+        assert vector_store.collection_count("triage_incidents") == 1
 
 
 class TestThreatIntelIngester:
@@ -331,3 +406,61 @@ class TestThreatIntelIngester:
 
         assert count == 2
         assert vector_store.collection_count("threat_intelligence") == 2
+
+    @pytest.mark.asyncio
+    async def test_ingest_from_json_feed_file(self, vector_store, tmp_path):
+        """Test threat intel ingestion from a JSON feed file."""
+        from tw_ai.rag.ingestion import ThreatIntelIngester
+
+        feed = {
+            "indicators": [
+                {
+                    "indicator": "malicious.example",
+                    "indicator_type": "domain",
+                    "verdict": "malicious",
+                    "context": "Known credential phishing domain",
+                    "confidence": 95,
+                },
+                {
+                    "indicator": "198.51.100.22",
+                    "indicator_type": "ip",
+                    "verdict": "suspicious",
+                    "context": "Associated with scanner infrastructure",
+                    "confidence": 71,
+                },
+            ]
+        }
+        feed_path = tmp_path / "threat-feed.json"
+        feed_path.write_text(json.dumps(feed))
+
+        ingester = ThreatIntelIngester(vector_store)
+        count = await ingester.ingest(feed_path)
+
+        assert count == 2
+        assert vector_store.collection_count("threat_intelligence") == 2
+
+    @pytest.mark.asyncio
+    async def test_ingest_stix_bundle_file(self, vector_store, tmp_path):
+        """Test threat intel ingestion from STIX indicator bundle."""
+        from tw_ai.rag.ingestion import ThreatIntelIngester
+
+        stix_bundle = {
+            "type": "bundle",
+            "objects": [
+                {
+                    "type": "indicator",
+                    "pattern": "[domain-name:value = 'steal-credentials.example']",
+                    "labels": ["malicious-activity"],
+                    "description": "Credential phishing infrastructure",
+                    "confidence": 90,
+                }
+            ],
+        }
+        bundle_path = tmp_path / "stix-feed.json"
+        bundle_path.write_text(json.dumps(stix_bundle))
+
+        ingester = ThreatIntelIngester(vector_store)
+        count = await ingester.ingest(bundle_path)
+
+        assert count == 1
+        assert vector_store.collection_count("threat_intelligence") == 1
