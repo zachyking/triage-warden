@@ -13,6 +13,7 @@ including:
 
 from __future__ import annotations
 
+import os
 import time
 import uuid
 from collections.abc import Callable
@@ -41,6 +42,8 @@ STAGE_ANALYZE = "ANALYZE"
 STAGE_ENRICH = "ENRICH"
 STAGE_DECIDE = "DECIDE"
 STAGE_APPROVE = "APPROVE"
+
+MOCK_FALLBACK_OVERRIDE_ENV = "TW_ALLOW_MOCK_FALLBACKS"
 
 
 # =============================================================================
@@ -1238,6 +1241,51 @@ class PhishingTriageWorkflow:
                 message=f"[DRY RUN] Would quarantine email {message_id}",
             )
 
+        if self.tools is not None:
+            try:
+                result = await self.tools.execute(
+                    "quarantine_email",
+                    {"message_id": message_id, "reason": reason},
+                )
+            except Exception as e:
+                return ActionResult(
+                    action_type="quarantine_email",
+                    success=False,
+                    target=message_id,
+                    error=f"Failed to execute quarantine tool: {e}",
+                )
+
+            if not result.success:
+                return ActionResult(
+                    action_type="quarantine_email",
+                    success=False,
+                    target=message_id,
+                    error=result.error,
+                )
+
+            data = result.data or {}
+            success = bool(data.get("success", False))
+            message = str(data.get("message", "No message returned"))
+            return ActionResult(
+                action_type="quarantine_email",
+                success=success,
+                action_id=data.get("action_id"),
+                target=message_id,
+                message=message,
+                error=None if success else message,
+            )
+
+        if not self._mock_fallbacks_allowed():
+            return ActionResult(
+                action_type="quarantine_email",
+                success=False,
+                target=message_id,
+                error=(
+                    "Quarantine action unavailable: tool registry required when mock fallback "
+                    "is disabled"
+                ),
+            )
+
         # Mock action execution
         action_id = f"qe-{uuid.uuid4().hex[:12]}"
 
@@ -1246,6 +1294,7 @@ class PhishingTriageWorkflow:
             action_id=action_id,
             message_id=message_id,
             reason=reason,
+            is_mock=True,
         )
 
         return ActionResult(
@@ -1289,6 +1338,55 @@ class PhishingTriageWorkflow:
                 message=f"[DRY RUN] Would block {block_type}: {sender}",
             )
 
+        if self.tools is not None:
+            try:
+                result = await self.tools.execute(
+                    "block_sender",
+                    {
+                        "sender": sender,
+                        "block_type": block_type,
+                        "reason": reason,
+                    },
+                )
+            except Exception as e:
+                return ActionResult(
+                    action_type=f"block_sender_{block_type}",
+                    success=False,
+                    target=sender,
+                    error=f"Failed to execute sender-block tool: {e}",
+                )
+
+            if not result.success:
+                return ActionResult(
+                    action_type=f"block_sender_{block_type}",
+                    success=False,
+                    target=sender,
+                    error=result.error,
+                )
+
+            data = result.data or {}
+            success = bool(data.get("success", False))
+            message = str(data.get("message", "No message returned"))
+            return ActionResult(
+                action_type=f"block_sender_{block_type}",
+                success=success,
+                action_id=data.get("action_id"),
+                target=sender,
+                message=message,
+                error=None if success else message,
+            )
+
+        if not self._mock_fallbacks_allowed():
+            return ActionResult(
+                action_type=f"block_sender_{block_type}",
+                success=False,
+                target=sender,
+                error=(
+                    "Sender block action unavailable: tool registry required when mock fallback "
+                    "is disabled"
+                ),
+            )
+
         # Mock action execution
         action_id = f"bs-{uuid.uuid4().hex[:12]}"
 
@@ -1298,6 +1396,7 @@ class PhishingTriageWorkflow:
             sender=sender,
             block_type=block_type,
             reason=reason,
+            is_mock=True,
         )
 
         return ActionResult(
@@ -1338,6 +1437,60 @@ class PhishingTriageWorkflow:
                 message=f"[DRY RUN] Would notify user {recipient}",
             )
 
+        if self.tools is not None:
+            body = (
+                f"We detected a suspicious email with subject '{email_subject}'. "
+                f"Notification type: {notification_type}."
+            )
+            try:
+                result = await self.tools.execute(
+                    "notify_user",
+                    {
+                        "recipient": recipient,
+                        "notification_type": notification_type,
+                        "subject": f"Security Notice: {email_subject[:100]}",
+                        "body": body,
+                    },
+                )
+            except Exception as e:
+                return ActionResult(
+                    action_type="notify_user",
+                    success=False,
+                    target=recipient,
+                    error=f"Failed to execute notify-user tool: {e}",
+                )
+
+            if not result.success:
+                return ActionResult(
+                    action_type="notify_user",
+                    success=False,
+                    target=recipient,
+                    error=result.error,
+                )
+
+            data = result.data or {}
+            success = bool(data.get("success", False))
+            message = str(data.get("message", "No message returned"))
+            return ActionResult(
+                action_type="notify_user",
+                success=success,
+                action_id=data.get("notification_id"),
+                target=recipient,
+                message=message,
+                error=None if success else message,
+            )
+
+        if not self._mock_fallbacks_allowed():
+            return ActionResult(
+                action_type="notify_user",
+                success=False,
+                target=recipient,
+                error=(
+                    "User notification action unavailable: tool registry required when mock "
+                    "fallback is disabled"
+                ),
+            )
+
         # Mock action execution
         notification_id = f"notif-{uuid.uuid4().hex[:12]}"
 
@@ -1347,6 +1500,7 @@ class PhishingTriageWorkflow:
             recipient=recipient,
             notification_type=notification_type,
             email_subject=email_subject,
+            is_mock=True,
         )
 
         return ActionResult(
@@ -1390,6 +1544,62 @@ class PhishingTriageWorkflow:
                 message=f"[DRY RUN] Would create {severity} severity ticket",
             )
 
+        if self.tools is not None:
+            description = (
+                "Phishing email requires manual analyst review.\n"
+                f"Sender: {email_analysis.sender}\n"
+                f"Subject: {email_analysis.subject}\n"
+                f"Risk score: {phishing_indicators.overall_risk_score}\n"
+                f"Confidence: {confidence:.2f}\n"
+                f"Risk factors: {', '.join(phishing_indicators.risk_factors[:5])}"
+            )
+            indicators = [email_analysis.sender, *phishing_indicators.suspicious_urls[:10]]
+            try:
+                result = await self.tools.execute(
+                    "create_security_ticket",
+                    {
+                        "title": title,
+                        "description": description,
+                        "severity": severity,
+                        "indicators": indicators,
+                    },
+                )
+            except Exception as e:
+                return ActionResult(
+                    action_type="create_security_ticket",
+                    success=False,
+                    error=f"Failed to execute create-ticket tool: {e}",
+                )
+
+            if not result.success:
+                return ActionResult(
+                    action_type="create_security_ticket",
+                    success=False,
+                    error=result.error,
+                )
+
+            data = result.data or {}
+            success = bool(data.get("success", False))
+            message = str(data.get("message", "No message returned"))
+            return ActionResult(
+                action_type="create_security_ticket",
+                success=success,
+                action_id=data.get("ticket_id"),
+                target=None,
+                message=message,
+                error=None if success else message,
+            )
+
+        if not self._mock_fallbacks_allowed():
+            return ActionResult(
+                action_type="create_security_ticket",
+                success=False,
+                error=(
+                    "Ticket creation action unavailable: tool registry required when mock "
+                    "fallback is disabled"
+                ),
+            )
+
         # Mock action execution
         ticket_id = f"SEC-{uuid.uuid4().hex[:8].upper()}"
 
@@ -1399,6 +1609,7 @@ class PhishingTriageWorkflow:
             title=title,
             severity=severity,
             confidence=confidence,
+            is_mock=True,
         )
 
         return ActionResult(
@@ -1408,6 +1619,15 @@ class PhishingTriageWorkflow:
             target=None,
             message=f"Security ticket {ticket_id} created for manual review",
         )
+
+    def _mock_fallbacks_allowed(self) -> bool:
+        """Whether local mock action execution is allowed."""
+        for var in ("TW_ENV", "NODE_ENV", "ENVIRONMENT"):
+            value = os.environ.get(var, "").strip().lower()
+            if value in {"production", "prod"}:
+                override = os.environ.get(MOCK_FALLBACK_OVERRIDE_ENV, "").strip().lower()
+                return override in {"1", "true", "yes", "on"}
+        return True
 
     def _build_summary(
         self,
