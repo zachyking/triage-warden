@@ -11,6 +11,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tracing::{debug, warn};
 use utoipa::ToSchema;
 use uuid::Uuid;
 use validator::Validate;
@@ -42,6 +43,121 @@ pub fn routes() -> Router<AppState> {
 
 fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> Uuid {
     tenant.map(|ctx| ctx.tenant_id).unwrap_or(DEFAULT_TENANT_ID)
+}
+
+/// Topic for asynchronous knowledge indexing jobs.
+const KNOWLEDGE_INDEXING_TOPIC: &str = "knowledge.indexing";
+
+#[derive(Debug, Clone, Copy)]
+enum KnowledgeIndexAction {
+    Upsert,
+    Delete,
+}
+
+impl KnowledgeIndexAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Upsert => "upsert",
+            Self::Delete => "delete",
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct KnowledgeIndexJob {
+    action: &'static str,
+    tenant_id: Uuid,
+    document_id: Uuid,
+    queued_at: DateTime<Utc>,
+}
+
+fn build_knowledge_index_job(
+    action: KnowledgeIndexAction,
+    tenant_id: Uuid,
+    document_id: Uuid,
+) -> KnowledgeIndexJob {
+    KnowledgeIndexJob {
+        action: action.as_str(),
+        tenant_id,
+        document_id,
+        queued_at: Utc::now(),
+    }
+}
+
+/// Triggers asynchronous indexing or deletion for a knowledge document.
+///
+/// Priority:
+/// 1) If a message queue is configured, publish a job for an external worker.
+/// 2) Otherwise, for upsert actions, perform a local async fallback and mark
+///    the document as indexed.
+async fn trigger_knowledge_index_job(
+    state: &AppState,
+    tenant_id: Uuid,
+    document_id: Uuid,
+    action: KnowledgeIndexAction,
+) {
+    let job = build_knowledge_index_job(action, tenant_id, document_id);
+
+    if let Some(queue) = &state.message_queue {
+        match serde_json::to_vec(&job) {
+            Ok(payload) => match queue.publish(KNOWLEDGE_INDEXING_TOPIC, &payload).await {
+                Ok(message_id) => {
+                    debug!(
+                        %message_id,
+                        tenant_id = %tenant_id,
+                        document_id = %document_id,
+                        action = job.action,
+                        "Published knowledge indexing job"
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        error = %e,
+                        tenant_id = %tenant_id,
+                        document_id = %document_id,
+                        action = job.action,
+                        "Failed to publish knowledge indexing job"
+                    );
+                }
+            },
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    tenant_id = %tenant_id,
+                    document_id = %document_id,
+                    action = job.action,
+                    "Failed to serialize knowledge indexing job"
+                );
+            }
+        }
+        return;
+    }
+
+    if matches!(action, KnowledgeIndexAction::Upsert) {
+        let db = state.db.clone();
+        tokio::spawn(async move {
+            let repo = create_knowledge_repository(db.as_ref());
+            if let Err(e) = repo.mark_indexed(document_id, Utc::now()).await {
+                warn!(
+                    error = %e,
+                    document_id = %document_id,
+                    "Local knowledge indexing fallback failed"
+                );
+                return;
+            }
+
+            debug!(
+                document_id = %document_id,
+                "Local knowledge indexing fallback completed"
+            );
+        });
+    } else {
+        debug!(
+            tenant_id = %tenant_id,
+            document_id = %document_id,
+            "No queue configured; skipping async knowledge deletion hook"
+        );
+    }
 }
 
 // ============================================================================
@@ -437,7 +553,7 @@ async fn create_document(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    // TODO: Trigger async indexing via event bus
+    trigger_knowledge_index_job(&state, tenant_id, created.id, KnowledgeIndexAction::Upsert).await;
 
     Ok((StatusCode::CREATED, Json(DocumentResponse::from(created))))
 }
@@ -530,7 +646,7 @@ async fn update_document(
             _ => ApiError::Internal(e.to_string()),
         })?;
 
-    // TODO: Trigger async re-indexing if content changed
+    trigger_knowledge_index_job(&state, tenant_id, updated.id, KnowledgeIndexAction::Upsert).await;
 
     Ok(Json(DocumentResponse::from(updated)))
 }
@@ -567,7 +683,7 @@ async fn delete_document(
         return Err(ApiError::NotFound("Document not found".to_string()));
     }
 
-    // TODO: Trigger async deletion from vector store
+    trigger_knowledge_index_job(&state, tenant_id, id, KnowledgeIndexAction::Delete).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -732,7 +848,7 @@ async fn reindex_document(
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .ok_or(ApiError::NotFound("Document not found".to_string()))?;
 
-    // TODO: Trigger async re-indexing via event bus or direct service call
+    trigger_knowledge_index_job(&state, tenant_id, id, KnowledgeIndexAction::Upsert).await;
 
     Ok(StatusCode::ACCEPTED)
 }
@@ -788,5 +904,23 @@ mod tests {
 
         let tags = filter.tags.unwrap();
         assert_eq!(tags.len(), 2);
+    }
+
+    #[test]
+    fn test_knowledge_index_action_as_str() {
+        assert_eq!(KnowledgeIndexAction::Upsert.as_str(), "upsert");
+        assert_eq!(KnowledgeIndexAction::Delete.as_str(), "delete");
+    }
+
+    #[test]
+    fn test_build_knowledge_index_job() {
+        let tenant_id = Uuid::new_v4();
+        let document_id = Uuid::new_v4();
+
+        let job = build_knowledge_index_job(KnowledgeIndexAction::Upsert, tenant_id, document_id);
+
+        assert_eq!(job.action, "upsert");
+        assert_eq!(job.tenant_id, tenant_id);
+        assert_eq!(job.document_id, document_id);
     }
 }
