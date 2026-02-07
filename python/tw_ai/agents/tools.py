@@ -1987,6 +1987,16 @@ def create_triage_tools() -> ToolRegistry:
                 )
 
             # Mock fallback
+            if not _mock_fallbacks_allowed():
+                execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                return ToolResult.fail(
+                    error=(
+                        "SIEM search unavailable: SIEM connector required when mock "
+                        "fallback is disabled"
+                    ),
+                    execution_time_ms=execution_time_ms,
+                )
+
             logger.debug("search_siem_mock", query=query, hours=hours, limit=limit)
             execution_time_ms = int((time.perf_counter() - start_time) * 1000)
             return ToolResult.ok(
@@ -2086,6 +2096,16 @@ def create_triage_tools() -> ToolRegistry:
                 )
 
             # Mock fallback
+            if not _mock_fallbacks_allowed():
+                execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                return ToolResult.fail(
+                    error=(
+                        "Recent alerts unavailable: SIEM connector required when mock "
+                        "fallback is disabled"
+                    ),
+                    execution_time_ms=execution_time_ms,
+                )
+
             logger.debug("get_recent_alerts_mock", limit=limit)
             execution_time_ms = int((time.perf_counter() - start_time) * 1000)
             return ToolResult.ok(
@@ -2155,6 +2175,16 @@ def create_triage_tools() -> ToolRegistry:
                 )
 
             # Mock fallback
+            if not _mock_fallbacks_allowed():
+                execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                return ToolResult.fail(
+                    error=(
+                        "Host info unavailable: EDR connector required when mock fallback "
+                        "is disabled"
+                    ),
+                    execution_time_ms=execution_time_ms,
+                )
+
             execution_time_ms = int((time.perf_counter() - start_time) * 1000)
             return ToolResult.ok(
                 data={
@@ -2242,6 +2272,16 @@ def create_triage_tools() -> ToolRegistry:
                 )
 
             # Mock fallback with realistic detection data
+            if not _mock_fallbacks_allowed():
+                execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                return ToolResult.fail(
+                    error=(
+                        "Detections unavailable: EDR connector required when mock fallback "
+                        "is disabled"
+                    ),
+                    execution_time_ms=execution_time_ms,
+                )
+
             execution_time_ms = int((time.perf_counter() - start_time) * 1000)
             return ToolResult.ok(
                 data={
@@ -2362,6 +2402,16 @@ def create_triage_tools() -> ToolRegistry:
                 )
 
             # Mock fallback with realistic process data
+            if not _mock_fallbacks_allowed():
+                execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                return ToolResult.fail(
+                    error=(
+                        "Process listing unavailable: EDR connector required when mock "
+                        "fallback is disabled"
+                    ),
+                    execution_time_ms=execution_time_ms,
+                )
+
             execution_time_ms = int((time.perf_counter() - start_time) * 1000)
             return ToolResult.ok(
                 data={
@@ -2506,6 +2556,16 @@ def create_triage_tools() -> ToolRegistry:
                 )
 
             # Mock fallback with realistic network data
+            if not _mock_fallbacks_allowed():
+                execution_time_ms = int((time.perf_counter() - start_time) * 1000)
+                return ToolResult.fail(
+                    error=(
+                        "Network connections unavailable: EDR connector required when mock "
+                        "fallback is disabled"
+                    ),
+                    execution_time_ms=execution_time_ms,
+                )
+
             execution_time_ms = int((time.perf_counter() - start_time) * 1000)
             return ToolResult.ok(
                 data={
