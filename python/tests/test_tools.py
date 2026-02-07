@@ -3024,6 +3024,17 @@ class TestQuarantineEmailTool:
                 assert "denied" in result.data["message"].lower() or "approval" in result.data["message"].lower()
 
     @pytest.mark.asyncio
+    async def test_quarantine_email_rejects_control_characters_in_message_id(self):
+        """Test quarantine_email rejects message IDs with control characters."""
+        registry = create_triage_tools()
+        with pytest.raises(_tools.ToolArgumentValidationError) as exc_info:
+            await registry.execute(
+                "quarantine_email",
+                {"message_id": "MSG-123\nX", "reason": "phishing detected"},
+            )
+        assert "message id" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
     async def test_quarantine_email_uses_email_gateway_bridge_when_available(self):
         """Test quarantine_email uses email gateway bridge when available."""
         mock_bridge = MagicMock()
@@ -3110,6 +3121,36 @@ class TestBlockSenderTool:
                 }
             )
         assert "block_type" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_block_sender_invalid_email_format(self):
+        """Test block_sender rejects invalid sender email format."""
+        registry = create_triage_tools()
+        with pytest.raises(_tools.ToolArgumentValidationError) as exc_info:
+            await registry.execute(
+                "block_sender",
+                {
+                    "sender": "not-an-email",
+                    "block_type": "email",
+                    "reason": "test",
+                },
+            )
+        assert "sender" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_block_sender_invalid_domain_format(self):
+        """Test block_sender rejects invalid sender domain format."""
+        registry = create_triage_tools()
+        with pytest.raises(_tools.ToolArgumentValidationError) as exc_info:
+            await registry.execute(
+                "block_sender",
+                {
+                    "sender": "https://evil.com",
+                    "block_type": "domain",
+                    "reason": "test",
+                },
+            )
+        assert "sender" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
     async def test_block_sender_includes_reason(self):

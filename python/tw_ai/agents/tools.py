@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import structlog
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 # Import email analysis modules
 from tw_ai.analysis.email import (
@@ -625,6 +625,17 @@ class QuarantineEmailArgs(StrictBaseModel):
         description="Reason for quarantining the email",
     )
 
+    @field_validator("message_id")
+    @classmethod
+    def validate_message_id(cls, v: str) -> str:
+        """Validate message ID and prevent control-character injection."""
+        value = v.strip()
+        if not value:
+            raise ValueError("Message ID cannot be empty")
+        if any(ch in value for ch in ("\n", "\r", "\x00")):
+            raise ValueError("Message ID contains invalid control characters")
+        return value
+
 
 class BlockSenderArgs(StrictBaseModel):
     """Arguments for block_sender tool."""
@@ -645,6 +656,37 @@ class BlockSenderArgs(StrictBaseModel):
         max_length=1000,
         description="Reason for blocking the sender",
     )
+
+    @field_validator("sender")
+    @classmethod
+    def normalize_sender(cls, v: str) -> str:
+        """Normalize sender value and reject control characters."""
+        value = v.strip().lower()
+        if not value:
+            raise ValueError("Sender cannot be empty")
+        if any(ch in value for ch in ("\n", "\r", "\x00")):
+            raise ValueError("Sender contains invalid control characters")
+        return value
+
+    @model_validator(mode="after")
+    def validate_sender_format_for_block_type(self) -> BlockSenderArgs:
+        """Validate sender format based on block type."""
+        import re
+
+        sender = self.sender
+        if self.block_type == "email":
+            email_pattern = re.compile(r"^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$")
+            if not email_pattern.match(sender):
+                raise ValueError(f"Invalid sender email format: {sender}")
+            return self
+
+        # Domain block type
+        domain_pattern = re.compile(
+            r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+        )
+        if not domain_pattern.match(sender):
+            raise ValueError(f"Invalid sender domain format: {sender}")
+        return self
 
 
 class NotifyUserArgs(StrictBaseModel):
