@@ -3,9 +3,10 @@
 //! This middleware resolves the tenant from incoming HTTP requests using multiple strategies:
 //! 1. Subdomain extraction (e.g., `tenant1.example.com` -> `tenant1`)
 //! 2. X-Tenant-ID header (UUID format)
-//! 3. JWT claim extraction (if `tenant_id` claim exists)
+//! 3. Optional JWT claim extraction compatibility mode (disabled by default)
 //!
-//! Resolution order: subdomain > X-Tenant-ID header > JWT claim
+//! Resolution order: subdomain > X-Tenant-ID header > default tenant
+//! Optional legacy mode: subdomain > X-Tenant-ID header > JWT claim > default tenant
 //!
 //! # Example
 //!
@@ -264,7 +265,9 @@ impl TenantResolver {
 
     /// Resolves tenant from request.
     ///
-    /// Resolution order: subdomain > X-Tenant-ID header > JWT claim > default
+    /// Resolution order: subdomain > X-Tenant-ID header > default
+    /// Optional legacy mode: enable `TW_ALLOW_UNVERIFIED_JWT_TENANT=true`
+    /// to allow unverified JWT claim extraction before default tenant.
     pub async fn resolve(
         &self,
         headers: &HeaderMap,
@@ -294,13 +297,20 @@ impl TenantResolver {
                 .map(|ctx| Some((ctx, TenantSource::Header)));
         }
 
-        // Try JWT claim (if authenticated)
-        if let Some(tenant_id) = self.extract_jwt_tenant_id(headers) {
-            debug!(tenant_id = %tenant_id, "Extracted tenant ID from JWT claim");
-            return self
-                .resolve_by_id(tenant_id)
-                .await
-                .map(|ctx| Some((ctx, TenantSource::JwtClaim)));
+        // Optional legacy behavior: extract tenant from an unverified JWT claim.
+        // This is intentionally disabled by default because claims are parsed
+        // before signature verification in this middleware.
+        let allow_unverified_jwt_tenant = std::env::var("TW_ALLOW_UNVERIFIED_JWT_TENANT")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false);
+        if allow_unverified_jwt_tenant {
+            if let Some(tenant_id) = self.extract_jwt_tenant_id(headers) {
+                debug!(tenant_id = %tenant_id, "Extracted tenant ID from JWT claim");
+                return self
+                    .resolve_by_id(tenant_id)
+                    .await
+                    .map(|ctx| Some((ctx, TenantSource::JwtClaim)));
+            }
         }
 
         // Try default tenant

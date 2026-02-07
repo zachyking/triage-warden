@@ -18,8 +18,8 @@ use crate::dto::{
     ListIncidentsQuery, MitreTechniqueResponse, PaginatedResponse, PaginationInfo, ResolveRequest,
 };
 use crate::error::ApiError;
+use crate::middleware::OptionalTenant;
 use crate::state::AppState;
-use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::db::{
     create_audit_repository, create_incident_repository, AuditRepository, IncidentFilter,
     IncidentRepository, Pagination, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE,
@@ -28,6 +28,12 @@ use tw_core::incident::{
     ApprovalStatus, AuditAction, AuditEntry, Incident, IncidentStatus, ProposedAction, Severity,
 };
 use tw_policy::engine::{ActionContext, ActionTarget as PolicyActionTarget};
+
+fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> Uuid {
+    tenant
+        .map(|ctx| ctx.tenant_id)
+        .unwrap_or(tw_core::auth::DEFAULT_TENANT_ID)
+}
 
 /// Creates incident routes.
 pub fn routes() -> Router<AppState> {
@@ -64,6 +70,7 @@ pub fn routes() -> Router<AppState> {
 async fn list_incidents(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Query(query): Query<ListIncidentsQuery>,
 ) -> Result<Json<PaginatedResponse<IncidentResponse>>, ApiError> {
     // Validate query parameters
@@ -71,10 +78,11 @@ async fn list_incidents(
 
     let repo: Box<dyn IncidentRepository> = create_incident_repository(&state.db);
 
+    let tenant_id = tenant_id_or_default(tenant);
+
     // Build filter from query
-    // TODO: Task 1.4.1 - Get tenant_id from TenantContext middleware
     let filter = IncidentFilter {
-        tenant_id: None, // Will be set by tenant middleware
+        tenant_id: Some(tenant_id),
         status: query.status.map(|s| parse_statuses(&s)),
         severity: query.severity.map(|s| parse_severities(&s)),
         since: query.since,
@@ -128,19 +136,21 @@ async fn list_incidents(
 async fn get_incident(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<Json<IncidentDetailResponse>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let incident_repo: Box<dyn IncidentRepository> = create_incident_repository(&state.db);
     let audit_repo: Box<dyn AuditRepository> = create_audit_repository(&state.db);
 
     let incident: Incident = incident_repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Incident {} not found", id)))?;
 
     // Get audit log for this incident
     let audit_entries: Vec<tw_core::incident::AuditEntry> =
-        audit_repo.get_for_incident(DEFAULT_TENANT_ID, id).await?;
+        audit_repo.get_for_incident(tenant_id, id).await?;
 
     let response = incident_to_detail_response(incident, audit_entries);
 
@@ -167,16 +177,18 @@ async fn get_incident(
 async fn execute_action(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
     Json(request): Json<ExecuteActionRequest>,
 ) -> Result<(StatusCode, Json<ActionExecutionResponse>), ApiError> {
     request.validate()?;
+    let tenant_id = tenant_id_or_default(tenant);
 
     let incident_repo: Box<dyn IncidentRepository> = create_incident_repository(&state.db);
 
     // Verify incident exists
     let _incident: Incident = incident_repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Incident {} not found", id)))?;
 
@@ -325,18 +337,20 @@ async fn execute_action(
 async fn approve_action(
     State(state): State<AppState>,
     RequireAnalyst(user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(incident_id): Path<Uuid>,
     axum::Form(request): axum::Form<ApproveActionRequest>,
 ) -> Result<axum::response::Response, ApiError> {
     use axum::response::IntoResponse;
 
     request.validate()?;
+    let tenant_id = tenant_id_or_default(tenant);
 
     let incident_repo: Box<dyn IncidentRepository> = create_incident_repository(&state.db);
 
     // Verify incident exists
     let mut incident: Incident = incident_repo
-        .get(incident_id)
+        .get_for_tenant(incident_id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Incident {} not found", incident_id)))?;
 
@@ -462,17 +476,19 @@ async fn approve_action(
 async fn dismiss_incident(
     State(state): State<AppState>,
     RequireAnalyst(user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(incident_id): Path<Uuid>,
     axum::Form(request): axum::Form<DismissRequest>,
 ) -> Result<axum::response::Response, ApiError> {
     use axum::response::IntoResponse;
 
+    let tenant_id = tenant_id_or_default(tenant);
     let incident_repo: Box<dyn IncidentRepository> = create_incident_repository(&state.db);
     let audit_repo: Box<dyn AuditRepository> = create_audit_repository(&state.db);
 
     // Get the incident
     let mut incident: Incident = incident_repo
-        .get(incident_id)
+        .get_for_tenant(incident_id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Incident {} not found", incident_id)))?;
 
@@ -493,9 +509,7 @@ async fn dismiss_incident(
         user.username.clone(),
         details,
     );
-    audit_repo
-        .log(DEFAULT_TENANT_ID, incident_id, &audit_entry)
-        .await?;
+    audit_repo.log(tenant_id, incident_id, &audit_entry).await?;
 
     // Publish status change event with fallback logging
     state
@@ -544,17 +558,19 @@ async fn dismiss_incident(
 async fn resolve_incident(
     State(state): State<AppState>,
     RequireAnalyst(user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(incident_id): Path<Uuid>,
     axum::Form(request): axum::Form<ResolveRequest>,
 ) -> Result<axum::response::Response, ApiError> {
     use axum::response::IntoResponse;
 
+    let tenant_id = tenant_id_or_default(tenant);
     let incident_repo: Box<dyn IncidentRepository> = create_incident_repository(&state.db);
     let audit_repo: Box<dyn AuditRepository> = create_audit_repository(&state.db);
 
     // Get the incident
     let mut incident: Incident = incident_repo
-        .get(incident_id)
+        .get_for_tenant(incident_id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Incident {} not found", incident_id)))?;
 
@@ -577,9 +593,7 @@ async fn resolve_incident(
         user.username.clone(),
         details,
     );
-    audit_repo
-        .log(DEFAULT_TENANT_ID, incident_id, &audit_entry)
-        .await?;
+    audit_repo.log(tenant_id, incident_id, &audit_entry).await?;
 
     // Publish status change event with fallback logging
     state
@@ -627,16 +641,18 @@ async fn resolve_incident(
 async fn enrich_incident(
     State(state): State<AppState>,
     RequireAnalyst(user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(incident_id): Path<Uuid>,
 ) -> Result<axum::response::Response, ApiError> {
     use axum::response::IntoResponse;
 
+    let tenant_id = tenant_id_or_default(tenant);
     let incident_repo: Box<dyn IncidentRepository> = create_incident_repository(&state.db);
     let audit_repo: Box<dyn AuditRepository> = create_audit_repository(&state.db);
 
     // Verify incident exists
     let mut incident: Incident = incident_repo
-        .get(incident_id)
+        .get_for_tenant(incident_id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Incident {} not found", incident_id)))?;
 
@@ -654,9 +670,7 @@ async fn enrich_incident(
         user.username.clone(),
         Some(serde_json::json!({ "action": "re-enrichment requested" })),
     );
-    audit_repo
-        .log(DEFAULT_TENANT_ID, incident_id, &audit_entry)
-        .await?;
+    audit_repo.log(tenant_id, incident_id, &audit_entry).await?;
 
     // Publish events with fallback logging
     state

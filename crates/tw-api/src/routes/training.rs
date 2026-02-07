@@ -19,13 +19,19 @@ use validator::Validate;
 
 use crate::auth::RequireAnalyst;
 use crate::error::ApiError;
+use crate::middleware::OptionalTenant;
 use crate::state::AppState;
-use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::db::{create_feedback_repository, create_incident_repository};
 use tw_core::feedback::FeedbackType;
 use tw_core::training::{
     ExportConfig, ExportFormat, ExportOutput, ExportStats, TrainingDataExporter,
 };
+
+fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> Uuid {
+    tenant
+        .map(|ctx| ctx.tenant_id)
+        .unwrap_or(tw_core::auth::DEFAULT_TENANT_ID)
+}
 
 /// Creates training data routes.
 pub fn routes() -> Router<AppState> {
@@ -305,12 +311,14 @@ pub struct PreviewExample {
 async fn export_training_data(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Query(query): Query<ExportQuery>,
 ) -> Result<Response, ApiError> {
     query.validate()?;
 
     let config = query.to_config();
-    export_with_config(state, config).await
+    let tenant_id = tenant_id_or_default(tenant);
+    export_with_config(state, tenant_id, config).await
 }
 
 /// Export training data (POST).
@@ -332,12 +340,14 @@ async fn export_training_data(
 async fn export_training_data_post(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Json(request): Json<ExportRequest>,
 ) -> Result<Response, ApiError> {
     request.validate()?;
 
     let config = request.to_config();
-    export_with_config(state, config).await
+    let tenant_id = tenant_id_or_default(tenant);
+    export_with_config(state, tenant_id, config).await
 }
 
 /// Get training data statistics.
@@ -361,14 +371,16 @@ async fn export_training_data_post(
 async fn get_training_stats(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Query(query): Query<ExportQuery>,
 ) -> Result<Json<StatsResponse>, ApiError> {
     query.validate()?;
 
     let config = query.to_config();
+    let tenant_id = tenant_id_or_default(tenant);
 
     // Fetch feedback and incidents
-    let (feedback_list, incidents) = fetch_training_data(&state, &config).await?;
+    let (feedback_list, incidents) = fetch_training_data(&state, tenant_id, &config).await?;
 
     // Generate examples and calculate stats
     let exporter = TrainingDataExporter::new(config);
@@ -399,6 +411,7 @@ async fn get_training_stats(
 async fn preview_training_data(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Query(query): Query<ExportQuery>,
 ) -> Result<Json<PreviewResponse>, ApiError> {
     query.validate()?;
@@ -406,9 +419,10 @@ async fn preview_training_data(
     let mut config = query.to_config();
     // Limit preview to reasonable size
     config.limit = Some(config.limit.unwrap_or(10).min(50));
+    let tenant_id = tenant_id_or_default(tenant);
 
     // Fetch feedback and incidents
-    let (feedback_list, incidents) = fetch_training_data(&state, &config).await?;
+    let (feedback_list, incidents) = fetch_training_data(&state, tenant_id, &config).await?;
 
     // Generate examples
     let exporter = TrainingDataExporter::new(config.clone());
@@ -441,11 +455,15 @@ async fn preview_training_data(
 // ============================================================================
 
 /// Exports training data with the given configuration.
-async fn export_with_config(state: AppState, config: ExportConfig) -> Result<Response, ApiError> {
+async fn export_with_config(
+    state: AppState,
+    tenant_id: Uuid,
+    config: ExportConfig,
+) -> Result<Response, ApiError> {
     let format = config.format;
 
     // Fetch feedback and incidents
-    let (feedback_list, incidents) = fetch_training_data(&state, &config).await?;
+    let (feedback_list, incidents) = fetch_training_data(&state, tenant_id, &config).await?;
 
     // Generate examples and export
     let exporter = TrainingDataExporter::new(config);
@@ -500,6 +518,7 @@ async fn export_with_config(state: AppState, config: ExportConfig) -> Result<Res
 /// Fetches feedback and incident data for training export.
 async fn fetch_training_data(
     state: &AppState,
+    tenant_id: Uuid,
     config: &ExportConfig,
 ) -> Result<
     (
@@ -512,10 +531,9 @@ async fn fetch_training_data(
     let incident_repo = create_incident_repository(&state.db);
 
     // Fetch feedback for training
-    // TODO: Add proper tenant scoping when multi-tenancy is implemented
     let feedback_list = feedback_repo
         .get_for_training(
-            DEFAULT_TENANT_ID,
+            tenant_id,
             config.corrections_only,
             config.since,
             config.until,
@@ -535,7 +553,7 @@ async fn fetch_training_data(
     // Fetch corresponding incidents
     let mut incidents = HashMap::new();
     for id in incident_ids {
-        if let Ok(Some(incident)) = incident_repo.get(id).await {
+        if let Ok(Some(incident)) = incident_repo.get_for_tenant(id, tenant_id).await {
             incidents.insert(id, incident);
         }
     }

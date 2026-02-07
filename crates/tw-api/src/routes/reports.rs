@@ -16,12 +16,18 @@ use uuid::Uuid;
 
 use crate::auth::RequireAnalyst;
 use crate::error::ApiError;
+use crate::middleware::OptionalTenant;
 use crate::state::AppState;
-use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::db::{
     create_audit_repository, create_incident_repository, AuditRepository, IncidentRepository,
 };
 use tw_core::incident::Incident;
+
+fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> Uuid {
+    tenant
+        .map(|ctx| ctx.tenant_id)
+        .unwrap_or(tw_core::auth::DEFAULT_TENANT_ID)
+}
 
 /// Creates report routes.
 pub fn routes() -> Router<AppState> {
@@ -88,15 +94,17 @@ pub struct ReportMetadataResponse {
 async fn generate_report(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
     Query(query): Query<ReportQuery>,
 ) -> Result<Response, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let incident_repo: Box<dyn IncidentRepository> = create_incident_repository(&state.db);
     let audit_repo: Box<dyn AuditRepository> = create_audit_repository(&state.db);
 
     // Fetch the incident
     let incident: Incident = incident_repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Incident {} not found", id)))?;
 
@@ -108,7 +116,7 @@ async fn generate_report(
     })?;
 
     // Get audit log for this incident
-    let audit_entries = audit_repo.get_for_incident(DEFAULT_TENANT_ID, id).await?;
+    let audit_entries = audit_repo.get_for_incident(tenant_id, id).await?;
 
     // Build the report data structure
     let report_data =

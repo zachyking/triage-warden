@@ -154,13 +154,14 @@ async fn receive_alert(
     if let Err(e) = repo.create(&incident).await {
         // Decrement queue depth on failure
         state.webhook_rate_limiter.decrement_queue_depth();
+        warn!(error = %e, "Failed to persist incident from webhook");
         counter!("tw_webhooks_errors_total", "source" => "default", "error" => "database")
             .increment(1);
         return Ok((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(WebhookAcceptedResponse {
                 accepted: false,
-                message: format!("Failed to persist incident: {}", e),
+                message: "Failed to persist incident".to_string(),
                 alert_id: Some(alert_id),
                 incident_id: None,
             }),
@@ -292,13 +293,14 @@ async fn receive_alert_from_source(
     if let Err(e) = repo.create(&incident).await {
         // Decrement queue depth on failure
         state.webhook_rate_limiter.decrement_queue_depth();
+        warn!(error = %e, source = %source, "Failed to persist incident from webhook");
         counter!("tw_webhooks_errors_total", "source" => source.clone(), "error" => "database")
             .increment(1);
         return Ok((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(WebhookAcceptedResponse {
                 accepted: false,
-                message: format!("Failed to persist incident: {}", e),
+                message: "Failed to persist incident".to_string(),
                 alert_id: Some(alert_id),
                 incident_id: None,
             }),

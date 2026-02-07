@@ -9,9 +9,12 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::net::IpAddr;
 use uuid::Uuid;
 
 use crate::error::ApiError;
+use crate::middleware::OptionalTenant;
 use crate::state::AppState;
 use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::db::{create_notification_repository, NotificationChannelRepository};
@@ -144,13 +147,150 @@ pub struct TestNotificationResponse {
     pub message: String,
 }
 
+const REDACTED_SECRET: &str = "********";
+
+fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> Uuid {
+    tenant.map(|ctx| ctx.tenant_id).unwrap_or(DEFAULT_TENANT_ID)
+}
+
+fn is_set_non_empty(value: Option<&String>) -> bool {
+    value.is_some_and(|v| !v.trim().is_empty())
+}
+
+fn non_empty_required(value: Option<&String>, error: &str) -> Result<String, ApiError> {
+    let trimmed = value.map(|v| v.trim().to_string()).unwrap_or_default();
+    if trimmed.is_empty() {
+        return Err(ApiError::BadRequest(error.to_string()));
+    }
+    Ok(trimmed)
+}
+
+fn parse_bool_env(name: &str, default: bool) -> bool {
+    std::env::var(name)
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(default)
+}
+
+fn is_private_or_local_address(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_unspecified()
+                || v4.is_documentation()
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unique_local()
+                || v6.is_unicast_link_local()
+                || v6.is_unspecified()
+        }
+    }
+}
+
+fn validate_outbound_webhook_url(raw_url: &str) -> Result<(), ApiError> {
+    let url = reqwest::Url::parse(raw_url)
+        .map_err(|_| ApiError::BadRequest("Webhook URL is not a valid URL".to_string()))?;
+
+    let allow_http = parse_bool_env("TW_ALLOW_INSECURE_NOTIFICATION_WEBHOOKS", false);
+    let allow_private_targets = parse_bool_env("TW_ALLOW_PRIVATE_NOTIFICATION_TARGETS", false);
+
+    match url.scheme() {
+        "https" => {}
+        "http" if allow_http => {}
+        _ => {
+            return Err(ApiError::BadRequest(
+                "Webhook URL must use HTTPS".to_string(),
+            ));
+        }
+    }
+
+    let host = url
+        .host_str()
+        .ok_or_else(|| ApiError::BadRequest("Webhook URL must include a host".to_string()))?;
+
+    if !allow_private_targets {
+        if host.eq_ignore_ascii_case("localhost")
+            || host.ends_with(".local")
+            || host.ends_with(".localhost")
+        {
+            return Err(ApiError::BadRequest(
+                "Webhook URL host is not allowed".to_string(),
+            ));
+        }
+
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            if is_private_or_local_address(ip) {
+                return Err(ApiError::BadRequest(
+                    "Webhook URL host is not allowed".to_string(),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn validate_resolved_webhook_host_is_public(raw_url: &str) -> Result<(), ApiError> {
+    if cfg!(test) {
+        return Ok(());
+    }
+
+    let validate_dns = parse_bool_env("TW_VALIDATE_NOTIFICATION_TARGET_DNS", true);
+    if !validate_dns {
+        return Ok(());
+    }
+
+    let allow_private_targets = parse_bool_env("TW_ALLOW_PRIVATE_NOTIFICATION_TARGETS", false);
+    if allow_private_targets {
+        return Ok(());
+    }
+
+    let url = reqwest::Url::parse(raw_url)
+        .map_err(|_| ApiError::BadRequest("Webhook URL is not a valid URL".to_string()))?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| ApiError::BadRequest("Webhook URL must include a host".to_string()))?;
+
+    let port = url.port_or_known_default().unwrap_or(443);
+    let resolved = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|_| ApiError::BadRequest("Webhook URL host could not be resolved".to_string()))?;
+
+    for addr in resolved {
+        if is_private_or_local_address(addr.ip()) {
+            return Err(ApiError::BadRequest(
+                "Webhook URL host is not allowed".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn mask_sensitive_config(config: serde_json::Value) -> serde_json::Value {
+    let mut masked = config;
+    if let serde_json::Value::Object(ref mut map) = masked {
+        for key in ["webhook_url", "integration_key", "auth_header"] {
+            if let Some(value) = map.get_mut(key) {
+                if value.as_str().is_some_and(|v| !v.is_empty()) {
+                    *value = serde_json::Value::String(REDACTED_SECRET.to_string());
+                }
+            }
+        }
+    }
+    masked
+}
+
 impl From<NotificationChannel> for ChannelResponse {
     fn from(channel: NotificationChannel) -> Self {
         ChannelResponse {
             id: channel.id,
             name: channel.name,
             channel_type: channel.channel_type.as_db_str().to_string(),
-            config: channel.config,
+            config: mask_sensitive_config(channel.config),
             events: channel.events,
             enabled: channel.enabled,
             created_at: channel.created_at.to_rfc3339(),
@@ -162,10 +302,12 @@ impl From<NotificationChannel> for ChannelResponse {
 /// List all notification channels.
 async fn list_channels(
     State(state): State<AppState>,
+    OptionalTenant(tenant): OptionalTenant,
 ) -> Result<Json<Vec<ChannelResponse>>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let repo: Box<dyn NotificationChannelRepository> = create_notification_repository(&state.db);
 
-    let channels = repo.list().await?;
+    let channels = repo.list_for_tenant(tenant_id).await?;
     let response: Vec<ChannelResponse> = channels.into_iter().map(ChannelResponse::from).collect();
 
     Ok(Json(response))
@@ -174,12 +316,14 @@ async fn list_channels(
 /// Get a single notification channel by ID.
 async fn get_channel(
     State(state): State<AppState>,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ChannelResponse>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let repo: Box<dyn NotificationChannelRepository> = create_notification_repository(&state.db);
 
     let channel = repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Notification channel {} not found", id)))?;
 
@@ -189,8 +333,10 @@ async fn get_channel(
 /// Create a new notification channel.
 async fn create_channel(
     State(state): State<AppState>,
+    OptionalTenant(tenant): OptionalTenant,
     Form(request): Form<CreateChannelRequest>,
 ) -> Result<Response, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     // Validate name
     if request.name.trim().is_empty() {
         return Err(ApiError::BadRequest("Channel name is required".to_string()));
@@ -203,6 +349,9 @@ async fn create_channel(
 
     // Build config JSON based on channel type
     let config = build_config(&channel_type, &request)?;
+    if let Some(webhook_url) = config.get("webhook_url").and_then(|v| v.as_str()) {
+        validate_resolved_webhook_host_is_public(webhook_url).await?;
+    }
 
     // Parse enabled status (checkbox sends "on" when checked, nothing when unchecked)
     let enabled = request.enabled.as_ref().is_some_and(|v| v == "on");
@@ -220,7 +369,7 @@ async fn create_channel(
     channel.enabled = enabled;
 
     let repo: Box<dyn NotificationChannelRepository> = create_notification_repository(&state.db);
-    let created = repo.create(DEFAULT_TENANT_ID, &channel).await?;
+    let created = repo.create(tenant_id, &channel).await?;
 
     // Return with HX-Trigger for toast notification
     let trigger_json = serde_json::json!({
@@ -245,14 +394,16 @@ async fn create_channel(
 /// Update an existing notification channel.
 async fn update_channel(
     State(state): State<AppState>,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
     Form(request): Form<UpdateChannelRequest>,
 ) -> Result<Response, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let repo: Box<dyn NotificationChannelRepository> = create_notification_repository(&state.db);
 
     // Verify channel exists
     let existing = repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Notification channel {} not found", id)))?;
 
@@ -266,12 +417,14 @@ async fn update_channel(
     };
 
     // Build config if any config fields are provided
-    let config = if request.webhook_url.is_some()
-        || request.channel.is_some()
-        || request.recipients.is_some()
-        || request.smtp_host.is_some()
-        || request.integration_key.is_some()
-        || request.auth_header.is_some()
+    let config = if is_set_non_empty(request.webhook_url.as_ref())
+        || is_set_non_empty(request.channel.as_ref())
+        || is_set_non_empty(request.recipients.as_ref())
+        || is_set_non_empty(request.smtp_host.as_ref())
+        || request.smtp_port.is_some()
+        || is_set_non_empty(request.integration_key.as_ref())
+        || is_set_non_empty(request.pd_severity.as_ref())
+        || is_set_non_empty(request.auth_header.as_ref())
     {
         // Use the provided channel type or fall back to existing
         let ct = channel_type
@@ -281,6 +434,13 @@ async fn update_channel(
     } else {
         None
     };
+    if let Some(webhook_url) = config
+        .as_ref()
+        .and_then(|cfg| cfg.get("webhook_url"))
+        .and_then(|v| v.as_str())
+    {
+        validate_resolved_webhook_host_is_public(webhook_url).await?;
+    }
 
     // Parse enabled status
     let enabled = request.enabled.as_ref().map(|v| v == "on");
@@ -293,7 +453,7 @@ async fn update_channel(
         enabled,
     };
 
-    let updated = repo.update(id, &update).await?;
+    let updated = repo.update_for_tenant(id, tenant_id, &update).await?;
 
     // Return with HX-Trigger for toast notification
     let trigger_json = serde_json::json!({
@@ -317,17 +477,19 @@ async fn update_channel(
 /// Delete a notification channel.
 async fn delete_channel(
     State(state): State<AppState>,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let repo: Box<dyn NotificationChannelRepository> = create_notification_repository(&state.db);
 
     // Get channel name before deletion for the toast message
     let channel = repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Notification channel {} not found", id)))?;
 
-    let deleted = repo.delete(id).await?;
+    let deleted = repo.delete_for_tenant(id, tenant_id).await?;
 
     if !deleted {
         return Err(ApiError::NotFound(format!(
@@ -359,11 +521,13 @@ async fn delete_channel(
 /// Toggle the enabled status of a notification channel.
 async fn toggle_channel(
     State(state): State<AppState>,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let repo: Box<dyn NotificationChannelRepository> = create_notification_repository(&state.db);
 
-    let updated = repo.toggle_enabled(id).await?;
+    let updated = repo.toggle_enabled_for_tenant(id, tenant_id).await?;
 
     let status_text = if updated.enabled {
         "enabled"
@@ -393,12 +557,14 @@ async fn toggle_channel(
 /// Send a test notification to a channel.
 async fn test_channel(
     State(state): State<AppState>,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let repo: Box<dyn NotificationChannelRepository> = create_notification_repository(&state.db);
 
     let channel = repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Notification channel {} not found", id)))?;
 
@@ -437,15 +603,18 @@ fn build_config(
 ) -> Result<serde_json::Value, ApiError> {
     match channel_type {
         ChannelType::Slack => {
-            let webhook_url = request.webhook_url.clone().ok_or_else(|| {
-                ApiError::BadRequest("Webhook URL is required for Slack".to_string())
-            })?;
+            let webhook_url = non_empty_required(
+                request.webhook_url.as_ref(),
+                "Webhook URL is required for Slack",
+            )?;
+            validate_outbound_webhook_url(&webhook_url)?;
 
             let mut config = serde_json::json!({
                 "webhook_url": webhook_url
             });
 
             if let Some(channel) = &request.channel {
+                let channel = channel.trim();
                 if !channel.is_empty() {
                     config["channel"] = serde_json::json!(channel);
                 }
@@ -454,24 +623,28 @@ fn build_config(
             Ok(config)
         }
         ChannelType::Teams => {
-            let webhook_url = request.webhook_url.clone().ok_or_else(|| {
-                ApiError::BadRequest("Webhook URL is required for Teams".to_string())
-            })?;
+            let webhook_url = non_empty_required(
+                request.webhook_url.as_ref(),
+                "Webhook URL is required for Teams",
+            )?;
+            validate_outbound_webhook_url(&webhook_url)?;
 
             Ok(serde_json::json!({
                 "webhook_url": webhook_url
             }))
         }
         ChannelType::Email => {
-            let recipients = request.recipients.clone().ok_or_else(|| {
-                ApiError::BadRequest("Recipients are required for Email".to_string())
-            })?;
+            let recipients = non_empty_required(
+                request.recipients.as_ref(),
+                "Recipients are required for Email",
+            )?;
 
             let mut config = serde_json::json!({
                 "recipients": recipients
             });
 
             if let Some(smtp_host) = &request.smtp_host {
+                let smtp_host = smtp_host.trim();
                 if !smtp_host.is_empty() {
                     config["smtp_host"] = serde_json::json!(smtp_host);
                 }
@@ -484,31 +657,35 @@ fn build_config(
             Ok(config)
         }
         ChannelType::PagerDuty => {
-            let integration_key = request.integration_key.clone().ok_or_else(|| {
-                ApiError::BadRequest("Integration key is required for PagerDuty".to_string())
-            })?;
+            let integration_key = non_empty_required(
+                request.integration_key.as_ref(),
+                "Integration key is required for PagerDuty",
+            )?;
 
             let mut config = serde_json::json!({
                 "integration_key": integration_key
             });
 
             if let Some(severity) = &request.pd_severity {
-                config["severity"] = serde_json::json!(severity);
+                let severity = severity.trim();
+                if !severity.is_empty() {
+                    config["severity"] = serde_json::json!(severity);
+                }
             }
 
             Ok(config)
         }
         ChannelType::Webhook => {
-            let webhook_url = request
-                .webhook_url
-                .clone()
-                .ok_or_else(|| ApiError::BadRequest("Webhook URL is required".to_string()))?;
+            let webhook_url =
+                non_empty_required(request.webhook_url.as_ref(), "Webhook URL is required")?;
+            validate_outbound_webhook_url(&webhook_url)?;
 
             let mut config = serde_json::json!({
                 "webhook_url": webhook_url
             });
 
             if let Some(auth_header) = &request.auth_header {
+                let auth_header = auth_header.trim();
                 if !auth_header.is_empty() {
                     config["auth_header"] = serde_json::json!(auth_header);
                 }
@@ -529,9 +706,14 @@ fn build_config_for_update(
             let mut config = serde_json::Map::new();
 
             if let Some(webhook_url) = &request.webhook_url {
-                config.insert("webhook_url".to_string(), serde_json::json!(webhook_url));
+                let webhook_url = webhook_url.trim();
+                if !webhook_url.is_empty() {
+                    validate_outbound_webhook_url(webhook_url)?;
+                    config.insert("webhook_url".to_string(), serde_json::json!(webhook_url));
+                }
             }
             if let Some(channel) = &request.channel {
+                let channel = channel.trim();
                 if !channel.is_empty() {
                     config.insert("channel".to_string(), serde_json::json!(channel));
                 }
@@ -543,7 +725,11 @@ fn build_config_for_update(
             let mut config = serde_json::Map::new();
 
             if let Some(webhook_url) = &request.webhook_url {
-                config.insert("webhook_url".to_string(), serde_json::json!(webhook_url));
+                let webhook_url = webhook_url.trim();
+                if !webhook_url.is_empty() {
+                    validate_outbound_webhook_url(webhook_url)?;
+                    config.insert("webhook_url".to_string(), serde_json::json!(webhook_url));
+                }
             }
 
             Ok(serde_json::Value::Object(config))
@@ -552,9 +738,13 @@ fn build_config_for_update(
             let mut config = serde_json::Map::new();
 
             if let Some(recipients) = &request.recipients {
-                config.insert("recipients".to_string(), serde_json::json!(recipients));
+                let recipients = recipients.trim();
+                if !recipients.is_empty() {
+                    config.insert("recipients".to_string(), serde_json::json!(recipients));
+                }
             }
             if let Some(smtp_host) = &request.smtp_host {
+                let smtp_host = smtp_host.trim();
                 if !smtp_host.is_empty() {
                     config.insert("smtp_host".to_string(), serde_json::json!(smtp_host));
                 }
@@ -569,13 +759,19 @@ fn build_config_for_update(
             let mut config = serde_json::Map::new();
 
             if let Some(integration_key) = &request.integration_key {
-                config.insert(
-                    "integration_key".to_string(),
-                    serde_json::json!(integration_key),
-                );
+                let integration_key = integration_key.trim();
+                if !integration_key.is_empty() {
+                    config.insert(
+                        "integration_key".to_string(),
+                        serde_json::json!(integration_key),
+                    );
+                }
             }
             if let Some(severity) = &request.pd_severity {
-                config.insert("severity".to_string(), serde_json::json!(severity));
+                let severity = severity.trim();
+                if !severity.is_empty() {
+                    config.insert("severity".to_string(), serde_json::json!(severity));
+                }
             }
 
             Ok(serde_json::Value::Object(config))
@@ -584,9 +780,14 @@ fn build_config_for_update(
             let mut config = serde_json::Map::new();
 
             if let Some(webhook_url) = &request.webhook_url {
-                config.insert("webhook_url".to_string(), serde_json::json!(webhook_url));
+                let webhook_url = webhook_url.trim();
+                if !webhook_url.is_empty() {
+                    validate_outbound_webhook_url(webhook_url)?;
+                    config.insert("webhook_url".to_string(), serde_json::json!(webhook_url));
+                }
             }
             if let Some(auth_header) = &request.auth_header {
+                let auth_header = auth_header.trim();
                 if !auth_header.is_empty() {
                     config.insert("auth_header".to_string(), serde_json::json!(auth_header));
                 }
@@ -615,10 +816,16 @@ async fn send_test_notification(channel: &NotificationChannel) -> Result<String,
                 .get("webhook_url")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "No webhook URL configured".to_string())?;
+            validate_outbound_webhook_url(webhook_url)
+                .map_err(|e| format!("Invalid webhook URL: {}", e))?;
+            validate_resolved_webhook_host_is_public(webhook_url)
+                .await
+                .map_err(|e| format!("Invalid webhook URL: {}", e))?;
 
             // Create HTTP client
             let client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(10))
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
@@ -847,9 +1054,16 @@ fn default_history_limit() -> usize {
 /// List all notification rules.
 async fn list_rules(
     State(state): State<AppState>,
+    OptionalTenant(tenant): OptionalTenant,
 ) -> Result<Json<Vec<NotificationRuleResponse>>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let engine = get_notification_engine(&state);
-    let rules = engine.get_rules().await;
+    let rules = engine
+        .get_rules()
+        .await
+        .into_iter()
+        .filter(|rule| rule.tenant_id == tenant_id)
+        .collect::<Vec<_>>();
     let response: Vec<NotificationRuleResponse> = rules
         .into_iter()
         .map(NotificationRuleResponse::from)
@@ -860,12 +1074,15 @@ async fn list_rules(
 /// Get a single notification rule by ID.
 async fn get_rule(
     State(state): State<AppState>,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<Json<NotificationRuleResponse>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let engine = get_notification_engine(&state);
     let rule = engine
         .get_rule(id)
         .await
+        .filter(|rule| rule.tenant_id == tenant_id)
         .ok_or_else(|| ApiError::NotFound(format!("Notification rule {} not found", id)))?;
     Ok(Json(NotificationRuleResponse::from(rule)))
 }
@@ -873,6 +1090,7 @@ async fn get_rule(
 /// Create a new notification rule.
 async fn create_rule(
     State(state): State<AppState>,
+    OptionalTenant(tenant): OptionalTenant,
     Json(request): Json<CreateNotificationRuleRequest>,
 ) -> Result<(StatusCode, Json<NotificationRuleResponse>), ApiError> {
     // Validate name
@@ -887,7 +1105,7 @@ async fn create_rule(
         ));
     }
 
-    let tenant_id = DEFAULT_TENANT_ID;
+    let tenant_id = tenant_id_or_default(tenant);
 
     let mut rule =
         NotificationRule::new(tenant_id, request.name, request.trigger, request.channels);
@@ -908,14 +1126,17 @@ async fn create_rule(
 /// Update an existing notification rule.
 async fn update_rule(
     State(state): State<AppState>,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
     Json(request): Json<UpdateNotificationRuleRequest>,
 ) -> Result<Json<NotificationRuleResponse>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let engine = get_notification_engine(&state);
 
     let mut rule = engine
         .get_rule(id)
         .await
+        .filter(|rule| rule.tenant_id == tenant_id)
         .ok_or_else(|| ApiError::NotFound(format!("Notification rule {} not found", id)))?;
 
     // Apply updates
@@ -966,9 +1187,22 @@ async fn update_rule(
 /// Delete a notification rule.
 async fn delete_rule(
     State(state): State<AppState>,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let engine = get_notification_engine(&state);
+    if engine
+        .get_rule(id)
+        .await
+        .filter(|rule| rule.tenant_id == tenant_id)
+        .is_none()
+    {
+        return Err(ApiError::NotFound(format!(
+            "Notification rule {} not found",
+            id
+        )));
+    }
     let removed = engine.remove_rule(id).await;
     if !removed {
         return Err(ApiError::NotFound(format!(
@@ -982,12 +1216,15 @@ async fn delete_rule(
 /// Test a notification rule with a simulated event.
 async fn test_rule(
     State(state): State<AppState>,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<Json<TestRuleResponse>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let engine = get_notification_engine(&state);
     let rule = engine
         .get_rule(id)
         .await
+        .filter(|rule| rule.tenant_id == tenant_id)
         .ok_or_else(|| ApiError::NotFound(format!("Notification rule {} not found", id)))?;
 
     // Build a test event based on the rule's trigger
@@ -1021,11 +1258,25 @@ async fn test_rule(
 /// List notification delivery history.
 async fn list_notification_history(
     State(state): State<AppState>,
+    OptionalTenant(tenant): OptionalTenant,
     Query(query): Query<NotificationHistoryQuery>,
 ) -> Result<Json<Vec<NotificationHistoryResponse>>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let engine = get_notification_engine(&state);
+    let tenant_rule_ids: HashSet<Uuid> = engine
+        .get_rules()
+        .await
+        .into_iter()
+        .filter(|rule| rule.tenant_id == tenant_id)
+        .map(|rule| rule.id)
+        .collect();
     let limit = query.limit.min(1000);
-    let history = engine.get_history(Some(limit)).await;
+    let history = engine
+        .get_history(Some(limit))
+        .await
+        .into_iter()
+        .filter(|entry| tenant_rule_ids.contains(&entry.rule_id))
+        .collect::<Vec<_>>();
     let response: Vec<NotificationHistoryResponse> = history
         .into_iter()
         .map(NotificationHistoryResponse::from)
@@ -2252,7 +2503,7 @@ mod tests {
 
         assert_eq!(
             updated.config.get("webhook_url").unwrap().as_str(),
-            Some("https://hooks.slack.com/new")
+            Some(REDACTED_SECRET)
         );
     }
 
@@ -2477,7 +2728,7 @@ mod tests {
 
         assert_eq!(
             channel.config.get("auth_header").unwrap().as_str(),
-            Some("Bearer token123")
+            Some(REDACTED_SECRET)
         );
     }
 

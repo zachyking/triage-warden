@@ -606,6 +606,9 @@ pub struct EditNotificationChannel {
     pub integration_key: String,
     pub pd_severity: String,
     pub auth_header: String,
+    pub has_webhook_url: bool,
+    pub has_integration_key: bool,
+    pub has_auth_header: bool,
 }
 
 impl EditNotificationChannel {
@@ -625,6 +628,9 @@ impl EditNotificationChannel {
                 .unwrap_or("")
                 .to_string()
         };
+        let webhook_url = get_config("webhook_url");
+        let integration_key = get_config("integration_key");
+        let auth_header = get_config("auth_header");
 
         Self {
             id,
@@ -637,14 +643,17 @@ impl EditNotificationChannel {
             has_playbook_failed: events.iter().any(|e| e == "playbook_failed"),
             has_connector_error: events.iter().any(|e| e == "connector_error"),
             has_system_health: events.iter().any(|e| e == "system_health"),
-            webhook_url: get_config("webhook_url"),
+            webhook_url: String::new(),
             channel_name: get_config("channel"),
             recipients: get_config("recipients"),
             smtp_host: get_config("smtp_host"),
             smtp_port: get_config("smtp_port"),
-            integration_key: get_config("integration_key"),
+            integration_key: String::new(),
             pd_severity: get_config("severity"),
-            auth_header: get_config("auth_header"),
+            auth_header: String::new(),
+            has_webhook_url: !webhook_url.is_empty(),
+            has_integration_key: !integration_key.is_empty(),
+            has_auth_header: !auth_header.is_empty(),
             config,
             events,
         }

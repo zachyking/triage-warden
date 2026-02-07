@@ -20,6 +20,7 @@ use tw_core::{
 
 use crate::auth::RequireAdmin;
 use crate::error::ApiError;
+use crate::middleware::OptionalTenant;
 use crate::state::AppState;
 
 /// Creates the user management routes.
@@ -135,19 +136,26 @@ pub struct PaginatedUsersResponse {
 /// Maximum allowed items per page.
 const MAX_PER_PAGE: u32 = tw_core::db::MAX_PAGE_SIZE;
 
+fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> Uuid {
+    tenant
+        .map(|ctx| ctx.tenant_id)
+        .unwrap_or(tw_core::auth::DEFAULT_TENANT_ID)
+}
+
 /// Lists all users with pagination.
 async fn list_users(
     State(state): State<AppState>,
     RequireAdmin(_admin): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     Query(query): Query<ListUsersQuery>,
 ) -> Result<Json<PaginatedUsersResponse>, ApiError> {
     // Validate and clamp pagination parameters
     let page = query.page.max(1);
     let per_page = query.per_page.clamp(1, MAX_PER_PAGE);
+    let tenant_id = tenant_id_or_default(tenant);
 
-    // TODO: Task 1.4.1 - Get tenant_id from TenantContext middleware
     let filter = UserFilter {
-        tenant_id: None, // Will be set by tenant middleware
+        tenant_id: Some(tenant_id),
         role: query.role.as_deref().and_then(|r| r.parse().ok()),
         enabled: query.enabled,
         search: query.search,
@@ -183,9 +191,11 @@ async fn list_users(
 async fn create_user(
     State(state): State<AppState>,
     RequireAdmin(admin): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     Json(request): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<UserResponse>), ApiError> {
     request.validate()?;
+    let tenant_id = tenant_id_or_default(tenant);
 
     // Validate password strength
     let password_errors = validate_password_strength(&request.password);
@@ -215,12 +225,17 @@ async fn create_user(
 
     // Create user
     let mut user = User::new(&request.email, &request.username, password_hash, role);
+    user.tenant_id = tenant_id;
     user.display_name = request.display_name;
 
     let user_repo = create_user_repository(&state.db);
 
     // Check for existing email/username
-    if user_repo.get_by_email(&request.email).await?.is_some() {
+    if user_repo
+        .get_by_email_for_tenant(&request.email, tenant_id)
+        .await?
+        .is_some()
+    {
         return Err(ApiError::validation_field(
             "email",
             "already_exists",
@@ -228,7 +243,7 @@ async fn create_user(
         ));
     }
     if user_repo
-        .get_by_username(&request.username)
+        .get_by_username_for_tenant(&request.username, tenant_id)
         .await?
         .is_some()
     {
@@ -253,11 +268,13 @@ async fn create_user(
 async fn get_user(
     State(state): State<AppState>,
     RequireAdmin(_admin): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<Json<UserResponse>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let user_repo = create_user_repository(&state.db);
     let user = user_repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("User {} not found", id)))?;
 
@@ -268,16 +285,18 @@ async fn get_user(
 async fn update_user(
     State(state): State<AppState>,
     RequireAdmin(admin): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
     Json(request): Json<UpdateUserRequest>,
 ) -> Result<Json<UserResponse>, ApiError> {
     request.validate()?;
+    let tenant_id = tenant_id_or_default(tenant);
 
     let user_repo = create_user_repository(&state.db);
 
     // Check user exists
     let existing = user_repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("User {} not found", id)))?;
 
@@ -304,12 +323,22 @@ async fn update_user(
 
     // Check for email/username conflicts
     if let Some(email) = &request.email {
-        if email != &existing.email && user_repo.get_by_email(email).await?.is_some() {
+        if email != &existing.email
+            && user_repo
+                .get_by_email_for_tenant(email, tenant_id)
+                .await?
+                .is_some()
+        {
             return Err(ApiError::Conflict("Email already in use".to_string()));
         }
     }
     if let Some(username) = &request.username {
-        if username != &existing.username && user_repo.get_by_username(username).await?.is_some() {
+        if username != &existing.username
+            && user_repo
+                .get_by_username_for_tenant(username, tenant_id)
+                .await?
+                .is_some()
+        {
             return Err(ApiError::Conflict("Username already in use".to_string()));
         }
     }
@@ -322,7 +351,7 @@ async fn update_user(
         enabled: request.enabled,
     };
 
-    let updated_user = user_repo.update(id, &update).await?;
+    let updated_user = user_repo.update_for_tenant(id, tenant_id, &update).await?;
 
     info!(
         "User updated by {}: {} ({})",
@@ -336,8 +365,10 @@ async fn update_user(
 async fn delete_user(
     State(state): State<AppState>,
     RequireAdmin(admin): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     // Prevent admin from deleting themselves
     if admin.id == id {
         return Err(ApiError::BadRequest(
@@ -349,11 +380,11 @@ async fn delete_user(
 
     // Get user for logging
     let user = user_repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("User {} not found", id)))?;
 
-    let deleted = user_repo.delete(id).await?;
+    let deleted = user_repo.delete_for_tenant(id, tenant_id).await?;
     if !deleted {
         return Err(ApiError::NotFound(format!("User {} not found", id)));
     }
@@ -367,10 +398,12 @@ async fn delete_user(
 async fn reset_password(
     State(state): State<AppState>,
     RequireAdmin(admin): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
     Json(request): Json<ResetPasswordRequest>,
 ) -> Result<StatusCode, ApiError> {
     request.validate()?;
+    let tenant_id = tenant_id_or_default(tenant);
 
     // Validate password strength
     let password_errors = validate_password_strength(&request.password);
@@ -382,7 +415,7 @@ async fn reset_password(
 
     // Get user for logging
     let user = user_repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("User {} not found", id)))?;
 
@@ -390,7 +423,9 @@ async fn reset_password(
     let password_hash = hash_password(&request.password)
         .map_err(|e| ApiError::Internal(format!("Failed to hash password: {}", e)))?;
 
-    user_repo.update_password(id, &password_hash).await?;
+    user_repo
+        .update_password_for_tenant(id, tenant_id, &password_hash)
+        .await?;
 
     info!(
         "Password reset by {} for user: {}",

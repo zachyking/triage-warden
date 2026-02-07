@@ -9,14 +9,23 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::auth::RequireAnalyst;
 use crate::error::ApiError;
+use crate::middleware::OptionalTenant;
 use crate::state::AppState;
+use tw_core::db::{create_incident_repository, create_settings_repository, IncidentRepository};
 use tw_core::hunting::{
-    Finding, HuntResult, HuntSchedule, HuntStatus, HuntType, HuntingHunt, HuntingQuery, QueryType,
+    Finding, HuntExecutor, HuntResult, HuntSchedule, HuntStatus, HuntType, HuntingHunt,
+    HuntingQuery, QueryType,
 };
+use tw_core::incident::{Alert, AlertSource, Incident, Severity};
+
+const HUNTS_SETTINGS_KEY: &str = "hunting_hunts_v1";
+const HUNT_RESULTS_SETTINGS_KEY: &str = "hunting_results_v1";
 
 // ============================================================================
 // DTOs
@@ -295,29 +304,132 @@ fn result_to_response(r: &HuntResult) -> HuntResultResponse {
     }
 }
 
+fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> Uuid {
+    tenant
+        .map(|ctx| ctx.tenant_id)
+        .unwrap_or(tw_core::auth::DEFAULT_TENANT_ID)
+}
+
+async fn load_hunts(state: &AppState, tenant_id: Uuid) -> Result<Vec<HuntingHunt>, ApiError> {
+    let repo = create_settings_repository(&state.db, state.encryptor.clone());
+    let raw = repo
+        .get_raw(tenant_id, HUNTS_SETTINGS_KEY)
+        .await
+        .map_err(ApiError::from)?;
+
+    match raw {
+        Some(raw) => serde_json::from_str(&raw)
+            .map_err(|e| ApiError::Internal(format!("Failed to parse stored hunts: {}", e))),
+        None => Ok(vec![]),
+    }
+}
+
+async fn save_hunts(
+    state: &AppState,
+    tenant_id: Uuid,
+    hunts: &[HuntingHunt],
+) -> Result<(), ApiError> {
+    let repo = create_settings_repository(&state.db, state.encryptor.clone());
+    let serialized = serde_json::to_string(hunts)
+        .map_err(|e| ApiError::Internal(format!("Failed to serialize hunts: {}", e)))?;
+    repo.save_raw(tenant_id, HUNTS_SETTINGS_KEY, &serialized)
+        .await
+        .map_err(ApiError::from)
+}
+
+async fn load_hunt_results(state: &AppState, tenant_id: Uuid) -> Result<Vec<HuntResult>, ApiError> {
+    let repo = create_settings_repository(&state.db, state.encryptor.clone());
+    let raw = repo
+        .get_raw(tenant_id, HUNT_RESULTS_SETTINGS_KEY)
+        .await
+        .map_err(ApiError::from)?;
+
+    match raw {
+        Some(raw) => serde_json::from_str(&raw)
+            .map_err(|e| ApiError::Internal(format!("Failed to parse stored hunt results: {}", e))),
+        None => Ok(vec![]),
+    }
+}
+
+async fn save_hunt_results(
+    state: &AppState,
+    tenant_id: Uuid,
+    results: &[HuntResult],
+) -> Result<(), ApiError> {
+    let repo = create_settings_repository(&state.db, state.encryptor.clone());
+    let serialized = serde_json::to_string(results)
+        .map_err(|e| ApiError::Internal(format!("Failed to serialize hunt results: {}", e)))?;
+    repo.save_raw(tenant_id, HUNT_RESULTS_SETTINGS_KEY, &serialized)
+        .await
+        .map_err(ApiError::from)
+}
+
+fn parse_finding_severity_to_incident(severity: &str) -> Severity {
+    match severity.to_ascii_lowercase().as_str() {
+        "critical" => Severity::Critical,
+        "high" => Severity::High,
+        "medium" => Severity::Medium,
+        "low" => Severity::Low,
+        _ => Severity::Info,
+    }
+}
+
 // ============================================================================
 // Route handler functions
 // ============================================================================
 
 /// GET /api/v1/hunts - List all hunts
 async fn list_hunts(
-    State(_state): State<AppState>,
-    Query(_params): Query<ListHuntsQuery>,
+    State(state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
+    Query(params): Query<ListHuntsQuery>,
 ) -> Result<Json<Vec<HuntResponse>>, ApiError> {
-    // In a full implementation, this would query the database.
-    // For now, return an empty list (the structure is wired up for DB integration).
-    Ok(Json(vec![]))
+    let tenant_id = tenant_id_or_default(tenant);
+    let mut hunts = load_hunts(&state, tenant_id).await?;
+
+    if let Some(status) = &params.status {
+        let wanted = parse_hunt_status(status);
+        hunts.retain(|h| h.status == wanted);
+    }
+    if let Some(hunt_type) = &params.hunt_type {
+        let wanted = parse_hunt_type(hunt_type);
+        hunts.retain(|h| h.hunt_type == wanted);
+    }
+    if let Some(tag) = &params.tag {
+        let tag = tag.to_ascii_lowercase();
+        hunts.retain(|h| h.tags.iter().any(|t| t.to_ascii_lowercase() == tag));
+    }
+
+    hunts.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+
+    let page = params.page.unwrap_or(1).max(1);
+    let page_size = params.page_size.unwrap_or(50).clamp(1, 200);
+    let start = ((page - 1) as usize) * (page_size as usize);
+
+    let response = hunts
+        .into_iter()
+        .skip(start)
+        .take(page_size as usize)
+        .map(|h| hunt_to_response(&h))
+        .collect::<Vec<_>>();
+
+    Ok(Json(response))
 }
 
 /// POST /api/v1/hunts - Create a new hunt
 async fn create_hunt(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
+    RequireAnalyst(user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Json(request): Json<CreateHuntRequest>,
 ) -> Result<(StatusCode, Json<HuntResponse>), ApiError> {
-    if request.name.is_empty() {
+    let tenant_id = tenant_id_or_default(tenant);
+
+    if request.name.trim().is_empty() {
         return Err(ApiError::BadRequest("Hunt name is required".to_string()));
     }
-    if request.hypothesis.is_empty() {
+    if request.hypothesis.trim().is_empty() {
         return Err(ApiError::BadRequest(
             "Hunt hypothesis is required".to_string(),
         ));
@@ -364,25 +476,45 @@ async fn create_hunt(
     if let Some(enabled) = request.enabled {
         hunt = hunt.with_enabled(enabled);
     }
+    hunt = hunt
+        .with_tenant(tenant_id)
+        .with_created_by(user.username.clone());
+    if hunt.enabled && hunt.status == HuntStatus::Draft {
+        hunt.status = HuntStatus::Active;
+    }
 
-    let response = hunt_to_response(&hunt);
-    Ok((StatusCode::CREATED, Json(response)))
+    let mut hunts = load_hunts(&state, tenant_id).await?;
+    hunts.push(hunt.clone());
+    save_hunts(&state, tenant_id, &hunts).await?;
+
+    Ok((StatusCode::CREATED, Json(hunt_to_response(&hunt))))
 }
 
 /// GET /api/v1/hunts/:id - Get hunt details
 async fn get_hunt(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<Json<HuntResponse>, ApiError> {
-    Err(ApiError::NotFound(format!("Hunt {} not found", id)))
+    let tenant_id = tenant_id_or_default(tenant);
+    let hunts = load_hunts(&state, tenant_id).await?;
+    let hunt = hunts
+        .into_iter()
+        .find(|h| h.id == id)
+        .ok_or_else(|| ApiError::NotFound(format!("Hunt {} not found", id)))?;
+    Ok(Json(hunt_to_response(&hunt)))
 }
 
 /// PUT /api/v1/hunts/:id - Update a hunt
 async fn update_hunt(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
     Json(request): Json<UpdateHuntRequest>,
 ) -> Result<Json<HuntResponse>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     // Validate status field if provided
     if let Some(ref status) = request.status {
         let _ = parse_hunt_status(status);
@@ -391,35 +523,151 @@ async fn update_hunt(
     if let Some(ref ht) = request.hunt_type {
         let _ = parse_hunt_type(ht);
     }
-    Err(ApiError::NotFound(format!("Hunt {} not found", id)))
+
+    let mut hunts = load_hunts(&state, tenant_id).await?;
+    let hunt = hunts
+        .iter_mut()
+        .find(|h| h.id == id)
+        .ok_or_else(|| ApiError::NotFound(format!("Hunt {} not found", id)))?;
+
+    if let Some(name) = request.name {
+        if name.trim().is_empty() {
+            return Err(ApiError::BadRequest(
+                "Hunt name cannot be empty".to_string(),
+            ));
+        }
+        hunt.name = name;
+    }
+    if let Some(description) = request.description {
+        hunt.description = description;
+    }
+    if let Some(hypothesis) = request.hypothesis {
+        if hypothesis.trim().is_empty() {
+            return Err(ApiError::BadRequest(
+                "Hunt hypothesis cannot be empty".to_string(),
+            ));
+        }
+        hunt.hypothesis = hypothesis;
+    }
+    if let Some(hunt_type) = request.hunt_type {
+        hunt.hunt_type = parse_hunt_type(&hunt_type);
+    }
+    if let Some(queries) = request.queries {
+        hunt.queries = queries.iter().map(dto_to_query).collect();
+    }
+    if let Some(schedule) = request.schedule {
+        hunt.schedule = Some(HuntSchedule {
+            cron_expression: schedule.cron_expression,
+            timezone: schedule.timezone.unwrap_or_else(|| "UTC".to_string()),
+            max_runtime_secs: schedule.max_runtime_secs.unwrap_or(3600),
+        });
+    }
+    if let Some(mitre_techniques) = request.mitre_techniques {
+        hunt.mitre_techniques = mitre_techniques;
+    }
+    if let Some(data_sources) = request.data_sources {
+        hunt.data_sources = data_sources;
+    }
+    if let Some(tags) = request.tags {
+        hunt.tags = tags;
+    }
+    if let Some(enabled) = request.enabled {
+        hunt.enabled = enabled;
+    }
+    if let Some(status) = request.status {
+        hunt.status = parse_hunt_status(&status);
+    }
+
+    hunt.updated_at = Utc::now();
+
+    let response = hunt_to_response(hunt);
+    save_hunts(&state, tenant_id, &hunts).await?;
+    Ok(Json(response))
 }
 
 /// DELETE /api/v1/hunts/:id - Delete a hunt
 async fn delete_hunt(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    Err(ApiError::NotFound(format!("Hunt {} not found", id)))
+    let tenant_id = tenant_id_or_default(tenant);
+    let mut hunts = load_hunts(&state, tenant_id).await?;
+    let len_before = hunts.len();
+    hunts.retain(|h| h.id != id);
+    if hunts.len() == len_before {
+        return Err(ApiError::NotFound(format!("Hunt {} not found", id)));
+    }
+
+    let mut results = load_hunt_results(&state, tenant_id).await?;
+    results.retain(|r| r.hunt_id != id);
+
+    save_hunts(&state, tenant_id, &hunts).await?;
+    save_hunt_results(&state, tenant_id, &results).await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// POST /api/v1/hunts/:id/execute - Trigger hunt execution
 async fn execute_hunt(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<Json<HuntResultResponse>, ApiError> {
-    Err(ApiError::NotFound(format!("Hunt {} not found", id)))
+    let tenant_id = tenant_id_or_default(tenant);
+    let mut hunts = load_hunts(&state, tenant_id).await?;
+    let hunt = hunts
+        .iter_mut()
+        .find(|h| h.id == id)
+        .ok_or_else(|| ApiError::NotFound(format!("Hunt {} not found", id)))?;
+
+    let executor = HuntExecutor::new();
+    let result = executor.execute(hunt).await;
+
+    hunt.last_run = Some(result.completed_at);
+    hunt.last_result = Some(tw_core::hunting::HuntResultSummary {
+        total_findings: result.total_findings(),
+        critical_findings: result.critical_findings(),
+        executed_at: result.completed_at,
+        duration_secs: result.duration_secs(),
+    });
+    hunt.status = match result.status {
+        tw_core::hunting::ExecutionStatus::Failed => HuntStatus::Failed,
+        _ => HuntStatus::Completed,
+    };
+    hunt.updated_at = Utc::now();
+
+    let mut results = load_hunt_results(&state, tenant_id).await?;
+    results.push(result.clone());
+
+    save_hunts(&state, tenant_id, &hunts).await?;
+    save_hunt_results(&state, tenant_id, &results).await?;
+
+    Ok(Json(result_to_response(&result)))
 }
 
 /// GET /api/v1/hunts/:id/results - Get hunt results/findings
 async fn get_hunt_results(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<HuntResultResponse>>, ApiError> {
-    // In a full implementation, results would be fetched from DB and converted
-    // via result_to_response. For now, return empty for known IDs.
-    let results: Vec<HuntResult> = vec![];
-    let _responses: Vec<HuntResultResponse> = results.iter().map(result_to_response).collect();
-    Err(ApiError::NotFound(format!("Hunt {} not found", id)))
+    let tenant_id = tenant_id_or_default(tenant);
+    let hunts = load_hunts(&state, tenant_id).await?;
+    if !hunts.iter().any(|h| h.id == id) {
+        return Err(ApiError::NotFound(format!("Hunt {} not found", id)));
+    }
+
+    let mut results = load_hunt_results(&state, tenant_id).await?;
+    results.retain(|r| r.hunt_id == id);
+    results.sort_by(|a, b| b.completed_at.cmp(&a.completed_at));
+
+    Ok(Json(
+        results.iter().map(result_to_response).collect::<Vec<_>>(),
+    ))
 }
 
 /// GET /api/v1/hunts/queries/library - List built-in queries
@@ -460,13 +708,77 @@ async fn get_query_library(
 
 /// POST /api/v1/hunts/:id/findings/:finding_id/promote - Promote finding to incident
 async fn promote_finding(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path((hunt_id, finding_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    Err(ApiError::NotFound(format!(
-        "Finding {} in hunt {} not found",
-        finding_id, hunt_id
-    )))
+    let tenant_id = tenant_id_or_default(tenant);
+    let mut results = load_hunt_results(&state, tenant_id).await?;
+
+    let mut found_finding: Option<Finding> = None;
+    for result in &mut results {
+        if result.hunt_id != hunt_id {
+            continue;
+        }
+        if let Some(finding) = result.findings.iter_mut().find(|f| f.id == finding_id) {
+            if finding.promoted_to_incident.is_some() {
+                return Err(ApiError::Conflict(format!(
+                    "Finding {} is already promoted to incident",
+                    finding_id
+                )));
+            }
+            found_finding = Some(finding.clone());
+            break;
+        }
+    }
+
+    let finding = found_finding.ok_or_else(|| {
+        ApiError::NotFound(format!(
+            "Finding {} in hunt {} not found",
+            finding_id, hunt_id
+        ))
+    })?;
+
+    let alert = Alert {
+        id: finding.id.to_string(),
+        source: AlertSource::Custom("hunting".to_string()),
+        alert_type: "hunt_finding".to_string(),
+        severity: parse_finding_severity_to_incident(&finding.severity.to_string()),
+        title: finding.title.clone(),
+        description: Some(finding.description.clone()),
+        data: serde_json::json!({
+            "hunt_id": hunt_id,
+            "finding_id": finding.id,
+            "finding_type": finding.finding_type,
+            "query_id": finding.query_id,
+            "evidence": finding.evidence,
+        }),
+        timestamp: finding.detected_at,
+        tags: vec!["hunting".to_string(), format!("hunt:{}", hunt_id)],
+    };
+
+    let incident = Incident::from_alert_with_tenant(alert, tenant_id);
+    let incident_repo: Box<dyn IncidentRepository> = create_incident_repository(&state.db);
+    let created = incident_repo.create(&incident).await?;
+
+    for result in &mut results {
+        if result.hunt_id != hunt_id {
+            continue;
+        }
+        if let Some(finding) = result.findings.iter_mut().find(|f| f.id == finding_id) {
+            finding.promoted_to_incident = Some(created.id);
+            break;
+        }
+    }
+
+    save_hunt_results(&state, tenant_id, &results).await?;
+
+    Ok(Json(serde_json::json!({
+        "finding_id": finding_id,
+        "incident_id": created.id,
+        "message": "Finding promoted to incident successfully"
+    })))
 }
 
 // ============================================================================

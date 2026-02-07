@@ -30,8 +30,9 @@
           {% if channel.channel_type == "slack" %}
           <div class="form-group">
             <label class="form-label">Slack Webhook URL</label>
-            <input type="url" name="webhook_url" class="form-input" value="{{ channel.webhook_url }}" required>
-            <p class="text-xs text-muted mt-1">Create an incoming webhook in your Slack workspace</p>
+            <input type="url" name="webhook_url" class="form-input"
+                   placeholder="{% if channel.has_webhook_url %}Configured (enter new URL to rotate){% else %}https://hooks.slack.com/services/...{% endif %}">
+            <p class="text-xs text-muted mt-1">Leave blank to keep current webhook URL.</p>
           </div>
           <div class="form-group">
             <label class="form-label">Channel (optional)</label>
@@ -40,8 +41,9 @@
           {% else if channel.channel_type == "teams" %}
           <div class="form-group">
             <label class="form-label">Teams Webhook URL</label>
-            <input type="url" name="webhook_url" class="form-input" value="{{ channel.webhook_url }}" required>
-            <p class="text-xs text-muted mt-1">Configure an incoming webhook connector in your Teams channel</p>
+            <input type="url" name="webhook_url" class="form-input"
+                   placeholder="{% if channel.has_webhook_url %}Configured (enter new URL to rotate){% else %}https://outlook.office.com/webhook/...{% endif %}">
+            <p class="text-xs text-muted mt-1">Leave blank to keep current webhook URL.</p>
           </div>
           {% else if channel.channel_type == "email" %}
           <div class="form-group">
@@ -62,7 +64,9 @@
           {% else if channel.channel_type == "pagerduty" %}
           <div class="form-group">
             <label class="form-label">PagerDuty Integration Key</label>
-            <input type="password" name="integration_key" class="form-input" value="{{ channel.integration_key }}" required>
+            <input type="password" name="integration_key" class="form-input"
+                   placeholder="{% if channel.has_integration_key %}Configured (enter new key to rotate){% else %}Events API v2 Integration Key{% endif %}">
+            <p class="text-xs text-muted mt-1">Leave blank to keep current key.</p>
           </div>
           <div class="form-group">
             <label class="form-label">Severity Mapping</label>
@@ -74,11 +78,15 @@
           {% else %}
           <div class="form-group">
             <label class="form-label">Webhook URL</label>
-            <input type="url" name="webhook_url" class="form-input" value="{{ channel.webhook_url }}" required>
+            <input type="url" name="webhook_url" class="form-input"
+                   placeholder="{% if channel.has_webhook_url %}Configured (enter new URL to rotate){% else %}https://api.example.com/webhook{% endif %}">
+            <p class="text-xs text-muted mt-1">Leave blank to keep current webhook URL.</p>
           </div>
           <div class="form-group">
             <label class="form-label">Authentication Header (optional)</label>
-            <input type="password" name="auth_header" class="form-input" value="{{ channel.auth_header }}">
+            <input type="password" name="auth_header" class="form-input"
+                   placeholder="{% if channel.has_auth_header %}Configured (enter new header to rotate){% else %}Bearer token or API key{% endif %}">
+            <p class="text-xs text-muted mt-1">Leave blank to keep current header.</p>
           </div>
           {% endif %}
         </div>
@@ -142,8 +150,8 @@ function updateEditNotificationFields(type) {
       fields = `
         <div class="form-group">
           <label class="form-label">Slack Webhook URL</label>
-          <input type="url" name="webhook_url" class="form-input" placeholder="https://hooks.slack.com/services/..." required>
-          <p class="text-xs text-muted mt-1">Create an incoming webhook in your Slack workspace</p>
+          <input type="url" name="webhook_url" class="form-input" placeholder="https://hooks.slack.com/services/...">
+          <p class="text-xs text-muted mt-1">Leave blank to keep current webhook URL.</p>
         </div>
         <div class="form-group">
           <label class="form-label">Channel (optional)</label>
@@ -156,8 +164,8 @@ function updateEditNotificationFields(type) {
       fields = `
         <div class="form-group">
           <label class="form-label">Teams Webhook URL</label>
-          <input type="url" name="webhook_url" class="form-input" placeholder="https://outlook.office.com/webhook/..." required>
-          <p class="text-xs text-muted mt-1">Configure an incoming webhook connector in your Teams channel</p>
+          <input type="url" name="webhook_url" class="form-input" placeholder="https://outlook.office.com/webhook/...">
+          <p class="text-xs text-muted mt-1">Leave blank to keep current webhook URL.</p>
         </div>
       `;
       break;
@@ -186,7 +194,8 @@ function updateEditNotificationFields(type) {
       fields = `
         <div class="form-group">
           <label class="form-label">PagerDuty Integration Key</label>
-          <input type="password" name="integration_key" class="form-input" placeholder="Events API v2 Integration Key" required>
+          <input type="password" name="integration_key" class="form-input" placeholder="Enter new key to rotate">
+          <p class="text-xs text-muted mt-1">Leave blank to keep current key.</p>
         </div>
         <div class="form-group">
           <label class="form-label">Severity Mapping</label>
@@ -203,7 +212,8 @@ function updateEditNotificationFields(type) {
       fields = `
         <div class="form-group">
           <label class="form-label">Webhook URL</label>
-          <input type="url" name="webhook_url" class="form-input" placeholder="https://api.example.com/webhook" required>
+          <input type="url" name="webhook_url" class="form-input" placeholder="https://api.example.com/webhook">
+          <p class="text-xs text-muted mt-1">Leave blank to keep current webhook URL.</p>
         </div>
         <div class="form-group">
           <label class="form-label">Authentication Header (optional)</label>
