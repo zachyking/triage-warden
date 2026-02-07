@@ -6,6 +6,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::ToSchema;
@@ -14,7 +15,9 @@ use validator::Validate;
 
 use crate::auth::RequireAnalyst;
 use crate::error::ApiError;
+use crate::middleware::OptionalTenant;
 use crate::state::AppState;
+use tw_core::{AssetSearchParams, AssetStoreError, EntityRef};
 
 /// Creates asset routes.
 pub fn routes() -> Router<AppState> {
@@ -181,60 +184,115 @@ pub struct PaginatedAssetResponse {
 
 /// List assets with pagination and filters.
 async fn list_assets(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Query(query): Query<ListAssetsQuery>,
 ) -> Result<Json<PaginatedAssetResponse>, ApiError> {
     query.validate()?;
 
-    // In a full implementation, this would use AssetStore from AppState.
-    // For now, return an empty paginated response.
+    let tenant_id = tenant_id_or_default(tenant);
     let page = query.page.unwrap_or(1);
     let per_page = query.per_page.unwrap_or(20);
+    let offset = ((page - 1) * per_page) as usize;
+
+    let parsed_asset_type = query
+        .asset_type
+        .as_deref()
+        .map(parse_asset_type)
+        .transpose()?;
+    let parsed_criticality = query
+        .criticality
+        .as_deref()
+        .map(parse_criticality)
+        .transpose()?;
+    let parsed_environment = query
+        .environment
+        .as_deref()
+        .map(parse_environment)
+        .transpose()?;
+
+    let filtered_total = state
+        .asset_store
+        .search(
+            tenant_id,
+            &AssetSearchParams {
+                name: query.name.clone(),
+                asset_type: parsed_asset_type.clone(),
+                criticality: parsed_criticality,
+                environment: parsed_environment.clone(),
+                tag: None,
+                limit: None,
+                offset: None,
+            },
+        )
+        .await
+        .map_err(map_asset_store_error)?
+        .len() as u64;
+
+    let assets = state
+        .asset_store
+        .search(
+            tenant_id,
+            &AssetSearchParams {
+                name: query.name,
+                asset_type: parsed_asset_type,
+                criticality: parsed_criticality,
+                environment: parsed_environment,
+                tag: None,
+                limit: Some(per_page as usize),
+                offset: Some(offset),
+            },
+        )
+        .await
+        .map_err(map_asset_store_error)?;
+
+    let total_pages = if filtered_total == 0 {
+        0
+    } else {
+        ((filtered_total as f64) / (per_page as f64)).ceil() as u32
+    };
 
     Ok(Json(PaginatedAssetResponse {
-        data: vec![],
+        data: assets.iter().map(asset_to_response).collect(),
         page,
         per_page,
-        total_items: 0,
-        total_pages: 0,
+        total_items: filtered_total,
+        total_pages,
     }))
 }
 
 /// Create a new asset.
 async fn create_asset(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Json(request): Json<CreateAssetRequest>,
 ) -> Result<(StatusCode, Json<AssetResponse>), ApiError> {
     request.validate()?;
 
-    let asset_type = parse_asset_type(&request.asset_type)?;
-    let criticality = parse_criticality(&request.criticality)?;
-    let environment = parse_environment(&request.environment)?;
+    let tenant_id = tenant_id_or_default(tenant);
+    let asset = build_asset_from_request(tenant_id, &request)?;
 
-    let tenant_id = tw_core::auth::DEFAULT_TENANT_ID;
-    let mut asset = tw_core::models::Asset::new(
-        tenant_id,
-        request.name,
-        asset_type,
-        criticality,
-        environment,
-    );
-    asset.team = request.team;
-    asset.tags = request.tags;
-    if let Some(metadata) = request.metadata {
-        asset.metadata = metadata;
+    for identifier in &asset.identifiers {
+        let existing = state
+            .asset_store
+            .find_by_identifier(tenant_id, &identifier.identifier_type, &identifier.value)
+            .await
+            .map_err(map_asset_store_error)?;
+        if let Some(existing_asset) = existing {
+            return Err(ApiError::Conflict(format!(
+                "Asset '{}' already has identifier {}={}",
+                existing_asset.name, identifier.identifier_type, identifier.value
+            )));
+        }
     }
 
-    for id_input in &request.identifiers {
-        let id_type = parse_identifier_type(&id_input.identifier_type)?;
-        asset.add_identifier(tw_core::models::AssetIdentifier::new(
-            id_type,
-            id_input.value.clone(),
-            id_input.source.clone(),
-        ));
-    }
+    state
+        .asset_store
+        .create(&asset)
+        .await
+        .map_err(map_asset_store_error)?;
 
     let response = asset_to_response(&asset);
     Ok((StatusCode::CREATED, Json(response)))
@@ -242,52 +300,140 @@ async fn create_asset(
 
 /// Get asset by ID.
 async fn get_asset(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<Json<AssetResponse>, ApiError> {
-    Err(ApiError::NotFound(format!("Asset {} not found", id)))
+    let tenant_id = tenant_id_or_default(tenant);
+    let asset = state
+        .asset_store
+        .find_by_id(tenant_id, id)
+        .await
+        .map_err(map_asset_store_error)?
+        .ok_or_else(|| ApiError::NotFound(format!("Asset {} not found", id)))?;
+
+    Ok(Json(asset_to_response(&asset)))
 }
 
 /// Update an asset.
 async fn update_asset(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
     Json(request): Json<UpdateAssetRequest>,
 ) -> Result<Json<AssetResponse>, ApiError> {
     request.validate()?;
-    Err(ApiError::NotFound(format!("Asset {} not found", id)))
+
+    let tenant_id = tenant_id_or_default(tenant);
+    let mut asset = state
+        .asset_store
+        .find_by_id(tenant_id, id)
+        .await
+        .map_err(map_asset_store_error)?
+        .ok_or_else(|| ApiError::NotFound(format!("Asset {} not found", id)))?;
+
+    if let Some(name) = request.name {
+        asset.name = name;
+    }
+    if let Some(criticality) = request.criticality {
+        asset.criticality = parse_criticality(&criticality)?;
+    }
+    if let Some(environment) = request.environment {
+        asset.environment = parse_environment(&environment)?;
+    }
+    if let Some(team) = request.team {
+        asset.team = Some(team);
+    }
+    if let Some(tags) = request.tags {
+        asset.tags = tags;
+    }
+    if let Some(metadata) = request.metadata {
+        asset.metadata = metadata;
+    }
+    asset.updated_at = Utc::now();
+
+    state
+        .asset_store
+        .update(&asset)
+        .await
+        .map_err(map_asset_store_error)?;
+
+    Ok(Json(asset_to_response(&asset)))
 }
 
 /// Delete an asset.
 async fn delete_asset(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    Err(ApiError::NotFound(format!("Asset {} not found", id)))
+    let tenant_id = tenant_id_or_default(tenant);
+    let deleted = state
+        .asset_store
+        .delete(tenant_id, id)
+        .await
+        .map_err(map_asset_store_error)?;
+
+    if deleted {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::NotFound(format!("Asset {} not found", id)))
+    }
 }
 
 /// Get relationships for an asset.
 async fn get_relationships(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<RelationshipResponse>>, ApiError> {
-    // Return empty for now - will be connected to RelationshipStore
-    let _ = id;
-    Ok(Json(vec![]))
+    let tenant_id = tenant_id_or_default(tenant);
+    let _asset = state
+        .asset_store
+        .find_by_id(tenant_id, id)
+        .await
+        .map_err(map_asset_store_error)?
+        .ok_or_else(|| ApiError::NotFound(format!("Asset {} not found", id)))?;
+
+    let relationships = state
+        .relationship_store
+        .find_relationships(tenant_id, &EntityRef::asset(id), None)
+        .await
+        .map_err(map_asset_store_error)?;
+
+    let response = relationships
+        .into_iter()
+        .map(|rel| RelationshipResponse {
+            id: rel.id,
+            source_entity_type: format!("{}", rel.source_entity.entity_type),
+            source_entity_id: rel.source_entity.id,
+            target_entity_type: format!("{}", rel.target_entity.entity_type),
+            target_entity_id: rel.target_entity.id,
+            relationship_type: format!("{}", rel.relationship_type),
+            strength: rel.strength,
+            evidence: rel.evidence,
+            first_seen: rel.first_seen,
+            last_seen: rel.last_seen,
+        })
+        .collect();
+
+    Ok(Json(response))
 }
 
 /// Bulk import assets.
 async fn bulk_import(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Json(request): Json<BulkImportRequest>,
 ) -> Result<(StatusCode, Json<BulkImportResponse>), ApiError> {
     request.validate()?;
 
+    let tenant_id = tenant_id_or_default(tenant);
     let mut created = 0u32;
     let mut errors = 0u32;
     let mut error_details = Vec::new();
@@ -298,18 +444,51 @@ async fn bulk_import(
             error_details.push(format!("Asset [{}]: {}", i, e));
             continue;
         }
-        if parse_asset_type(&asset_req.asset_type).is_err()
-            || parse_criticality(&asset_req.criticality).is_err()
-            || parse_environment(&asset_req.environment).is_err()
-        {
-            errors += 1;
-            error_details.push(format!(
-                "Asset [{}]: invalid type/criticality/environment",
-                i
-            ));
+        let asset = match build_asset_from_request(tenant_id, asset_req) {
+            Ok(asset) => asset,
+            Err(e) => {
+                errors += 1;
+                error_details.push(format!("Asset [{}]: {}", i, e));
+                continue;
+            }
+        };
+
+        let mut duplicate = false;
+        for identifier in &asset.identifiers {
+            match state
+                .asset_store
+                .find_by_identifier(tenant_id, &identifier.identifier_type, &identifier.value)
+                .await
+            {
+                Ok(Some(existing_asset)) => {
+                    errors += 1;
+                    error_details.push(format!(
+                        "Asset [{}]: duplicate identifier {}={} already used by '{}'",
+                        i, identifier.identifier_type, identifier.value, existing_asset.name
+                    ));
+                    duplicate = true;
+                    break;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    errors += 1;
+                    error_details.push(format!("Asset [{}]: {}", i, map_asset_store_error(e)));
+                    duplicate = true;
+                    break;
+                }
+            }
+        }
+        if duplicate {
             continue;
         }
-        created += 1;
+
+        match state.asset_store.create(&asset).await {
+            Ok(_) => created += 1,
+            Err(e) => {
+                errors += 1;
+                error_details.push(format!("Asset [{}]: {}", i, map_asset_store_error(e)));
+            }
+        }
     }
 
     Ok((
@@ -325,6 +504,53 @@ async fn bulk_import(
 // ============================================================================
 // Helpers
 // ============================================================================
+
+fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> Uuid {
+    tenant
+        .map(|ctx| ctx.tenant_id)
+        .unwrap_or(tw_core::auth::DEFAULT_TENANT_ID)
+}
+
+fn map_asset_store_error(error: AssetStoreError) -> ApiError {
+    match error {
+        AssetStoreError::NotFound(msg) => ApiError::NotFound(msg),
+        AssetStoreError::Duplicate(msg) => ApiError::Conflict(msg),
+        AssetStoreError::Internal(msg) => ApiError::Internal(msg),
+    }
+}
+
+fn build_asset_from_request(
+    tenant_id: Uuid,
+    request: &CreateAssetRequest,
+) -> Result<tw_core::models::Asset, ApiError> {
+    let asset_type = parse_asset_type(&request.asset_type)?;
+    let criticality = parse_criticality(&request.criticality)?;
+    let environment = parse_environment(&request.environment)?;
+
+    let mut asset = tw_core::models::Asset::new(
+        tenant_id,
+        request.name.clone(),
+        asset_type,
+        criticality,
+        environment,
+    );
+    asset.team = request.team.clone();
+    asset.tags = request.tags.clone();
+    if let Some(metadata) = &request.metadata {
+        asset.metadata = metadata.clone();
+    }
+
+    for id_input in &request.identifiers {
+        let id_type = parse_identifier_type(&id_input.identifier_type)?;
+        asset.add_identifier(tw_core::models::AssetIdentifier::new(
+            id_type,
+            id_input.value.clone(),
+            id_input.source.clone(),
+        ));
+    }
+
+    Ok(asset)
+}
 
 fn asset_to_response(asset: &tw_core::models::Asset) -> AssetResponse {
     AssetResponse {

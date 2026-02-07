@@ -21,6 +21,7 @@ use tw_core::{
 
 use crate::auth::AuthenticatedUser;
 use crate::error::ApiError;
+use crate::middleware::OptionalTenant;
 use crate::state::AppState;
 
 /// Creates the API key management routes.
@@ -95,9 +96,13 @@ pub struct CreateApiKeyRequest {
 async fn list_api_keys(
     State(state): State<AppState>,
     AuthenticatedUser(user): AuthenticatedUser,
+    OptionalTenant(tenant): OptionalTenant,
 ) -> Result<Json<Vec<ApiKeyResponse>>, ApiError> {
+    let tenant_id = tenant.map(|ctx| ctx.tenant_id).unwrap_or(DEFAULT_TENANT_ID);
     let api_key_repo = create_api_key_repository(&state.db);
-    let keys = api_key_repo.list_by_user(user.id).await?;
+    let keys = api_key_repo
+        .list_by_user_for_tenant(user.id, tenant_id)
+        .await?;
 
     let responses: Vec<ApiKeyResponse> = keys.into_iter().map(Into::into).collect();
     Ok(Json(responses))
@@ -107,6 +112,7 @@ async fn list_api_keys(
 async fn create_api_key(
     State(state): State<AppState>,
     AuthenticatedUser(user): AuthenticatedUser,
+    OptionalTenant(tenant): OptionalTenant,
     Json(request): Json<CreateApiKeyRequest>,
 ) -> Result<(StatusCode, Json<CreateApiKeyResponse>), ApiError> {
     request.validate()?;
@@ -141,6 +147,8 @@ async fn create_api_key(
         ));
     }
 
+    let tenant_id = tenant.map(|ctx| ctx.tenant_id).unwrap_or(DEFAULT_TENANT_ID);
+
     // Create the API key
     let (mut api_key, raw_key) = ApiKey::new(user.id, &request.name, request.scopes.clone());
 
@@ -150,7 +158,7 @@ async fn create_api_key(
     }
 
     let api_key_repo = create_api_key_repository(&state.db);
-    let created_key = api_key_repo.create(DEFAULT_TENANT_ID, &api_key).await?;
+    let created_key = api_key_repo.create(tenant_id, &api_key).await?;
 
     info!(
         "API key created by {}: {} (prefix: {})",
@@ -170,11 +178,13 @@ async fn create_api_key(
 async fn get_api_key(
     State(state): State<AppState>,
     AuthenticatedUser(user): AuthenticatedUser,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ApiKeyResponse>, ApiError> {
+    let tenant_id = tenant.map(|ctx| ctx.tenant_id).unwrap_or(DEFAULT_TENANT_ID);
     let api_key_repo = create_api_key_repository(&state.db);
     let key = api_key_repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("API key {} not found", id)))?;
 
@@ -192,13 +202,15 @@ async fn get_api_key(
 async fn revoke_api_key(
     State(state): State<AppState>,
     AuthenticatedUser(user): AuthenticatedUser,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
+    let tenant_id = tenant.map(|ctx| ctx.tenant_id).unwrap_or(DEFAULT_TENANT_ID);
     let api_key_repo = create_api_key_repository(&state.db);
 
     // Get the key to verify ownership
     let key = api_key_repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("API key {} not found", id)))?;
 
@@ -209,7 +221,7 @@ async fn revoke_api_key(
         ));
     }
 
-    let deleted = api_key_repo.delete(id).await?;
+    let deleted = api_key_repo.delete_for_tenant(id, tenant_id).await?;
     if !deleted {
         return Err(ApiError::NotFound(format!("API key {} not found", id)));
     }

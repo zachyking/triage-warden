@@ -12,16 +12,44 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::OnceLock;
+use tokio::sync::RwLock;
 use utoipa::ToSchema;
 use uuid::Uuid;
 use validator::Validate;
 
+use crate::auth::{RequireAdmin, RequireAnalyst};
 use crate::error::ApiError;
+use crate::middleware::OptionalTenant;
 use crate::state::AppState;
 
 use tw_core::autonomy::{
     AutonomyAuditEntry, AutonomyConfig, AutonomyDecision, AutonomyLevel, TimeBasedRule,
 };
+
+static AUTONOMY_CONFIGS: OnceLock<RwLock<HashMap<Uuid, AutonomyConfig>>> = OnceLock::new();
+static AUTONOMY_AUDIT_LOG: OnceLock<RwLock<Vec<AutonomyAuditEntry>>> = OnceLock::new();
+
+fn autonomy_configs() -> &'static RwLock<HashMap<Uuid, AutonomyConfig>> {
+    AUTONOMY_CONFIGS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn autonomy_audit_log() -> &'static RwLock<Vec<AutonomyAuditEntry>> {
+    AUTONOMY_AUDIT_LOG.get_or_init(|| RwLock::new(Vec::new()))
+}
+
+fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> Uuid {
+    tenant
+        .map(|ctx| ctx.tenant_id)
+        .unwrap_or(tw_core::auth::DEFAULT_TENANT_ID)
+}
+
+fn default_config_for_tenant(tenant_id: Uuid) -> AutonomyConfig {
+    AutonomyConfig {
+        tenant_id,
+        ..AutonomyConfig::default()
+    }
+}
 
 // ============================================================================
 // DTOs
@@ -181,19 +209,33 @@ pub fn routes() -> Router<AppState> {
 /// Get the current autonomy configuration.
 async fn get_autonomy_config(
     State(_state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
 ) -> Result<Json<AutonomyConfigResponse>, ApiError> {
-    // In a production system, this would load from a database.
-    // For now, return the default configuration.
-    let config = AutonomyConfig::default();
+    let tenant_id = tenant_id_or_default(tenant);
+    let configs = autonomy_configs().read().await;
+    let config = configs
+        .get(&tenant_id)
+        .cloned()
+        .unwrap_or_else(|| default_config_for_tenant(tenant_id));
     Ok(Json(config_to_response(&config)))
 }
 
 /// Update the autonomy configuration.
 async fn update_autonomy_config(
     State(_state): State<AppState>,
+    RequireAdmin(user): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     Json(request): Json<UpdateAutonomyConfigRequest>,
 ) -> Result<(StatusCode, Json<AutonomyConfigResponse>), ApiError> {
-    let mut config = AutonomyConfig::default();
+    let tenant_id = tenant_id_or_default(tenant);
+    let mut config = {
+        let configs = autonomy_configs().read().await;
+        configs
+            .get(&tenant_id)
+            .cloned()
+            .unwrap_or_else(|| default_config_for_tenant(tenant_id))
+    };
 
     if let Some(level_str) = &request.default_level {
         config.default_level = parse_autonomy_level(level_str)?;
@@ -247,7 +289,10 @@ async fn update_autonomy_config(
     }
 
     config.updated_at = Utc::now();
-    config.updated_by = "api".to_string();
+    config.updated_by = user.username;
+
+    let mut configs = autonomy_configs().write().await;
+    configs.insert(tenant_id, config.clone());
 
     Ok((StatusCode::OK, Json(config_to_response(&config))))
 }
@@ -255,8 +300,15 @@ async fn update_autonomy_config(
 /// Get the current resolved autonomy level (using defaults).
 async fn get_current_level(
     State(_state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
 ) -> Result<Json<ResolvedLevelResponse>, ApiError> {
-    let config = AutonomyConfig::default();
+    let tenant_id = tenant_id_or_default(tenant);
+    let configs = autonomy_configs().read().await;
+    let config = configs
+        .get(&tenant_id)
+        .cloned()
+        .unwrap_or_else(|| default_config_for_tenant(tenant_id));
     let now = Utc::now();
     let decision = config.resolve_level("default", "medium", &now);
     Ok(Json(decision_to_response(&decision)))
@@ -265,6 +317,8 @@ async fn get_current_level(
 /// Resolve the autonomy level for a specific action and severity.
 async fn resolve_level(
     State(_state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Json(request): Json<ResolveAutonomyRequest>,
 ) -> Result<Json<ResolvedLevelResponse>, ApiError> {
     if request.action.is_empty() {
@@ -274,22 +328,53 @@ async fn resolve_level(
         return Err(ApiError::BadRequest("Severity is required".to_string()));
     }
 
-    let config = AutonomyConfig::default();
+    let tenant_id = tenant_id_or_default(tenant);
+    let configs = autonomy_configs().read().await;
+    let config = configs
+        .get(&tenant_id)
+        .cloned()
+        .unwrap_or_else(|| default_config_for_tenant(tenant_id));
     let now = Utc::now();
     let decision = config.resolve_level(&request.action, &request.severity, &now);
+    drop(configs);
+
+    let entry = AutonomyAuditEntry::new(
+        tenant_id,
+        Uuid::nil(),
+        request.action.clone(),
+        decision.clone(),
+    );
+    let mut audit = autonomy_audit_log().write().await;
+    audit.push(entry);
+
     Ok(Json(decision_to_response(&decision)))
 }
 
 /// Get the autonomy audit log.
 async fn get_audit_log(
     State(_state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Query(query): Query<AuditQuery>,
 ) -> Result<Json<Vec<AuditEntryResponse>>, ApiError> {
-    // In production, this would query the database.
-    // For now, return an empty list.
-    let _limit = query.limit.unwrap_or(50);
-    let _incident_id = query.incident_id;
-    let entries: Vec<AutonomyAuditEntry> = vec![];
+    let tenant_id = tenant_id_or_default(tenant);
+    let limit = query.limit.unwrap_or(50) as usize;
+    let incident_id = query.incident_id;
+
+    let audit = autonomy_audit_log().read().await;
+    let mut entries: Vec<AutonomyAuditEntry> = audit
+        .iter()
+        .filter(|entry| entry.tenant_id == tenant_id)
+        .filter(|entry| {
+            incident_id
+                .map(|id| entry.incident_id == id)
+                .unwrap_or(true)
+        })
+        .cloned()
+        .collect();
+    entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    entries.truncate(limit);
+
     let responses: Vec<AuditEntryResponse> = entries.iter().map(audit_entry_to_response).collect();
     Ok(Json(responses))
 }

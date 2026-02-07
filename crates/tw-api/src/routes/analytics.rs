@@ -16,6 +16,7 @@ use validator::Validate;
 
 use crate::auth::RequireAnalyst;
 use crate::error::ApiError;
+use crate::middleware::OptionalTenant;
 use crate::state::AppState;
 use tw_core::analytics::{
     AnalystMetrics, Granularity, IncidentMetrics, SecurityPosture, TechniqueCount, TrendDataPoint,
@@ -26,6 +27,10 @@ use tw_core::db::{
     Pagination,
 };
 use tw_core::incident::{IncidentStatus, Severity};
+
+fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> Uuid {
+    tenant.map(|ctx| ctx.tenant_id).unwrap_or(DEFAULT_TENANT_ID)
+}
 
 /// Creates analytics routes.
 pub fn routes() -> Router<AppState> {
@@ -241,14 +246,17 @@ const ALL_STATUSES: &[IncidentStatus] = &[
 async fn get_incident_metrics(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Query(query): Query<IncidentMetricsQuery>,
 ) -> Result<Json<IncidentMetricsResponse>, ApiError> {
     query.validate()?;
+    let tenant_id = tenant_id_or_default(tenant);
 
     let incident_repo = create_incident_repository(&state.db);
 
     // Build base filter with time range
     let base_filter = IncidentFilter {
+        tenant_id: Some(tenant_id),
         since: query.start,
         until: query.end,
         ..Default::default()
@@ -261,6 +269,7 @@ async fn get_incident_metrics(
     let mut by_severity = HashMap::new();
     for severity in ALL_SEVERITIES {
         let filter = IncidentFilter {
+            tenant_id: Some(tenant_id),
             severity: Some(vec![*severity]),
             since: query.start,
             until: query.end,
@@ -276,6 +285,7 @@ async fn get_incident_metrics(
     let mut by_status = HashMap::new();
     for status in ALL_STATUSES {
         let filter = IncidentFilter {
+            tenant_id: Some(tenant_id),
             status: Some(vec![status.clone()]),
             since: query.start,
             until: query.end,
@@ -338,15 +348,17 @@ async fn get_incident_metrics(
 async fn get_analyst_metrics(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Query(query): Query<AnalystMetricsQuery>,
 ) -> Result<Json<AnalystMetricsResponse>, ApiError> {
     query.validate()?;
+    let tenant_id = tenant_id_or_default(tenant);
 
     let feedback_repo = create_feedback_repository(&state.db);
 
     // Build feedback filter for the time range
     let filter = FeedbackFilter {
-        tenant_id: Some(DEFAULT_TENANT_ID),
+        tenant_id: Some(tenant_id),
         analyst_id: query.analyst_id,
         since: query.start,
         until: query.end,
@@ -392,12 +404,15 @@ async fn get_analyst_metrics(
 async fn get_security_posture(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
 ) -> Result<Json<SecurityPostureResponse>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let incident_repo = create_incident_repository(&state.db);
     let feedback_repo = create_feedback_repository(&state.db);
 
     // Count open critical incidents
     let critical_filter = IncidentFilter {
+        tenant_id: Some(tenant_id),
         severity: Some(vec![Severity::Critical]),
         status: Some(OPEN_STATUSES.to_vec()),
         ..Default::default()
@@ -406,6 +421,7 @@ async fn get_security_posture(
 
     // Count open high incidents
     let high_filter = IncidentFilter {
+        tenant_id: Some(tenant_id),
         severity: Some(vec![Severity::High]),
         status: Some(OPEN_STATUSES.to_vec()),
         ..Default::default()
@@ -413,7 +429,7 @@ async fn get_security_posture(
     let open_high = incident_repo.count(&high_filter).await?;
 
     // Get AI accuracy from feedback stats
-    let stats = feedback_repo.get_stats(DEFAULT_TENANT_ID).await?;
+    let stats = feedback_repo.get_stats(tenant_id).await?;
     let ai_accuracy = if stats.total_feedback > 0 {
         Some(stats.accuracy_rate)
     } else {
@@ -433,9 +449,11 @@ async fn get_security_posture(
 async fn get_trends(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Query(query): Query<TrendsQuery>,
 ) -> Result<Json<TrendsResponse>, ApiError> {
     query.validate()?;
+    let tenant_id = tenant_id_or_default(tenant);
 
     let granularity_str = query.granularity.as_deref().unwrap_or("daily");
     let granularity = Granularity::parse(granularity_str).ok_or_else(|| {
@@ -468,6 +486,7 @@ async fn get_trends(
         let bucket_end = (bucket_start + bucket_duration).min(end);
 
         let filter = IncidentFilter {
+            tenant_id: Some(tenant_id),
             since: Some(bucket_start),
             until: Some(bucket_end),
             ..Default::default()
@@ -478,6 +497,7 @@ async fn get_trends(
             "resolution_time" => {
                 // Compute average resolution time for resolved incidents in this bucket
                 let resolved_filter = IncidentFilter {
+                    tenant_id: Some(tenant_id),
                     status: Some(vec![
                         IncidentStatus::Resolved,
                         IncidentStatus::FalsePositive,

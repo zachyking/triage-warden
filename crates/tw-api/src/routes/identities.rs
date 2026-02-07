@@ -6,14 +6,18 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use utoipa::ToSchema;
 use uuid::Uuid;
 use validator::Validate;
 
 use crate::auth::RequireAnalyst;
 use crate::error::ApiError;
+use crate::middleware::OptionalTenant;
 use crate::state::AppState;
+use tw_core::{AssetStoreError, EntityRef, IdentitySearchParams};
 
 /// Creates identity routes.
 pub fn routes() -> Router<AppState> {
@@ -137,34 +141,101 @@ pub struct AssociatedAssetResponse {
 
 /// List identities with pagination and filters.
 async fn list_identities(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Query(query): Query<ListIdentitiesQuery>,
 ) -> Result<Json<PaginatedIdentityResponse>, ApiError> {
     query.validate()?;
 
+    let tenant_id = tenant_id_or_default(tenant);
     let page = query.page.unwrap_or(1);
     let per_page = query.per_page.unwrap_or(20);
+    let offset = ((page - 1) * per_page) as usize;
+    let parsed_identity_type = query
+        .identity_type
+        .as_deref()
+        .map(parse_identity_type)
+        .transpose()?;
+    let parsed_status = query
+        .status
+        .as_deref()
+        .map(parse_identity_status)
+        .transpose()?;
+
+    let filtered_total = state
+        .identity_store
+        .search(
+            tenant_id,
+            &IdentitySearchParams {
+                display_name: query.display_name.clone(),
+                identity_type: parsed_identity_type.clone(),
+                status: parsed_status.clone(),
+                department: query.department.clone(),
+                min_risk_score: query.min_risk_score,
+                limit: None,
+                offset: None,
+            },
+        )
+        .await
+        .map_err(map_asset_store_error)?
+        .len() as u64;
+
+    let identities = state
+        .identity_store
+        .search(
+            tenant_id,
+            &IdentitySearchParams {
+                display_name: query.display_name,
+                identity_type: parsed_identity_type,
+                status: parsed_status,
+                department: query.department,
+                min_risk_score: query.min_risk_score,
+                limit: Some(per_page as usize),
+                offset: Some(offset),
+            },
+        )
+        .await
+        .map_err(map_asset_store_error)?;
+
+    let total_pages = if filtered_total == 0 {
+        0
+    } else {
+        ((filtered_total as f64) / (per_page as f64)).ceil() as u32
+    };
 
     Ok(Json(PaginatedIdentityResponse {
-        data: vec![],
+        data: identities.iter().map(identity_to_response).collect(),
         page,
         per_page,
-        total_items: 0,
-        total_pages: 0,
+        total_items: filtered_total,
+        total_pages,
     }))
 }
 
 /// Create a new identity.
 async fn create_identity(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Json(request): Json<CreateIdentityRequest>,
 ) -> Result<(StatusCode, Json<IdentityResponse>), ApiError> {
     request.validate()?;
 
     let identity_type = parse_identity_type(&request.identity_type)?;
-    let tenant_id = tw_core::auth::DEFAULT_TENANT_ID;
+    let tenant_id = tenant_id_or_default(tenant);
+
+    let existing = state
+        .identity_store
+        .find_by_identifier(tenant_id, &request.primary_identifier)
+        .await
+        .map_err(map_asset_store_error)?;
+    if existing.is_some() {
+        return Err(ApiError::Conflict(format!(
+            "Identity with identifier '{}' already exists",
+            request.primary_identifier
+        )));
+    }
 
     let mut identity = tw_core::models::Identity::new(
         tenant_id,
@@ -179,50 +250,161 @@ async fn create_identity(
         identity.metadata = metadata;
     }
 
+    state
+        .identity_store
+        .create(&identity)
+        .await
+        .map_err(map_asset_store_error)?;
+
     let response = identity_to_response(&identity);
     Ok((StatusCode::CREATED, Json(response)))
 }
 
 /// Get identity by ID.
 async fn get_identity(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<Json<IdentityResponse>, ApiError> {
-    Err(ApiError::NotFound(format!("Identity {} not found", id)))
+    let tenant_id = tenant_id_or_default(tenant);
+    let identity = state
+        .identity_store
+        .find_by_id(tenant_id, id)
+        .await
+        .map_err(map_asset_store_error)?
+        .ok_or_else(|| ApiError::NotFound(format!("Identity {} not found", id)))?;
+
+    Ok(Json(identity_to_response(&identity)))
 }
 
 /// Update an identity.
 async fn update_identity(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
     Json(request): Json<UpdateIdentityRequest>,
 ) -> Result<Json<IdentityResponse>, ApiError> {
     request.validate()?;
 
-    // Validate status if provided
-    if let Some(ref status) = request.status {
-        let _status = parse_identity_status(status)?;
-    }
+    let tenant_id = tenant_id_or_default(tenant);
+    let mut identity = state
+        .identity_store
+        .find_by_id(tenant_id, id)
+        .await
+        .map_err(map_asset_store_error)?
+        .ok_or_else(|| ApiError::NotFound(format!("Identity {} not found", id)))?;
 
-    Err(ApiError::NotFound(format!("Identity {} not found", id)))
+    if let Some(display_name) = request.display_name {
+        identity.display_name = display_name;
+    }
+    if let Some(department) = request.department {
+        identity.department = Some(department);
+    }
+    if let Some(status) = request.status {
+        identity.status = parse_identity_status(&status)?;
+    }
+    if let Some(risk_score) = request.risk_score {
+        identity.set_risk_score(risk_score);
+    }
+    if let Some(groups) = request.groups {
+        identity.groups = groups;
+    }
+    if let Some(permissions) = request.permissions {
+        identity.permissions = permissions;
+    }
+    if let Some(metadata) = request.metadata {
+        identity.metadata = metadata;
+    }
+    identity.updated_at = Utc::now();
+
+    state
+        .identity_store
+        .update(&identity)
+        .await
+        .map_err(map_asset_store_error)?;
+
+    Ok(Json(identity_to_response(&identity)))
 }
 
 /// Get associated assets for an identity.
 async fn get_identity_assets(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<AssociatedAssetResponse>>, ApiError> {
-    // Return empty for now - will be connected to RelationshipStore
-    let _ = id;
-    Ok(Json(vec![]))
+    let tenant_id = tenant_id_or_default(tenant);
+    let identity = state
+        .identity_store
+        .find_by_id(tenant_id, id)
+        .await
+        .map_err(map_asset_store_error)?
+        .ok_or_else(|| ApiError::NotFound(format!("Identity {} not found", id)))?;
+
+    let relationships = state
+        .relationship_store
+        .find_relationships(tenant_id, &EntityRef::identity(id), None)
+        .await
+        .map_err(map_asset_store_error)?;
+
+    let mut relationship_map: HashMap<Uuid, String> = HashMap::new();
+    for relationship in relationships {
+        if relationship.source_entity.id == id {
+            relationship_map.insert(
+                relationship.target_entity.id,
+                format!("{}", relationship.relationship_type),
+            );
+        } else if relationship.target_entity.id == id {
+            relationship_map.insert(
+                relationship.source_entity.id,
+                format!("{}", relationship.relationship_type),
+            );
+        }
+    }
+
+    let mut response = Vec::new();
+    for asset_id in identity.associated_assets {
+        if let Some(asset) = state
+            .asset_store
+            .find_by_id(tenant_id, asset_id)
+            .await
+            .map_err(map_asset_store_error)?
+        {
+            response.push(AssociatedAssetResponse {
+                asset_id: asset.id,
+                asset_name: asset.name,
+                asset_type: format!("{}", asset.asset_type),
+                criticality: format!("{}", asset.criticality),
+                relationship_type: relationship_map
+                    .get(&asset.id)
+                    .cloned()
+                    .unwrap_or_else(|| "Associated".to_string()),
+            });
+        }
+    }
+
+    Ok(Json(response))
 }
 
 // ============================================================================
 // Helpers
 // ============================================================================
+
+fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> Uuid {
+    tenant
+        .map(|ctx| ctx.tenant_id)
+        .unwrap_or(tw_core::auth::DEFAULT_TENANT_ID)
+}
+
+fn map_asset_store_error(error: AssetStoreError) -> ApiError {
+    match error {
+        AssetStoreError::NotFound(msg) => ApiError::NotFound(msg),
+        AssetStoreError::Duplicate(msg) => ApiError::Conflict(msg),
+        AssetStoreError::Internal(msg) => ApiError::Internal(msg),
+    }
+}
 
 fn identity_to_response(identity: &tw_core::models::Identity) -> IdentityResponse {
     IdentityResponse {

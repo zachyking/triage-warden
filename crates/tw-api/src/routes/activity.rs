@@ -12,11 +12,17 @@ use validator::Validate;
 
 use crate::auth::RequireAnalyst;
 use crate::error::ApiError;
+use crate::middleware::OptionalTenant;
 use crate::state::AppState;
-use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::collaboration::activity::{ActivityFilter, ActivityType};
 use tw_core::db::create_activity_repository;
 use tw_core::db::pagination::Pagination;
+
+fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> Uuid {
+    tenant
+        .map(|ctx| ctx.tenant_id)
+        .unwrap_or(tw_core::auth::DEFAULT_TENANT_ID)
+}
 
 /// Creates activity feed routes.
 pub fn routes() -> Router<AppState> {
@@ -76,9 +82,11 @@ pub struct ActivityFeedResponse {
 async fn get_activity_feed(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Query(query): Query<ActivityFeedQuery>,
 ) -> Result<Json<ActivityFeedResponse>, ApiError> {
     query.validate()?;
+    let tenant_id = tenant_id_or_default(tenant);
 
     let activity_types = query
         .activity_types
@@ -106,7 +114,7 @@ async fn get_activity_feed(
     let pagination = Pagination::new((offset / limit) + 1, limit);
     let repo = create_activity_repository(&state.db);
     let result = repo
-        .list(&filter, DEFAULT_TENANT_ID, &pagination)
+        .list(&filter, tenant_id, &pagination)
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to list activity: {}", e)))?;
 
@@ -127,10 +135,12 @@ async fn get_activity_feed(
 async fn get_incident_activity(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
     Query(query): Query<ActivityFeedQuery>,
 ) -> Result<Json<ActivityFeedResponse>, ApiError> {
     query.validate()?;
+    let tenant_id = tenant_id_or_default(tenant);
 
     let activity_types = query
         .activity_types
@@ -158,7 +168,7 @@ async fn get_incident_activity(
     let pagination = Pagination::new((offset / limit) + 1, limit);
     let repo = create_activity_repository(&state.db);
     let result = repo
-        .list(&filter, DEFAULT_TENANT_ID, &pagination)
+        .list(&filter, tenant_id, &pagination)
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to list activity: {}", e)))?;
 

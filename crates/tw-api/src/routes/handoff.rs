@@ -13,6 +13,7 @@ use validator::Validate;
 
 use crate::auth::RequireAnalyst;
 use crate::error::ApiError;
+use crate::middleware::OptionalTenant;
 use crate::state::AppState;
 use tw_core::collaboration::handoff::{IncidentSummary, ShiftHandoff};
 use tw_core::db::{
@@ -26,6 +27,12 @@ pub fn routes() -> Router<AppState> {
         .route("/", post(create_handoff))
         .route("/latest", get(get_latest_handoff))
         .route("/:id", get(get_handoff))
+}
+
+fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> Uuid {
+    tenant
+        .map(|ctx| ctx.tenant_id)
+        .unwrap_or(tw_core::auth::DEFAULT_TENANT_ID)
 }
 
 // ============================================================================
@@ -87,6 +94,7 @@ pub struct HandoffResponse {
 async fn create_handoff(
     State(state): State<AppState>,
     RequireAnalyst(user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Json(request): Json<CreateHandoffApiRequest>,
 ) -> Result<(StatusCode, Json<HandoffResponse>), ApiError> {
     request.validate()?;
@@ -97,7 +105,7 @@ async fn create_handoff(
         ));
     }
 
-    let tenant_id = tw_core::auth::DEFAULT_TENANT_ID;
+    let tenant_id = tenant_id_or_default(tenant);
 
     let mut handoff = ShiftHandoff::new(
         request.shift_start,
@@ -152,8 +160,9 @@ async fn create_handoff(
 async fn get_latest_handoff(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
 ) -> Result<Json<HandoffResponse>, ApiError> {
-    let tenant_id = tw_core::auth::DEFAULT_TENANT_ID;
+    let tenant_id = tenant_id_or_default(tenant);
     let repo = create_handoff_repository(&state.db);
 
     let handoff = repo
@@ -168,9 +177,10 @@ async fn get_latest_handoff(
 async fn get_handoff(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<Json<HandoffResponse>, ApiError> {
-    let tenant_id = tw_core::auth::DEFAULT_TENANT_ID;
+    let tenant_id = tenant_id_or_default(tenant);
     let repo = create_handoff_repository(&state.db);
 
     let handoff = repo

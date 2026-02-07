@@ -8,9 +8,12 @@ use axum::{
     Json, Router,
 };
 use metrics::{counter, describe_counter, describe_histogram, histogram};
+use uuid::Uuid;
 
+use crate::auth::RequireAnalyst;
 use crate::dto::{ActionMetrics, IncidentMetrics, MetricsResponse, PerformanceMetrics};
 use crate::error::ApiError;
+use crate::middleware::OptionalTenant;
 use crate::state::AppState;
 
 /// Creates metrics routes.
@@ -18,6 +21,12 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/metrics", get(prometheus_metrics))
         .route("/api/metrics", get(json_metrics))
+}
+
+fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> Uuid {
+    tenant
+        .map(|ctx| ctx.tenant_id)
+        .unwrap_or(tw_core::auth::DEFAULT_TENANT_ID)
 }
 
 /// Prometheus metrics endpoint.
@@ -63,16 +72,21 @@ pub async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoRespo
     ),
     tag = "Metrics"
 )]
-async fn json_metrics(State(state): State<AppState>) -> Result<Json<MetricsResponse>, ApiError> {
+async fn json_metrics(
+    State(state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
+) -> Result<Json<MetricsResponse>, ApiError> {
     use tw_core::db::create_metrics_repository;
 
+    let tenant_id = tenant_id_or_default(tenant);
     let metrics_repo = create_metrics_repository(&state.db);
 
     // Run all metrics queries in parallel for efficiency
     let (incident_result, action_result, perf_result) = tokio::join!(
-        metrics_repo.get_incident_metrics(),
-        metrics_repo.get_action_metrics(),
-        metrics_repo.get_performance_metrics(),
+        metrics_repo.get_incident_metrics_for_tenant(tenant_id),
+        metrics_repo.get_action_metrics_for_tenant(tenant_id),
+        metrics_repo.get_performance_metrics_for_tenant(tenant_id),
     );
 
     let incident_metrics = incident_result.map_err(|e| {

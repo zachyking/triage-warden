@@ -21,6 +21,7 @@ use crate::dto::{
     PaginationInfo, TrendDataPoint, UpdateFeedbackRequest,
 };
 use crate::error::ApiError;
+use crate::middleware::OptionalTenant;
 use crate::state::AppState;
 use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::db::{
@@ -29,6 +30,10 @@ use tw_core::db::{
 };
 use tw_core::feedback::{AnalystFeedback, FeedbackStats, FeedbackType};
 use tw_core::incident::{Severity, TriageVerdict};
+
+fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> Uuid {
+    tenant.map(|ctx| ctx.tenant_id).unwrap_or(DEFAULT_TENANT_ID)
+}
 
 /// Creates feedback routes.
 pub fn routes() -> Router<AppState> {
@@ -76,17 +81,19 @@ pub fn incident_feedback_routes() -> Router<AppState> {
 async fn create_feedback_for_incident(
     State(state): State<AppState>,
     RequireAnalyst(user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(incident_id): Path<Uuid>,
     Json(request): Json<CreateFeedbackRequest>,
 ) -> Result<(StatusCode, Json<FeedbackResponse>), ApiError> {
     request.validate()?;
+    let tenant_id = tenant_id_or_default(tenant);
 
     let incident_repo: Box<dyn IncidentRepository> = create_incident_repository(&state.db);
     let feedback_repo: Box<dyn FeedbackRepository> = create_feedback_repository(&state.db);
 
     // Get the incident to validate it exists and get analysis data
     let incident = incident_repo
-        .get(incident_id)
+        .get_for_tenant(incident_id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Incident {} not found", incident_id)))?;
 
@@ -119,7 +126,7 @@ async fn create_feedback_for_incident(
     // Build the feedback entry
     let mut feedback = AnalystFeedback::correct(
         incident_id,
-        DEFAULT_TENANT_ID,
+        tenant_id,
         user.id,
         analysis.verdict.clone(),
         incident.severity,
@@ -173,19 +180,21 @@ async fn create_feedback_for_incident(
 async fn get_feedback_for_incident(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(incident_id): Path<Uuid>,
 ) -> Result<Json<Vec<FeedbackResponse>>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let incident_repo: Box<dyn IncidentRepository> = create_incident_repository(&state.db);
     let feedback_repo: Box<dyn FeedbackRepository> = create_feedback_repository(&state.db);
 
     // Verify incident exists
     let _incident = incident_repo
-        .get(incident_id)
+        .get_for_tenant(incident_id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Incident {} not found", incident_id)))?;
 
     let feedback_list = feedback_repo
-        .get_for_incident(DEFAULT_TENANT_ID, incident_id)
+        .get_for_incident(tenant_id, incident_id)
         .await?;
 
     let responses: Vec<FeedbackResponse> = feedback_list
@@ -220,9 +229,11 @@ async fn get_feedback_for_incident(
 async fn list_feedback(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Query(query): Query<ListFeedbackQuery>,
 ) -> Result<Json<PaginatedResponse<FeedbackResponse>>, ApiError> {
     query.validate()?;
+    let tenant_id = tenant_id_or_default(tenant);
 
     let feedback_repo: Box<dyn FeedbackRepository> = create_feedback_repository(&state.db);
 
@@ -237,7 +248,7 @@ async fn list_feedback(
         .and_then(|v| parse_verdict(v).ok());
 
     let filter = FeedbackFilter {
-        tenant_id: Some(DEFAULT_TENANT_ID),
+        tenant_id: Some(tenant_id),
         incident_id: None,
         analyst_id: query.analyst_id,
         feedback_type,
@@ -287,12 +298,14 @@ async fn list_feedback(
 async fn get_feedback(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<Json<FeedbackResponse>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let feedback_repo: Box<dyn FeedbackRepository> = create_feedback_repository(&state.db);
 
     let feedback = feedback_repo
-        .get_for_tenant(id, DEFAULT_TENANT_ID)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Feedback {} not found", id)))?;
 
@@ -318,10 +331,12 @@ async fn get_feedback(
 async fn update_feedback(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
     Json(request): Json<UpdateFeedbackRequest>,
 ) -> Result<Json<FeedbackResponse>, ApiError> {
     request.validate()?;
+    let tenant_id = tenant_id_or_default(tenant);
 
     let feedback_repo: Box<dyn FeedbackRepository> = create_feedback_repository(&state.db);
 
@@ -360,7 +375,7 @@ async fn update_feedback(
         corrected_mitre_techniques: request.corrected_mitre_techniques,
     };
 
-    let updated = feedback_repo.update(id, DEFAULT_TENANT_ID, &update).await?;
+    let updated = feedback_repo.update(id, tenant_id, &update).await?;
 
     Ok(Json(feedback_to_response(updated)))
 }
@@ -382,11 +397,13 @@ async fn update_feedback(
 async fn delete_feedback(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let feedback_repo: Box<dyn FeedbackRepository> = create_feedback_repository(&state.db);
 
-    let deleted = feedback_repo.delete(id, DEFAULT_TENANT_ID).await?;
+    let deleted = feedback_repo.delete(id, tenant_id).await?;
 
     if deleted {
         Ok(StatusCode::NO_CONTENT)
@@ -416,16 +433,18 @@ async fn delete_feedback(
 async fn get_feedback_stats(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Query(query): Query<FeedbackStatsQuery>,
 ) -> Result<Json<FeedbackStatsResponse>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let feedback_repo: Box<dyn FeedbackRepository> = create_feedback_repository(&state.db);
 
     let stats = if let (Some(since), Some(until)) = (query.since, query.until) {
         feedback_repo
-            .get_stats_for_range(DEFAULT_TENANT_ID, since, until)
+            .get_stats_for_range(tenant_id, since, until)
             .await?
     } else {
-        feedback_repo.get_stats(DEFAULT_TENANT_ID).await?
+        feedback_repo.get_stats(tenant_id).await?
     };
 
     Ok(Json(stats_to_response(stats)))
@@ -448,8 +467,10 @@ async fn get_feedback_stats(
 async fn get_accuracy_by_verdict(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Query(query): Query<FeedbackStatsQuery>,
 ) -> Result<Json<AccuracyByDimensionResponse>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let feedback_repo: Box<dyn FeedbackRepository> = create_feedback_repository(&state.db);
 
     // Get stats for each verdict type
@@ -466,7 +487,7 @@ async fn get_accuracy_by_verdict(
 
     for verdict in verdicts {
         let filter = FeedbackFilter {
-            tenant_id: Some(DEFAULT_TENANT_ID),
+            tenant_id: Some(tenant_id),
             original_verdict: Some(verdict.clone()),
             since: query.since,
             until: query.until,
@@ -507,8 +528,10 @@ async fn get_accuracy_by_verdict(
 async fn get_accuracy_by_type(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Query(query): Query<FeedbackStatsQuery>,
 ) -> Result<Json<AccuracyByDimensionResponse>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let feedback_repo: Box<dyn FeedbackRepository> = create_feedback_repository(&state.db);
 
     // Get stats for each feedback type
@@ -525,7 +548,7 @@ async fn get_accuracy_by_type(
 
     for feedback_type in feedback_types {
         let filter = FeedbackFilter {
-            tenant_id: Some(DEFAULT_TENANT_ID),
+            tenant_id: Some(tenant_id),
             feedback_type: Some(feedback_type),
             since: query.since,
             until: query.until,
@@ -567,8 +590,10 @@ async fn get_accuracy_by_type(
 async fn get_accuracy_trends(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Query(query): Query<AccuracyTrendQuery>,
 ) -> Result<Json<AccuracyTrendResponse>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let feedback_repo: Box<dyn FeedbackRepository> = create_feedback_repository(&state.db);
 
     let granularity = query.granularity.as_deref().unwrap_or("week");
@@ -609,7 +634,7 @@ async fn get_accuracy_trends(
 
     // Get all feedback in the range
     let filter = FeedbackFilter {
-        tenant_id: Some(DEFAULT_TENANT_ID),
+        tenant_id: Some(tenant_id),
         since: Some(since),
         until: Some(until),
         ..Default::default()

@@ -10,11 +10,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::RequireAdmin;
 use crate::error::ApiError;
+use crate::middleware::OptionalTenant;
 use crate::state::AppState;
 use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::db::{
     create_settings_repository, GeneralSettings, LlmSettings, RateLimits, SettingsRepository,
 };
+
+fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> uuid::Uuid {
+    tenant.map(|ctx| ctx.tenant_id).unwrap_or(DEFAULT_TENANT_ID)
+}
 
 /// Creates settings routes.
 pub fn routes() -> Router<AppState> {
@@ -91,11 +96,13 @@ pub struct LlmSettingsResponse {
 async fn get_general_settings(
     State(state): State<AppState>,
     RequireAdmin(_user): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
 ) -> Result<Json<GeneralSettingsResponse>, ApiError> {
     let repo: Box<dyn SettingsRepository> =
         create_settings_repository(&state.db, state.encryptor.clone());
 
-    let settings = repo.get_general(DEFAULT_TENANT_ID).await?;
+    let tenant_id = tenant_id_or_default(tenant);
+    let settings = repo.get_general(tenant_id).await?;
 
     Ok(Json(GeneralSettingsResponse {
         org_name: settings.org_name,
@@ -108,6 +115,7 @@ async fn get_general_settings(
 async fn save_general_settings(
     State(state): State<AppState>,
     RequireAdmin(_user): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     Form(form): Form<GeneralSettingsForm>,
 ) -> Result<Response, ApiError> {
     let repo: Box<dyn SettingsRepository> =
@@ -119,7 +127,8 @@ async fn save_general_settings(
         mode: form.mode,
     };
 
-    repo.save_general(DEFAULT_TENANT_ID, &settings).await?;
+    let tenant_id = tenant_id_or_default(tenant);
+    repo.save_general(tenant_id, &settings).await?;
 
     // Return HX-Trigger header for toast notification
     let trigger_json = serde_json::json!({
@@ -144,11 +153,13 @@ async fn save_general_settings(
 async fn get_rate_limits(
     State(state): State<AppState>,
     RequireAdmin(_user): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
 ) -> Result<Json<RateLimitsResponse>, ApiError> {
     let repo: Box<dyn SettingsRepository> =
         create_settings_repository(&state.db, state.encryptor.clone());
 
-    let limits = repo.get_rate_limits(DEFAULT_TENANT_ID).await?;
+    let tenant_id = tenant_id_or_default(tenant);
+    let limits = repo.get_rate_limits(tenant_id).await?;
 
     Ok(Json(RateLimitsResponse {
         isolate_host_hour: limits.isolate_host_hour,
@@ -161,6 +172,7 @@ async fn get_rate_limits(
 async fn save_rate_limits(
     State(state): State<AppState>,
     RequireAdmin(_user): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     Form(form): Form<RateLimitsForm>,
 ) -> Result<Response, ApiError> {
     let repo: Box<dyn SettingsRepository> =
@@ -172,7 +184,8 @@ async fn save_rate_limits(
         block_ip_hour: form.block_ip_hour,
     };
 
-    repo.save_rate_limits(DEFAULT_TENANT_ID, &limits).await?;
+    let tenant_id = tenant_id_or_default(tenant);
+    repo.save_rate_limits(tenant_id, &limits).await?;
 
     // Return HX-Trigger header for toast notification
     let trigger_json = serde_json::json!({
@@ -197,11 +210,13 @@ async fn save_rate_limits(
 async fn get_llm_settings(
     State(state): State<AppState>,
     RequireAdmin(_user): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
 ) -> Result<Json<LlmSettingsResponse>, ApiError> {
     let repo: Box<dyn SettingsRepository> =
         create_settings_repository(&state.db, state.encryptor.clone());
 
-    let settings = repo.get_llm(DEFAULT_TENANT_ID).await?;
+    let tenant_id = tenant_id_or_default(tenant);
+    let settings = repo.get_llm(tenant_id).await?;
 
     Ok(Json(LlmSettingsResponse {
         provider: settings.provider,
@@ -218,13 +233,15 @@ async fn get_llm_settings(
 async fn save_llm_settings(
     State(state): State<AppState>,
     RequireAdmin(_user): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     Form(form): Form<LlmSettingsForm>,
 ) -> Result<Response, ApiError> {
     let repo: Box<dyn SettingsRepository> =
         create_settings_repository(&state.db, state.encryptor.clone());
 
     // Get existing settings to preserve API key if not provided
-    let existing = repo.get_llm(DEFAULT_TENANT_ID).await?;
+    let tenant_id = tenant_id_or_default(tenant);
+    let existing = repo.get_llm(tenant_id).await?;
 
     // Only update API key if a new one is provided (not empty)
     let api_key = if form.api_key.is_empty() {
@@ -243,7 +260,7 @@ async fn save_llm_settings(
         enabled: form.enabled.as_deref() == Some("on"),
     };
 
-    repo.save_llm(DEFAULT_TENANT_ID, &settings).await?;
+    repo.save_llm(tenant_id, &settings).await?;
 
     // Return HX-Trigger header for toast notification
     let trigger_json = serde_json::json!({

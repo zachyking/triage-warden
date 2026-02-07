@@ -16,10 +16,15 @@ use crate::dto::{
     UpdatePlaybookRequest,
 };
 use crate::error::ApiError;
+use crate::middleware::OptionalTenant;
 use crate::state::AppState;
 use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::db::{create_playbook_repository, PlaybookFilter, PlaybookRepository, PlaybookUpdate};
 use tw_core::playbook::{Playbook, PlaybookStage, PlaybookStep};
+
+fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> Uuid {
+    tenant.map(|ctx| ctx.tenant_id).unwrap_or(DEFAULT_TENANT_ID)
+}
 
 /// Creates playbook routes.
 pub fn routes() -> Router<AppState> {
@@ -59,10 +64,14 @@ pub fn routes() -> Router<AppState> {
 async fn list_playbooks(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
 ) -> Result<Json<Vec<PlaybookResponse>>, ApiError> {
     let repo: Box<dyn PlaybookRepository> = create_playbook_repository(&state.db);
-
-    let filter = PlaybookFilter::default();
+    let tenant_id = tenant_id_or_default(tenant);
+    let filter = PlaybookFilter {
+        tenant_id: Some(tenant_id),
+        ..Default::default()
+    };
     let playbooks: Vec<Playbook> = repo.list(&filter).await?;
 
     let responses: Vec<PlaybookResponse> =
@@ -88,12 +97,14 @@ async fn list_playbooks(
 async fn get_playbook(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<Json<PlaybookResponse>, ApiError> {
     let repo: Box<dyn PlaybookRepository> = create_playbook_repository(&state.db);
+    let tenant_id = tenant_id_or_default(tenant);
 
     let playbook: Playbook = repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Playbook {} not found", id)))?;
 
@@ -116,12 +127,17 @@ async fn get_playbook(
 async fn create_playbook(
     State(state): State<AppState>,
     RequireAdmin(_user): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     axum::Form(request): axum::Form<CreatePlaybookRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let repo: Box<dyn PlaybookRepository> = create_playbook_repository(&state.db);
+    let tenant_id = tenant_id_or_default(tenant);
 
     // Check if a playbook with this name already exists
-    if let Some(_existing) = repo.get_by_name(&request.name).await? {
+    if let Some(_existing) = repo
+        .get_by_name_for_tenant(&request.name, tenant_id)
+        .await?
+    {
         return Err(ApiError::Conflict(format!(
             "Playbook with name '{}' already exists",
             request.name
@@ -155,7 +171,7 @@ async fn create_playbook(
     }
 
     // Create the playbook
-    repo.create(DEFAULT_TENANT_ID, &playbook).await?;
+    repo.create(tenant_id, &playbook).await?;
 
     let trigger = serde_json::json!({
         "showToast": {
@@ -194,21 +210,23 @@ async fn create_playbook(
 async fn update_playbook(
     State(state): State<AppState>,
     RequireAdmin(_user): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
     axum::Form(request): axum::Form<UpdatePlaybookRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let repo: Box<dyn PlaybookRepository> = create_playbook_repository(&state.db);
+    let tenant_id = tenant_id_or_default(tenant);
 
     // Verify playbook exists
     let existing: Playbook = repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Playbook {} not found", id)))?;
 
     // Check for name conflict if name is being changed
     if let Some(ref new_name) = request.name {
         if new_name != &existing.name {
-            if let Some(_conflict) = repo.get_by_name(new_name).await? {
+            if let Some(_conflict) = repo.get_by_name_for_tenant(new_name, tenant_id).await? {
                 return Err(ApiError::Conflict(format!(
                     "Playbook with name '{}' already exists",
                     new_name
@@ -262,7 +280,7 @@ async fn update_playbook(
     }
 
     // Apply the update
-    let updated = repo.update(id, &update).await?;
+    let updated = repo.update_for_tenant(id, tenant_id, &update).await?;
 
     let trigger = serde_json::json!({
         "showToast": {
@@ -298,17 +316,19 @@ async fn update_playbook(
 async fn delete_playbook(
     State(state): State<AppState>,
     RequireAdmin(_user): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
     let repo: Box<dyn PlaybookRepository> = create_playbook_repository(&state.db);
+    let tenant_id = tenant_id_or_default(tenant);
 
     // Verify playbook exists and get name for toast
     let playbook: Playbook = repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Playbook {} not found", id)))?;
 
-    let deleted = repo.delete(id).await?;
+    let deleted = repo.delete_for_tenant(id, tenant_id).await?;
 
     if !deleted {
         return Err(ApiError::Internal("Failed to delete playbook".to_string()));
@@ -348,12 +368,14 @@ async fn delete_playbook(
 async fn toggle_playbook(
     State(state): State<AppState>,
     RequireAdmin(_user): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
     let repo: Box<dyn PlaybookRepository> = create_playbook_repository(&state.db);
+    let tenant_id = tenant_id_or_default(tenant);
 
     // Toggle returns the updated playbook
-    let playbook = repo.toggle_enabled(id).await?;
+    let playbook = repo.toggle_enabled_for_tenant(id, tenant_id).await?;
 
     let status_text = if playbook.enabled {
         "enabled"
@@ -395,13 +417,15 @@ pub struct StageForm {
 async fn add_stage(
     State(state): State<AppState>,
     RequireAdmin(_user): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
     axum::Form(form): axum::Form<StageForm>,
 ) -> Result<impl IntoResponse, ApiError> {
     let repo = create_playbook_repository(&state.db);
+    let tenant_id = tenant_id_or_default(tenant);
 
     let mut playbook = repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Playbook {} not found", id)))?;
 
@@ -420,7 +444,7 @@ async fn add_stage(
         stages: Some(playbook.stages),
         ..Default::default()
     };
-    repo.update(id, &update).await?;
+    repo.update_for_tenant(id, tenant_id, &update).await?;
 
     let trigger = serde_json::json!({
         "showToast": {
@@ -443,13 +467,15 @@ async fn add_stage(
 async fn update_stage(
     State(state): State<AppState>,
     RequireAdmin(_user): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     Path((id, stage_index)): Path<(Uuid, usize)>,
     axum::Form(form): axum::Form<StageForm>,
 ) -> Result<impl IntoResponse, ApiError> {
     let repo = create_playbook_repository(&state.db);
+    let tenant_id = tenant_id_or_default(tenant);
 
     let mut playbook = repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Playbook {} not found", id)))?;
 
@@ -469,7 +495,7 @@ async fn update_stage(
         stages: Some(playbook.stages),
         ..Default::default()
     };
-    repo.update(id, &update).await?;
+    repo.update_for_tenant(id, tenant_id, &update).await?;
 
     let trigger = serde_json::json!({
         "showToast": {
@@ -492,12 +518,14 @@ async fn update_stage(
 async fn delete_stage(
     State(state): State<AppState>,
     RequireAdmin(_user): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     Path((id, stage_index)): Path<(Uuid, usize)>,
 ) -> Result<impl IntoResponse, ApiError> {
     let repo = create_playbook_repository(&state.db);
+    let tenant_id = tenant_id_or_default(tenant);
 
     let mut playbook = repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Playbook {} not found", id)))?;
 
@@ -515,7 +543,7 @@ async fn delete_stage(
         stages: Some(playbook.stages),
         ..Default::default()
     };
-    repo.update(id, &update).await?;
+    repo.update_for_tenant(id, tenant_id, &update).await?;
 
     let trigger = serde_json::json!({
         "showToast": {
@@ -554,13 +582,15 @@ pub struct StepForm {
 async fn add_step(
     State(state): State<AppState>,
     RequireAdmin(_user): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     Path((id, stage_index)): Path<(Uuid, usize)>,
     axum::Form(form): axum::Form<StepForm>,
 ) -> Result<impl IntoResponse, ApiError> {
     let repo = create_playbook_repository(&state.db);
+    let tenant_id = tenant_id_or_default(tenant);
 
     let mut playbook = repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Playbook {} not found", id)))?;
 
@@ -613,7 +643,7 @@ async fn add_step(
         stages: Some(playbook.stages),
         ..Default::default()
     };
-    repo.update(id, &update).await?;
+    repo.update_for_tenant(id, tenant_id, &update).await?;
 
     let trigger = serde_json::json!({
         "showToast": {
@@ -636,13 +666,15 @@ async fn add_step(
 async fn update_step(
     State(state): State<AppState>,
     RequireAdmin(_user): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     Path((id, stage_index, step_index)): Path<(Uuid, usize, usize)>,
     axum::Form(form): axum::Form<StepForm>,
 ) -> Result<impl IntoResponse, ApiError> {
     let repo = create_playbook_repository(&state.db);
+    let tenant_id = tenant_id_or_default(tenant);
 
     let mut playbook = repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Playbook {} not found", id)))?;
 
@@ -697,7 +729,7 @@ async fn update_step(
         stages: Some(playbook.stages),
         ..Default::default()
     };
-    repo.update(id, &update).await?;
+    repo.update_for_tenant(id, tenant_id, &update).await?;
 
     let trigger = serde_json::json!({
         "showToast": {
@@ -720,12 +752,14 @@ async fn update_step(
 async fn delete_step(
     State(state): State<AppState>,
     RequireAdmin(_user): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     Path((id, stage_index, step_index)): Path<(Uuid, usize, usize)>,
 ) -> Result<impl IntoResponse, ApiError> {
     let repo = create_playbook_repository(&state.db);
+    let tenant_id = tenant_id_or_default(tenant);
 
     let mut playbook = repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Playbook {} not found", id)))?;
 
@@ -749,7 +783,7 @@ async fn delete_step(
         stages: Some(playbook.stages),
         ..Default::default()
     };
-    repo.update(id, &update).await?;
+    repo.update_for_tenant(id, tenant_id, &update).await?;
 
     let trigger = serde_json::json!({
         "showToast": {

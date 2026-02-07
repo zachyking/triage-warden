@@ -673,6 +673,7 @@ async fn get_hunt_results(
 /// GET /api/v1/hunts/queries/library - List built-in queries
 async fn get_query_library(
     State(_state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
 ) -> Result<Json<Vec<BuiltInQueryResponse>>, ApiError> {
     let queries = tw_core::hunting::get_built_in_queries();
     let responses: Vec<BuiltInQueryResponse> = queries

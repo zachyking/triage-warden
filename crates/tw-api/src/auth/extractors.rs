@@ -10,6 +10,7 @@ use tracing::{debug, warn};
 use tw_core::{
     auth::{ApiKey, Role, SessionData},
     db::{create_api_key_repository, create_user_repository, DbPool},
+    tenant::TenantContext,
     User,
 };
 
@@ -54,6 +55,7 @@ where
         }
 
         let app_state = AppState::from_ref(state);
+        let requested_tenant_id = parts.extensions.get::<TenantContext>().map(|t| t.tenant_id);
 
         // First, try session-based auth
         if let Ok(session) = Session::from_request_parts(parts, state).await {
@@ -64,6 +66,7 @@ where
                     if !user.enabled {
                         return Err(ApiError::AccountDisabled);
                     }
+                    enforce_tenant_membership(requested_tenant_id, &user)?;
                     // Store session auth context for scope checking
                     parts
                         .extensions
@@ -81,6 +84,7 @@ where
                         if !validated.user.enabled {
                             return Err(ApiError::AccountDisabled);
                         }
+                        enforce_tenant_membership(requested_tenant_id, &validated.user)?;
                         // Store the validated API key in request extensions for scope checking
                         parts.extensions.insert(validated.api_key.clone());
                         return Ok(AuthenticatedUser(validated.user));
@@ -125,13 +129,18 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let app_state = AppState::from_ref(state);
+        let requested_tenant_id = parts.extensions.get::<TenantContext>().map(|t| t.tenant_id);
 
         // Try session-based auth
         if let Ok(session) = Session::from_request_parts(parts, state).await {
             if let Some(session_data) = get_session_data(&session).await {
                 let user_repo = create_user_repository(&app_state.db);
                 if let Ok(Some(user)) = user_repo.get(session_data.user_id).await {
-                    if user.enabled {
+                    if user.enabled
+                        && requested_tenant_id
+                            .map(|tenant_id| user.tenant_id == tenant_id)
+                            .unwrap_or(true)
+                    {
                         return Ok(OptionalUser(Some(user)));
                     }
                 }
@@ -143,7 +152,11 @@ where
             if let Ok(auth_str) = auth_header.to_str() {
                 if let Some(token) = auth_str.strip_prefix("Bearer ") {
                     if let Ok(Some(validated)) = validate_api_key(&app_state.db, token).await {
-                        if validated.user.enabled {
+                        if validated.user.enabled
+                            && requested_tenant_id
+                                .map(|tenant_id| validated.user.tenant_id == tenant_id)
+                                .unwrap_or(true)
+                        {
                             parts.extensions.insert(validated.api_key.clone());
                             return Ok(OptionalUser(Some(validated.user)));
                         }
@@ -154,6 +167,25 @@ where
 
         Ok(OptionalUser(None))
     }
+}
+
+fn enforce_tenant_membership(
+    requested_tenant_id: Option<uuid::Uuid>,
+    user: &User,
+) -> Result<(), ApiError> {
+    if let Some(tenant_id) = requested_tenant_id {
+        if user.tenant_id != tenant_id {
+            warn!(
+                user_id = %user.id,
+                user_tenant_id = %user.tenant_id,
+                requested_tenant_id = %tenant_id,
+                "Authenticated user does not belong to requested tenant"
+            );
+            return Err(ApiError::Forbidden("Tenant access denied".to_string()));
+        }
+    }
+
+    Ok(())
 }
 
 /// Extractor that requires admin role.

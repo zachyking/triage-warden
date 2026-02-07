@@ -141,6 +141,7 @@ pub async fn run_server(config: ServeConfig, _app_config: AppConfig) -> Result<(
     // Create and run server
     let server = ApiServer::new(state, server_config)
         .with_prometheus()
+        .with_tenant_resolution()
         .with_session_store()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to initialize session store: {}", e))?;

@@ -3,6 +3,7 @@
 use super::{DbError, DbPool};
 use async_trait::async_trait;
 use std::collections::HashMap;
+use uuid::Uuid;
 
 /// Metrics data for incidents.
 #[derive(Debug, Clone, Default)]
@@ -42,6 +43,30 @@ pub trait MetricsRepository: Send + Sync {
 
     /// Get performance metrics.
     async fn get_performance_metrics(&self) -> Result<PerformanceMetricsData, DbError>;
+
+    /// Get incident-related metrics scoped to a tenant.
+    async fn get_incident_metrics_for_tenant(
+        &self,
+        _tenant_id: Uuid,
+    ) -> Result<IncidentMetricsData, DbError> {
+        self.get_incident_metrics().await
+    }
+
+    /// Get action-related metrics scoped to a tenant.
+    async fn get_action_metrics_for_tenant(
+        &self,
+        _tenant_id: Uuid,
+    ) -> Result<ActionMetricsData, DbError> {
+        self.get_action_metrics().await
+    }
+
+    /// Get performance metrics scoped to a tenant.
+    async fn get_performance_metrics_for_tenant(
+        &self,
+        _tenant_id: Uuid,
+    ) -> Result<PerformanceMetricsData, DbError> {
+        self.get_performance_metrics().await
+    }
 }
 
 /// SQLite implementation of MetricsRepository.
@@ -196,6 +221,164 @@ impl MetricsRepository for SqliteMetricsRepository {
             total_resolved_count: total_resolved as u64,
         })
     }
+
+    async fn get_incident_metrics_for_tenant(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<IncidentMetricsData, DbError> {
+        let tenant_id = tenant_id.to_string();
+
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM incidents WHERE tenant_id = ?")
+            .bind(&tenant_id)
+            .fetch_one(&self.pool)
+            .await?;
+
+        let status_rows: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT status, COUNT(*) FROM incidents WHERE tenant_id = ? GROUP BY status",
+        )
+        .bind(&tenant_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let by_status: HashMap<String, u64> = status_rows
+            .into_iter()
+            .map(|(status, count)| (status, count as u64))
+            .collect();
+
+        let severity_rows: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT severity, COUNT(*) FROM incidents WHERE tenant_id = ? GROUP BY severity",
+        )
+        .bind(&tenant_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let by_severity: HashMap<String, u64> = severity_rows
+            .into_iter()
+            .map(|(severity, count)| (severity, count as u64))
+            .collect();
+
+        let created_last_hour: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM incidents WHERE tenant_id = ? AND created_at >= datetime('now', '-1 hour')",
+        )
+        .bind(&tenant_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let resolved_last_hour: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM incidents WHERE tenant_id = ? AND status = 'resolved' AND updated_at >= datetime('now', '-1 hour')",
+        )
+        .bind(&tenant_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(IncidentMetricsData {
+            total: total as u64,
+            by_status,
+            by_severity,
+            created_last_hour: created_last_hour as u64,
+            resolved_last_hour: resolved_last_hour as u64,
+        })
+    }
+
+    async fn get_action_metrics_for_tenant(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<ActionMetricsData, DbError> {
+        let tenant_id = tenant_id.to_string();
+
+        let total_executed: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM actions WHERE tenant_id = ? AND approval_status IN ('approved', 'executed')",
+        )
+        .bind(&tenant_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let success_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM actions WHERE tenant_id = ? AND executed_at IS NOT NULL AND result IS NOT NULL AND json_extract(result, '$.error') IS NULL",
+        )
+        .bind(&tenant_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let pending_approvals: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM actions WHERE tenant_id = ? AND approval_status = 'pending'",
+        )
+        .bind(&tenant_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(ActionMetricsData {
+            total_executed: total_executed as u64,
+            success_count: success_count as u64,
+            pending_approvals: pending_approvals as u64,
+        })
+    }
+
+    async fn get_performance_metrics_for_tenant(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<PerformanceMetricsData, DbError> {
+        let tenant_id = tenant_id.to_string();
+
+        let mttt: Option<f64> = sqlx::query_scalar(
+            r#"
+            SELECT AVG(
+                (julianday(updated_at) - julianday(created_at)) * 86400.0
+            )
+            FROM incidents
+            WHERE tenant_id = ? AND status != 'new' AND created_at != updated_at
+            "#,
+        )
+        .bind(&tenant_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let mttr: Option<f64> = sqlx::query_scalar(
+            r#"
+            SELECT AVG(
+                (julianday(a.executed_at) - julianday(i.created_at)) * 86400.0
+            )
+            FROM incidents i
+            INNER JOIN actions a ON a.incident_id = i.id
+            WHERE i.tenant_id = ? AND a.tenant_id = ? AND a.executed_at IS NOT NULL
+            "#,
+        )
+        .bind(&tenant_id)
+        .bind(&tenant_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let auto_resolved: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM incidents i
+            WHERE i.tenant_id = ? AND i.status = 'resolved'
+            AND NOT EXISTS (
+                SELECT 1 FROM actions a
+                WHERE a.incident_id = i.id
+                AND a.tenant_id = i.tenant_id
+                AND a.approval_status = 'manually_approved'
+            )
+            "#,
+        )
+        .bind(&tenant_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let total_resolved: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM incidents WHERE tenant_id = ? AND status = 'resolved'",
+        )
+        .bind(&tenant_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(PerformanceMetricsData {
+            mean_time_to_triage_seconds: mttt,
+            mean_time_to_respond_seconds: mttr,
+            auto_resolved_count: auto_resolved as u64,
+            total_resolved_count: total_resolved as u64,
+        })
+    }
 }
 
 /// PostgreSQL implementation of MetricsRepository.
@@ -337,6 +520,153 @@ impl MetricsRepository for PgMetricsRepository {
             sqlx::query_scalar("SELECT COUNT(*) FROM incidents WHERE status = 'resolved'")
                 .fetch_one(&self.pool)
                 .await?;
+
+        Ok(PerformanceMetricsData {
+            mean_time_to_triage_seconds: mttt,
+            mean_time_to_respond_seconds: mttr,
+            auto_resolved_count: auto_resolved as u64,
+            total_resolved_count: total_resolved as u64,
+        })
+    }
+
+    async fn get_incident_metrics_for_tenant(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<IncidentMetricsData, DbError> {
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM incidents WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_one(&self.pool)
+            .await?;
+
+        let status_rows: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT status::text, COUNT(*) FROM incidents WHERE tenant_id = $1 GROUP BY status",
+        )
+        .bind(tenant_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let by_status: HashMap<String, u64> = status_rows
+            .into_iter()
+            .map(|(status, count)| (status, count as u64))
+            .collect();
+
+        let severity_rows: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT severity::text, COUNT(*) FROM incidents WHERE tenant_id = $1 GROUP BY severity",
+        )
+        .bind(tenant_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let by_severity: HashMap<String, u64> = severity_rows
+            .into_iter()
+            .map(|(severity, count)| (severity, count as u64))
+            .collect();
+
+        let created_last_hour: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM incidents WHERE tenant_id = $1 AND created_at >= NOW() - INTERVAL '1 hour'",
+        )
+        .bind(tenant_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let resolved_last_hour: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM incidents WHERE tenant_id = $1 AND status = 'resolved' AND updated_at >= NOW() - INTERVAL '1 hour'",
+        )
+        .bind(tenant_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(IncidentMetricsData {
+            total: total as u64,
+            by_status,
+            by_severity,
+            created_last_hour: created_last_hour as u64,
+            resolved_last_hour: resolved_last_hour as u64,
+        })
+    }
+
+    async fn get_action_metrics_for_tenant(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<ActionMetricsData, DbError> {
+        let total_executed: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM actions WHERE tenant_id = $1 AND approval_status IN ('approved', 'executed')",
+        )
+        .bind(tenant_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let success_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM actions WHERE tenant_id = $1 AND executed_at IS NOT NULL AND result IS NOT NULL AND (result->>'error') IS NULL",
+        )
+        .bind(tenant_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let pending_approvals: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM actions WHERE tenant_id = $1 AND approval_status = 'pending'",
+        )
+        .bind(tenant_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(ActionMetricsData {
+            total_executed: total_executed as u64,
+            success_count: success_count as u64,
+            pending_approvals: pending_approvals as u64,
+        })
+    }
+
+    async fn get_performance_metrics_for_tenant(
+        &self,
+        tenant_id: Uuid,
+    ) -> Result<PerformanceMetricsData, DbError> {
+        let mttt: Option<f64> = sqlx::query_scalar(
+            r#"
+            SELECT AVG(EXTRACT(EPOCH FROM (updated_at - created_at)))
+            FROM incidents
+            WHERE tenant_id = $1 AND status != 'new' AND created_at != updated_at
+            "#,
+        )
+        .bind(tenant_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let mttr: Option<f64> = sqlx::query_scalar(
+            r#"
+            SELECT AVG(EXTRACT(EPOCH FROM (a.executed_at - i.created_at)))
+            FROM incidents i
+            INNER JOIN actions a ON a.incident_id = i.id
+            WHERE i.tenant_id = $1 AND a.tenant_id = $1 AND a.executed_at IS NOT NULL
+            "#,
+        )
+        .bind(tenant_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let auto_resolved: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM incidents i
+            WHERE i.tenant_id = $1 AND i.status = 'resolved'
+            AND NOT EXISTS (
+                SELECT 1 FROM actions a
+                WHERE a.incident_id = i.id
+                AND a.tenant_id = i.tenant_id
+                AND a.approval_status = 'manually_approved'
+            )
+            "#,
+        )
+        .bind(tenant_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let total_resolved: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM incidents WHERE tenant_id = $1 AND status = 'resolved'",
+        )
+        .bind(tenant_id)
+        .fetch_one(&self.pool)
+        .await?;
 
         Ok(PerformanceMetricsData {
             mean_time_to_triage_seconds: mttt,

@@ -17,6 +17,7 @@ use validator::Validate;
 
 use crate::auth::RequireAnalyst;
 use crate::error::ApiError;
+use crate::middleware::OptionalTenant;
 use crate::state::AppState;
 use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::db::{create_knowledge_repository, Pagination};
@@ -37,6 +38,10 @@ pub fn routes() -> Router<AppState> {
         .route("/:id", put(update_document))
         .route("/:id", delete(delete_document))
         .route("/:id/reindex", post(reindex_document))
+}
+
+fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> Uuid {
+    tenant.map(|ctx| ctx.tenant_id).unwrap_or(DEFAULT_TENANT_ID)
 }
 
 // ============================================================================
@@ -359,10 +364,12 @@ pub struct DocumentTypeInfo {
 async fn list_documents(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<DocumentListResponse>, ApiError> {
     query.validate()?;
 
+    let tenant_id = tenant_id_or_default(tenant);
     let repo = create_knowledge_repository(&state.db);
     let filter = query.to_filter();
     let page = query.page.unwrap_or(1);
@@ -370,7 +377,7 @@ async fn list_documents(
     let pagination = Pagination::new(page, per_page);
 
     let result = repo
-        .list(DEFAULT_TENANT_ID, &filter, &pagination)
+        .list(tenant_id, &filter, &pagination)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -404,10 +411,12 @@ async fn list_documents(
 async fn create_document(
     State(state): State<AppState>,
     RequireAnalyst(user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Json(request): Json<CreateDocumentRequest>,
 ) -> Result<(StatusCode, Json<DocumentResponse>), ApiError> {
     request.validate()?;
 
+    let tenant_id = tenant_id_or_default(tenant);
     let doc_type = KnowledgeType::parse(&request.doc_type).ok_or_else(|| {
         ApiError::BadRequest(format!("Invalid document type: {}", request.doc_type))
     })?;
@@ -420,7 +429,7 @@ async fn create_document(
         metadata: request.metadata.map(|m| m.to_metadata()),
     };
 
-    let document = create.build(DEFAULT_TENANT_ID, Some(user.id));
+    let document = create.build(tenant_id, Some(user.id));
 
     let repo = create_knowledge_repository(&state.db);
     let created = repo
@@ -450,12 +459,14 @@ async fn create_document(
 async fn get_document(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<Json<DocumentResponse>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let repo = create_knowledge_repository(&state.db);
 
     let document = repo
-        .get_for_tenant(id, DEFAULT_TENANT_ID)
+        .get_for_tenant(id, tenant_id)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .ok_or(ApiError::NotFound("Document not found".to_string()))?;
@@ -482,11 +493,13 @@ async fn get_document(
 async fn update_document(
     State(state): State<AppState>,
     RequireAnalyst(user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
     Json(request): Json<UpdateDocumentRequest>,
 ) -> Result<Json<DocumentResponse>, ApiError> {
     request.validate()?;
 
+    let tenant_id = tenant_id_or_default(tenant);
     let doc_type = request
         .doc_type
         .as_ref()
@@ -508,7 +521,7 @@ async fn update_document(
     let repo = create_knowledge_repository(&state.db);
 
     let updated = repo
-        .update(id, DEFAULT_TENANT_ID, &update, Some(user.id))
+        .update(id, tenant_id, &update, Some(user.id))
         .await
         .map_err(|e| match e {
             tw_core::db::DbError::NotFound { .. } => {
@@ -539,12 +552,14 @@ async fn update_document(
 async fn delete_document(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let repo = create_knowledge_repository(&state.db);
 
     let deleted = repo
-        .delete(id, DEFAULT_TENANT_ID)
+        .delete(id, tenant_id)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -576,6 +591,7 @@ async fn delete_document(
 async fn search_documents(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<SearchResponse>, ApiError> {
     query.validate()?;
@@ -586,6 +602,7 @@ async fn search_documents(
         ));
     }
 
+    let tenant_id = tenant_id_or_default(tenant);
     let repo = create_knowledge_repository(&state.db);
     let limit = query.limit.unwrap_or(10).min(50);
 
@@ -603,7 +620,7 @@ async fn search_documents(
 
     // Use text search (for now, semantic search requires embedding service integration)
     let documents = repo
-        .search_text(DEFAULT_TENANT_ID, &query.q, &filter, limit)
+        .search_text(tenant_id, &query.q, &filter, limit)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -650,11 +667,13 @@ async fn search_documents(
 async fn get_stats(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
 ) -> Result<Json<StatsResponse>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let repo = create_knowledge_repository(&state.db);
 
     let stats = repo
-        .get_stats(DEFAULT_TENANT_ID)
+        .get_stats(tenant_id)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -700,13 +719,15 @@ async fn list_document_types(RequireAnalyst(_user): RequireAnalyst) -> Json<Vec<
 async fn reindex_document(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let repo = create_knowledge_repository(&state.db);
 
     // Verify document exists
     let _document = repo
-        .get_for_tenant(id, DEFAULT_TENANT_ID)
+        .get_for_tenant(id, tenant_id)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .ok_or(ApiError::NotFound("Document not found".to_string()))?;

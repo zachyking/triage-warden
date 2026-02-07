@@ -5,6 +5,10 @@ use std::sync::Arc;
 use tracing::info;
 use tw_core::db::DbPool;
 use tw_core::{create_encryptor_or_panic, CredentialEncryptor, EventBus};
+use tw_core::{
+    AssetStore, IdentityStore, InMemoryAssetStore, InMemoryIdentityStore,
+    InMemoryRelationshipStore, RelationshipStore,
+};
 use tw_core::{DynCache, FeatureFlags, LeaderElector, MessageQueue};
 use tw_policy::{KillSwitch, PolicyEngine};
 
@@ -43,6 +47,12 @@ pub struct AppState {
     pub feature_flags: Arc<FeatureFlags>,
     /// URL of the Python NL query service (optional).
     pub nl_query_url: Option<String>,
+    /// Asset store for asset management APIs.
+    pub asset_store: Arc<dyn AssetStore>,
+    /// Identity store for identity management APIs.
+    pub identity_store: Arc<dyn IdentityStore>,
+    /// Relationship store for graph/relationship APIs.
+    pub relationship_store: Arc<dyn RelationshipStore>,
 }
 
 impl AppState {
@@ -72,6 +82,9 @@ impl AppState {
             leader_elector: None,
             feature_flags: Arc::new(feature_flags),
             nl_query_url: std::env::var("NL_QUERY_URL").ok(),
+            asset_store: Arc::new(InMemoryAssetStore::new()),
+            identity_store: Arc::new(InMemoryIdentityStore::new()),
+            relationship_store: Arc::new(InMemoryRelationshipStore::new()),
         }
     }
 
@@ -171,6 +184,9 @@ pub struct AppStateBuilder {
     cache: Option<Arc<dyn DynCache>>,
     leader_elector: Option<Arc<dyn LeaderElector>>,
     nl_query_url: Option<String>,
+    asset_store: Option<Arc<dyn AssetStore>>,
+    identity_store: Option<Arc<dyn IdentityStore>>,
+    relationship_store: Option<Arc<dyn RelationshipStore>>,
 }
 
 impl AppStateBuilder {
@@ -192,6 +208,9 @@ impl AppStateBuilder {
             cache: None,
             leader_elector: None,
             nl_query_url: std::env::var("NL_QUERY_URL").ok(),
+            asset_store: None,
+            identity_store: None,
+            relationship_store: None,
         }
     }
 
@@ -261,6 +280,24 @@ impl AppStateBuilder {
         self
     }
 
+    /// Sets the asset store implementation.
+    pub fn with_asset_store(mut self, store: Arc<dyn AssetStore>) -> Self {
+        self.asset_store = Some(store);
+        self
+    }
+
+    /// Sets the identity store implementation.
+    pub fn with_identity_store(mut self, store: Arc<dyn IdentityStore>) -> Self {
+        self.identity_store = Some(store);
+        self
+    }
+
+    /// Sets the relationship store implementation.
+    pub fn with_relationship_store(mut self, store: Arc<dyn RelationshipStore>) -> Self {
+        self.relationship_store = Some(store);
+        self
+    }
+
     /// Sets the NL query service URL.
     pub fn with_nl_query_url(mut self, url: String) -> Self {
         self.nl_query_url = Some(url);
@@ -318,6 +355,15 @@ impl AppStateBuilder {
             leader_elector: self.leader_elector,
             feature_flags: Arc::new(self.feature_flags),
             nl_query_url: self.nl_query_url,
+            asset_store: self
+                .asset_store
+                .unwrap_or_else(|| Arc::new(InMemoryAssetStore::new())),
+            identity_store: self
+                .identity_store
+                .unwrap_or_else(|| Arc::new(InMemoryIdentityStore::new())),
+            relationship_store: self
+                .relationship_store
+                .unwrap_or_else(|| Arc::new(InMemoryRelationshipStore::new())),
         }
     }
 }

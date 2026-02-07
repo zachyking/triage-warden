@@ -17,6 +17,7 @@ use validator::Validate;
 
 use crate::auth::RequireAnalyst;
 use crate::error::ApiError;
+use crate::middleware::OptionalTenant;
 use crate::state::AppState;
 use tw_core::db::{create_lesson_repository, Pagination};
 use tw_core::lesson::{
@@ -37,6 +38,12 @@ pub fn routes() -> Router<AppState> {
 /// Creates routes for lessons by incident.
 pub fn incident_lessons_routes() -> Router<AppState> {
     Router::new().route("/", get(get_lessons_for_incident))
+}
+
+fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> Uuid {
+    tenant
+        .map(|ctx| ctx.tenant_id)
+        .unwrap_or(tw_core::auth::DEFAULT_TENANT_ID)
 }
 
 // ============================================================================
@@ -157,12 +164,13 @@ pub struct LessonListResponse {
 async fn create_lesson(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Json(body): Json<CreateLessonBody>,
 ) -> Result<(StatusCode, Json<LessonResponse>), ApiError> {
     body.validate()?;
 
     let category = parse_category(&body.category)?;
-    let tenant_id = tw_core::auth::DEFAULT_TENANT_ID;
+    let tenant_id = tenant_id_or_default(tenant);
 
     let request = CreateLessonRequest {
         incident_id: body.incident_id,
@@ -185,11 +193,12 @@ async fn create_lesson(
 async fn list_lessons(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Query(query): Query<ListLessonsQuery>,
 ) -> Result<Json<LessonListResponse>, ApiError> {
     query.validate()?;
 
-    let tenant_id = tw_core::auth::DEFAULT_TENANT_ID;
+    let tenant_id = tenant_id_or_default(tenant);
 
     let category = query.category.as_deref().map(parse_category).transpose()?;
     let status = query.status.as_deref().map(parse_status).transpose()?;
@@ -218,9 +227,10 @@ async fn list_lessons(
 async fn get_lesson(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<Json<LessonResponse>, ApiError> {
-    let tenant_id = tw_core::auth::DEFAULT_TENANT_ID;
+    let tenant_id = tenant_id_or_default(tenant);
     let repo = create_lesson_repository(&state.db);
 
     let lesson = repo
@@ -235,12 +245,13 @@ async fn get_lesson(
 async fn update_lesson(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateLessonBody>,
 ) -> Result<Json<LessonResponse>, ApiError> {
     body.validate()?;
 
-    let tenant_id = tw_core::auth::DEFAULT_TENANT_ID;
+    let tenant_id = tenant_id_or_default(tenant);
 
     let category = body.category.as_deref().map(parse_category).transpose()?;
     let status = body.status.as_deref().map(parse_status).transpose()?;
@@ -265,9 +276,10 @@ async fn update_lesson(
 async fn delete_lesson(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let tenant_id = tw_core::auth::DEFAULT_TENANT_ID;
+    let tenant_id = tenant_id_or_default(tenant);
     let repo = create_lesson_repository(&state.db);
 
     let deleted = repo.delete(id, tenant_id).await?;
@@ -282,9 +294,10 @@ async fn delete_lesson(
 async fn get_lessons_for_incident(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(incident_id): Path<Uuid>,
 ) -> Result<Json<Vec<LessonResponse>>, ApiError> {
-    let tenant_id = tw_core::auth::DEFAULT_TENANT_ID;
+    let tenant_id = tenant_id_or_default(tenant);
     let repo = create_lesson_repository(&state.db);
 
     let lessons = repo.get_for_incident(tenant_id, incident_id).await?;
