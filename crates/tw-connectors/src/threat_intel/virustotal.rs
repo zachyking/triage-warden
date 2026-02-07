@@ -13,8 +13,10 @@ use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::path::Path;
 use std::time::Duration;
-use tracing::{debug, info, instrument, warn};
+use tokio::fs;
+use tracing::{debug, info, instrument};
 
 /// VirusTotal connector configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -602,13 +604,43 @@ impl ThreatIntelConnector for VirusTotalConnector {
     }
 
     #[instrument(skip(self))]
-    async fn submit_file(&self, _file_path: &str) -> ConnectorResult<String> {
-        // File submission requires multipart upload
-        // This would require additional implementation with reqwest multipart
-        warn!("File submission not yet implemented");
-        Err(ConnectorError::Internal(
-            "File submission not yet implemented".to_string(),
-        ))
+    async fn submit_file(&self, file_path: &str) -> ConnectorResult<String> {
+        let content = fs::read(file_path)
+            .await
+            .map_err(|e| ConnectorError::InvalidRequest(format!("Failed to read file: {}", e)))?;
+
+        if content.is_empty() {
+            return Err(ConnectorError::InvalidRequest(
+                "Cannot submit an empty file".to_string(),
+            ));
+        }
+
+        let filename = Path::new(file_path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| {
+                ConnectorError::InvalidRequest("File path does not include a valid filename".into())
+            })?
+            .to_string();
+
+        let part = reqwest::multipart::Part::bytes(content).file_name(filename);
+        let form = reqwest::multipart::Form::new().part("file", part);
+        let response = self.client.post_multipart("/api/v3/files", form).await?;
+
+        if !response.status().is_success() {
+            return Err(ConnectorError::RequestFailed(format!(
+                "File submission failed: {}",
+                response.status()
+            )));
+        }
+
+        let vt_response: VTResponse<VTAnalysisIdData> = response
+            .json()
+            .await
+            .map_err(|e| ConnectorError::InvalidResponse(e.to_string()))?;
+
+        Ok(vt_response.data.id)
     }
 
     #[instrument(skip(self), fields(analysis_id = %analysis_id))]
@@ -649,6 +681,11 @@ impl ThreatIntelConnector for VirusTotalConnector {
 #[derive(Debug, Deserialize)]
 struct VTResponse<T> {
     data: T,
+}
+
+#[derive(Debug, Deserialize)]
+struct VTAnalysisIdData {
+    id: String,
 }
 
 #[derive(Debug, Deserialize)]

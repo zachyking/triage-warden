@@ -263,15 +263,12 @@ impl Default for QueueHealth {
 /// This struct is used with the `subscribe_with_options` method to configure
 /// advanced subscription behavior such as batch size and visibility timeout.
 ///
-/// # Future Use
+/// # Notes
 ///
-/// This struct is currently a stub for future implementation. The following
-/// options are planned:
-///
-/// - `batch_size`: Number of messages to fetch in a single request
-/// - `visibility_timeout`: Time before unacknowledged messages are redelivered
-/// - `max_retries`: Maximum number of delivery attempts before dead-lettering
-/// - `dead_letter_topic`: Topic for messages that exceed max retries
+/// `batch_size` and `buffer_size` are currently honored by queue implementations
+/// that support configurable subscription behavior (for example Redis streams).
+/// `visibility_timeout_secs` is accepted here for API consistency and is
+/// applied by backends that implement visibility semantics.
 #[derive(Debug, Clone, Default)]
 pub struct SubscribeOptions {
     /// Maximum number of messages to buffer before backpressure.

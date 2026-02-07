@@ -51,7 +51,7 @@ pub fn routes() -> Router<AppState> {
 /// List incidents with filtering and pagination.
 #[utoipa::path(
     get,
-    path = "/api/incidents",
+    path = "/api/v1/incidents",
     params(
         ("status" = Option<String>, Query, description = "Filter by status (comma-separated)"),
         ("severity" = Option<String>, Query, description = "Filter by severity (comma-separated)"),
@@ -122,7 +122,7 @@ async fn list_incidents(
 /// Get a single incident by ID.
 #[utoipa::path(
     get,
-    path = "/api/incidents/{id}",
+    path = "/api/v1/incidents/{id}",
     params(
         ("id" = Uuid, Path, description = "Incident ID")
     ),
@@ -160,7 +160,7 @@ async fn get_incident(
 /// Execute an action on an incident.
 #[utoipa::path(
     post,
-    path = "/api/incidents/{id}/actions",
+    path = "/api/v1/incidents/{id}/actions",
     params(
         ("id" = Uuid, Path, description = "Incident ID")
     ),
@@ -321,7 +321,7 @@ async fn execute_action(
 /// Approve or deny a pending action.
 #[utoipa::path(
     post,
-    path = "/api/incidents/{id}/approve",
+    path = "/api/v1/incidents/{id}/approve",
     params(
         ("id" = Uuid, Path, description = "Incident ID")
     ),
@@ -461,7 +461,7 @@ async fn approve_action(
 /// Dismiss an incident.
 #[utoipa::path(
     post,
-    path = "/api/incidents/{id}/dismiss",
+    path = "/api/v1/incidents/{id}/dismiss",
     params(
         ("id" = Uuid, Path, description = "Incident ID")
     ),
@@ -543,7 +543,7 @@ async fn dismiss_incident(
 /// Resolve an incident.
 #[utoipa::path(
     post,
-    path = "/api/incidents/{id}/resolve",
+    path = "/api/v1/incidents/{id}/resolve",
     params(
         ("id" = Uuid, Path, description = "Incident ID")
     ),
@@ -627,7 +627,7 @@ async fn resolve_incident(
 /// Trigger re-enrichment for an incident.
 #[utoipa::path(
     post,
-    path = "/api/incidents/{id}/enrich",
+    path = "/api/v1/incidents/{id}/enrich",
     params(
         ("id" = Uuid, Path, description = "Incident ID")
     ),

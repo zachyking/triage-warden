@@ -77,13 +77,66 @@ impl crate::traits::Connector for AnyRunConnector {
 impl MalwareSandbox for AnyRunConnector {
     async fn submit_file(
         &self,
-        _file: &[u8],
-        _filename: &str,
-        _options: &SubmissionOptions,
+        file: &[u8],
+        filename: &str,
+        options: &SubmissionOptions,
     ) -> ConnectorResult<SubmissionId> {
-        Err(ConnectorError::Internal(
-            "ANY.RUN file submission requires multipart upload (not yet implemented)".to_string(),
-        ))
+        if file.is_empty() {
+            return Err(ConnectorError::InvalidRequest(
+                "Cannot submit an empty file".to_string(),
+            ));
+        }
+
+        let file_part =
+            reqwest::multipart::Part::bytes(file.to_vec()).file_name(filename.to_string());
+        let mut form = reqwest::multipart::Form::new()
+            .text("obj_type", "file")
+            .part("file", file_part)
+            .text(
+                "env_os",
+                options
+                    .environment
+                    .as_deref()
+                    .unwrap_or("windows")
+                    .to_string(),
+            )
+            .text(
+                "opt_privacy_type",
+                if options.private {
+                    "owner".to_string()
+                } else {
+                    "public".to_string()
+                },
+            )
+            .text(
+                "opt_network_connect",
+                matches!(
+                    options.network_mode,
+                    Some(super::NetworkMode::Internet) | None
+                )
+                .to_string(),
+            )
+            .text(
+                "opt_timeout",
+                options.timeout_secs.unwrap_or(60).to_string(),
+            );
+
+        if let Some(command_line) = &options.command_line {
+            form = form.text("obj_ext_cmd", command_line.clone());
+        }
+
+        let response = self.client.post_multipart("/api/v1/analysis", form).await?;
+        if !response.status().is_success() {
+            return Err(ConnectorError::RequestFailed(format!(
+                "File submission failed: {}",
+                response.status()
+            )));
+        }
+
+        match response.json::<AnyRunSubmitResponse>().await {
+            Ok(data) => Ok(SubmissionId(data.data.task_id)),
+            Err(e) => Err(ConnectorError::InvalidResponse(e.to_string())),
+        }
     }
 
     async fn submit_url(

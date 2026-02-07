@@ -20,6 +20,7 @@ use crate::state::AppState;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/metrics", get(prometheus_metrics))
+        .route("/api/v1/metrics", get(json_metrics))
         .route("/api/metrics", get(json_metrics))
 }
 
@@ -65,7 +66,7 @@ pub async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoRespo
 /// JSON metrics endpoint for dashboard.
 #[utoipa::path(
     get,
-    path = "/api/metrics",
+    path = "/api/v1/metrics",
     responses(
         (status = 200, description = "Metrics in JSON format", body = MetricsResponse),
         (status = 500, description = "Internal server error")

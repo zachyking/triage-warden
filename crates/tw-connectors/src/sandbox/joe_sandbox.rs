@@ -77,14 +77,56 @@ impl crate::traits::Connector for JoeSandboxConnector {
 impl MalwareSandbox for JoeSandboxConnector {
     async fn submit_file(
         &self,
-        _file: &[u8],
-        _filename: &str,
-        _options: &SubmissionOptions,
+        file: &[u8],
+        filename: &str,
+        options: &SubmissionOptions,
     ) -> ConnectorResult<SubmissionId> {
-        Err(ConnectorError::Internal(
-            "Joe Sandbox file submission requires multipart upload (not yet implemented)"
+        if file.is_empty() {
+            return Err(ConnectorError::InvalidRequest(
+                "Cannot submit an empty file".to_string(),
+            ));
+        }
+
+        let file_part =
+            reqwest::multipart::Part::bytes(file.to_vec()).file_name(filename.to_string());
+        let mut form = reqwest::multipart::Form::new()
+            .part("sample", file_part)
+            .text(
+                "systems[]",
+                options
+                    .environment
+                    .as_deref()
+                    .unwrap_or("w10x64")
+                    .to_string(),
+            )
+            .text(
+                "internet-access",
+                matches!(
+                    options.network_mode,
+                    Some(super::NetworkMode::Internet) | None
+                )
                 .to_string(),
-        ))
+            );
+
+        if let Some(command_line) = &options.command_line {
+            form = form.text("cmdline", command_line.clone());
+        }
+
+        let response = self
+            .client
+            .post_multipart("/api/v2/submission/new", form)
+            .await?;
+        if !response.status().is_success() {
+            return Err(ConnectorError::RequestFailed(format!(
+                "File submission failed: {}",
+                response.status()
+            )));
+        }
+
+        match response.json::<JoeSandboxSubmitResponse>().await {
+            Ok(data) => Ok(SubmissionId(data.data.submission_id)),
+            Err(e) => Err(ConnectorError::InvalidResponse(e.to_string())),
+        }
     }
 
     async fn submit_url(

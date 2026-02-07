@@ -54,7 +54,7 @@ pub fn routes() -> Router<AppState> {
 /// Receive a generic alert via webhook.
 #[utoipa::path(
     post,
-    path = "/api/webhooks/alerts",
+    path = "/api/v1/webhooks/alerts",
     request_body = WebhookAlertPayload,
     responses(
         (status = 202, description = "Alert accepted", body = WebhookAcceptedResponse),
@@ -186,7 +186,7 @@ async fn receive_alert(
 /// Receive an alert from a specific source.
 #[utoipa::path(
     post,
-    path = "/api/webhooks/alerts/{source}",
+    path = "/api/v1/webhooks/alerts/{source}",
     params(
         ("source" = String, Path, description = "Source system identifier")
     ),

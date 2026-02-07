@@ -11,6 +11,7 @@ use governor::{
     Quota, RateLimiter as GovernorRateLimiter,
 };
 use moka::future::Cache as MokaCache;
+use reqwest::multipart::Form;
 use reqwest::{Client, Response, StatusCode};
 use serde::{de::DeserializeOwned, Serialize};
 use std::num::NonZeroU32;
@@ -198,6 +199,16 @@ impl HttpClient {
         self.parse_json_response(response).await
     }
 
+    /// Executes a multipart/form-data POST request.
+    ///
+    /// Multipart payloads are typically not cloneable, so this operation
+    /// is sent as a single request without automatic retries.
+    pub async fn post_multipart(&self, path: &str, form: Form) -> ConnectorResult<Response> {
+        let url = self.build_url(path);
+        let request = self.client.post(&url).multipart(form);
+        self.execute_once(request).await
+    }
+
     /// Executes a PUT request with retry logic.
     pub async fn put<T: Serialize + ?Sized>(
         &self,
@@ -245,6 +256,64 @@ impl HttpClient {
                 text.chars().take(500).collect::<String>()
             ))
         })
+    }
+
+    /// Executes a request once with authentication, rate limiting, and error handling.
+    async fn execute_once(
+        &self,
+        mut request: reqwest::RequestBuilder,
+    ) -> ConnectorResult<Response> {
+        if let Some(limiter) = &self.rate_limiter {
+            limiter.until_ready().await;
+        }
+
+        request = self.add_auth(request).await?;
+
+        let response = request.send().await.map_err(|e| {
+            if e.is_timeout() {
+                ConnectorError::Timeout(e.to_string())
+            } else if e.is_connect() {
+                ConnectorError::ConnectionFailed(e.to_string())
+            } else {
+                ConnectorError::RequestFailed(e.to_string())
+            }
+        })?;
+
+        let status = response.status();
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            let retry_after = response
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(60);
+            return Err(ConnectorError::RateLimited(retry_after));
+        }
+
+        if status.is_client_error() {
+            return match status {
+                StatusCode::UNAUTHORIZED => {
+                    Err(ConnectorError::AuthenticationFailed("Unauthorized".into()))
+                }
+                StatusCode::FORBIDDEN => {
+                    Err(ConnectorError::AuthorizationDenied("Forbidden".into()))
+                }
+                StatusCode::NOT_FOUND => Err(ConnectorError::NotFound("Resource not found".into())),
+                StatusCode::BAD_REQUEST => {
+                    let body = response.text().await.unwrap_or_default();
+                    Err(ConnectorError::RequestFailed(format!(
+                        "Bad request: {}",
+                        body
+                    )))
+                }
+                _ => Err(ConnectorError::RequestFailed(format!(
+                    "Client error: {}",
+                    status
+                ))),
+            };
+        }
+
+        Ok(response)
     }
 
     /// Executes a request with authentication, rate limiting, retries, and error handling.

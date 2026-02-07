@@ -77,13 +77,45 @@ impl crate::traits::Connector for CuckooConnector {
 impl MalwareSandbox for CuckooConnector {
     async fn submit_file(
         &self,
-        _file: &[u8],
-        _filename: &str,
-        _options: &SubmissionOptions,
+        file: &[u8],
+        filename: &str,
+        options: &SubmissionOptions,
     ) -> ConnectorResult<SubmissionId> {
-        Err(ConnectorError::Internal(
-            "Cuckoo file submission requires multipart upload (not yet implemented)".to_string(),
-        ))
+        if file.is_empty() {
+            return Err(ConnectorError::InvalidRequest(
+                "Cannot submit an empty file".to_string(),
+            ));
+        }
+
+        let file_part =
+            reqwest::multipart::Part::bytes(file.to_vec()).file_name(filename.to_string());
+        let mut form = reqwest::multipart::Form::new()
+            .part("file", file_part)
+            .text("timeout", options.timeout_secs.unwrap_or(120).to_string());
+
+        if let Some(command_line) = &options.command_line {
+            form = form.text("options", format!("arguments={}", command_line));
+        }
+
+        if let Some(environment) = &options.environment {
+            form = form.text("machine", environment.clone());
+        }
+
+        let response = self
+            .client
+            .post_multipart("/tasks/create/file", form)
+            .await?;
+        if !response.status().is_success() {
+            return Err(ConnectorError::RequestFailed(format!(
+                "File submission failed: {}",
+                response.status()
+            )));
+        }
+
+        match response.json::<CuckooSubmitResponse>().await {
+            Ok(data) => Ok(SubmissionId(data.task_id.to_string())),
+            Err(e) => Err(ConnectorError::InvalidResponse(e.to_string())),
+        }
     }
 
     async fn submit_url(

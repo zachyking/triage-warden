@@ -82,15 +82,49 @@ impl crate::traits::Connector for HybridAnalysisConnector {
 impl MalwareSandbox for HybridAnalysisConnector {
     async fn submit_file(
         &self,
-        _file: &[u8],
-        _filename: &str,
-        _options: &SubmissionOptions,
+        file: &[u8],
+        filename: &str,
+        options: &SubmissionOptions,
     ) -> ConnectorResult<SubmissionId> {
-        // File submission requires multipart upload
-        Err(ConnectorError::Internal(
-            "Hybrid Analysis file submission requires multipart upload (not yet implemented)"
-                .to_string(),
-        ))
+        if file.is_empty() {
+            return Err(ConnectorError::InvalidRequest(
+                "Cannot submit an empty file".to_string(),
+            ));
+        }
+
+        let file_part =
+            reqwest::multipart::Part::bytes(file.to_vec()).file_name(filename.to_string());
+        let mut form = reqwest::multipart::Form::new()
+            .part("file", file_part)
+            .text(
+                "environment_id",
+                options
+                    .environment
+                    .as_deref()
+                    .unwrap_or(&self.config.default_environment)
+                    .to_string(),
+            )
+            .text("no_share_third_party", options.private.to_string());
+
+        if let Some(command_line) = &options.command_line {
+            form = form.text("custom_cmd_line", command_line.clone());
+        }
+
+        let response = self
+            .client
+            .post_multipart("/api/v2/submit/file", form)
+            .await?;
+        if !response.status().is_success() {
+            return Err(ConnectorError::RequestFailed(format!(
+                "File submission failed: {}",
+                response.status()
+            )));
+        }
+
+        match response.json::<HybridAnalysisSubmitResponse>().await {
+            Ok(data) => Ok(SubmissionId(data.job_id)),
+            Err(e) => Err(ConnectorError::InvalidResponse(e.to_string())),
+        }
     }
 
     async fn submit_url(

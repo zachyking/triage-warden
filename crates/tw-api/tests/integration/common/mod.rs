@@ -9,8 +9,10 @@ use serde::de::DeserializeOwned;
 use sqlx::SqlitePool;
 use std::sync::Arc;
 use tower::ServiceExt;
-use tw_api::{routes, state::AppState};
+use tw_api::{routes, server::ApiDoc, state::AppState};
 use tw_core::{db::DbPool, EventBus, FeatureFlagStore, FeatureFlags, InMemoryFeatureFlagStore};
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
 
 /// Creates an in-memory SQLite database with all migrations applied.
@@ -154,7 +156,8 @@ pub async fn create_test_state() -> AppState {
 /// Creates a test router (without authentication layer for health tests).
 pub async fn create_test_router() -> (Router, AppState) {
     let state = create_test_state().await;
-    let router = routes::create_router(state.clone());
+    let router = routes::create_router(state.clone())
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()));
     (router, state)
 }
 

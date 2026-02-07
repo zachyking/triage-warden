@@ -9,9 +9,7 @@ use serde_json::Value;
 use tower::ServiceExt;
 
 /// Test that the OpenAPI schema is valid and accessible.
-/// Note: This is currently ignored as the OpenAPI endpoint is not yet implemented.
 #[tokio::test]
-#[ignore = "OpenAPI endpoint not yet implemented"]
 async fn test_openapi_schema_accessible() {
     let (router, _state) = create_test_router().await;
 
@@ -150,9 +148,7 @@ async fn test_incidents_list_pagination_contract() {
 }
 
 /// Contract: API versioning should be consistent.
-/// Note: This is currently ignored as the OpenAPI endpoint is not yet implemented.
 #[tokio::test]
-#[ignore = "OpenAPI endpoint not yet implemented"]
 async fn test_api_versioning_contract() {
     let (router, _state) = create_test_router().await;
 
