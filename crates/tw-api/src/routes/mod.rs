@@ -32,16 +32,22 @@ pub mod training;
 pub mod users;
 pub mod webhooks;
 
+use crate::auth::RequireAnalyst;
 use crate::state::AppState;
-use axum::Router;
+use axum::{
+    extract::Request,
+    middleware::{from_fn_with_state, Next},
+    response::Response,
+    Router,
+};
 
 /// Creates the main API router.
 pub fn create_router(state: AppState) -> Router {
     Router::new()
         // Versioned API endpoint
-        .nest("/api/v1", api_routes())
+        .nest("/api/v1", api_routes(state.clone()))
         // Legacy unversioned endpoint (deprecated, will be removed in future versions)
-        .nest("/api", api_routes())
+        .nest("/api", api_routes(state.clone()))
         .merge(health::routes())
         .merge(metrics::routes())
         .merge(auth::routes())
@@ -49,7 +55,7 @@ pub fn create_router(state: AppState) -> Router {
 }
 
 /// API routes under /api prefix.
-fn api_routes() -> Router<AppState> {
+fn api_routes(state: AppState) -> Router<AppState> {
     Router::new()
         .nest("/admin/users", users::routes())
         .nest("/admin/features", features::routes())
@@ -62,9 +68,18 @@ fn api_routes() -> Router<AppState> {
             feedback::incident_feedback_routes(),
         )
         .nest("/kill-switch", kill_switch::routes())
-        .nest("/notifications", notifications::routes())
+        .nest(
+            "/notifications",
+            notifications::routes().route_layer(from_fn_with_state(
+                state.clone(),
+                require_analyst_middleware,
+            )),
+        )
         .nest("/playbooks", playbooks::routes())
-        .nest("/policies", policies::routes())
+        .nest(
+            "/policies",
+            policies::routes().route_layer(from_fn_with_state(state, require_analyst_middleware)),
+        )
         .nest("/settings", settings::routes())
         .nest("/training", training::routes())
         .nest("/knowledge", knowledge::routes())
@@ -86,4 +101,12 @@ fn api_routes() -> Router<AppState> {
         .nest("/comments", comments::routes())
         .nest("/activity", activity::routes())
         .nest("/handoffs", handoff::routes())
+}
+
+async fn require_analyst_middleware(
+    RequireAnalyst(_user): RequireAnalyst,
+    request: Request,
+    next: Next,
+) -> Response {
+    next.run(request).await
 }

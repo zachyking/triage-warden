@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::ApiError;
+use crate::middleware::OptionalTenant;
 use crate::state::AppState;
+use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::db::{create_policy_repository, PolicyRepository, PolicyUpdate};
 use tw_core::policy::{ApprovalLevel, Policy, PolicyAction};
 
@@ -145,13 +147,19 @@ fn toast_trigger(toast_type: &str, title: &str, message: &str) -> String {
     .to_string()
 }
 
+fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> Uuid {
+    tenant.map(|ctx| ctx.tenant_id).unwrap_or(DEFAULT_TENANT_ID)
+}
+
 /// List all policies ordered by priority.
 async fn list_policies(
     State(state): State<AppState>,
+    OptionalTenant(tenant): OptionalTenant,
 ) -> Result<Json<Vec<PolicyResponse>>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let repo: Box<dyn PolicyRepository> = create_policy_repository(&state.db);
 
-    let policies = repo.list().await?;
+    let policies = repo.list_for_tenant(tenant_id).await?;
     let responses: Vec<PolicyResponse> = policies.into_iter().map(PolicyResponse::from).collect();
 
     Ok(Json(responses))
@@ -160,12 +168,14 @@ async fn list_policies(
 /// Get a single policy by ID.
 async fn get_policy(
     State(state): State<AppState>,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<Json<PolicyResponse>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let repo: Box<dyn PolicyRepository> = create_policy_repository(&state.db);
 
     let policy = repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Policy {} not found", id)))?;
 
@@ -175,8 +185,10 @@ async fn get_policy(
 /// Create a new policy.
 async fn create_policy(
     State(state): State<AppState>,
+    OptionalTenant(tenant): OptionalTenant,
     Form(request): Form<CreatePolicyRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let repo: Box<dyn PolicyRepository> = create_policy_repository(&state.db);
 
     // Build condition from form fields
@@ -217,7 +229,7 @@ async fn create_policy(
         policy = policy.with_priority(priority);
     }
 
-    let created = repo.create(&policy).await?;
+    let created = repo.create_for_tenant(tenant_id, &policy).await?;
 
     Ok((
         StatusCode::CREATED,
@@ -236,13 +248,15 @@ async fn create_policy(
 /// Update an existing policy.
 async fn update_policy(
     State(state): State<AppState>,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
     Form(request): Form<UpdatePolicyRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let repo: Box<dyn PolicyRepository> = create_policy_repository(&state.db);
 
     // Verify policy exists
-    repo.get(id)
+    repo.get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Policy {} not found", id)))?;
 
@@ -264,7 +278,7 @@ async fn update_policy(
         enabled: request.enabled,
     };
 
-    let updated = repo.update(id, &update).await?;
+    let updated = repo.update_for_tenant(id, tenant_id, &update).await?;
 
     Ok((
         StatusCode::OK,
@@ -279,11 +293,13 @@ async fn update_policy(
 /// Delete a policy.
 async fn delete_policy(
     State(state): State<AppState>,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let repo: Box<dyn PolicyRepository> = create_policy_repository(&state.db);
 
-    let deleted = repo.delete(id).await?;
+    let deleted = repo.delete_for_tenant(id, tenant_id).await?;
 
     if !deleted {
         return Err(ApiError::NotFound(format!("Policy {} not found", id)));
@@ -302,11 +318,13 @@ async fn delete_policy(
 /// Toggle the enabled status of a policy.
 async fn toggle_policy(
     State(state): State<AppState>,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
     let repo: Box<dyn PolicyRepository> = create_policy_repository(&state.db);
 
-    let policy = repo.toggle_enabled(id).await?;
+    let policy = repo.toggle_enabled_for_tenant(id, tenant_id).await?;
 
     let status_text = if policy.enabled {
         "enabled"

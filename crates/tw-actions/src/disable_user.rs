@@ -1,22 +1,37 @@
 //! Disable user action.
 //!
-//! This action disables a user account (placeholder - requires identity provider connector).
+//! This action disables a user account in a configured identity provider.
 
 use crate::registry::{
     Action, ActionContext, ActionError, ActionResult, ParameterDef, ParameterType,
 };
 use async_trait::async_trait;
+use chrono::Utc;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::{info, instrument, warn};
+use tw_connectors::IdentityConnector;
 
 /// Action to disable a user account.
 pub struct DisableUserAction {
-    // In a real implementation, this would hold an identity provider connector
+    identity_connector: Option<Arc<dyn IdentityConnector>>,
 }
 
 impl DisableUserAction {
-    /// Creates a new disable user action.
+    /// Creates a new disable user action without a configured identity connector.
+    ///
+    /// Use [`Self::with_identity_connector`] for a fully functional action.
     pub fn new() -> Self {
-        Self {}
+        Self {
+            identity_connector: None,
+        }
+    }
+
+    /// Creates a new disable user action backed by an identity connector.
+    pub fn with_identity_connector(identity_connector: Arc<dyn IdentityConnector>) -> Self {
+        Self {
+            identity_connector: Some(identity_connector),
+        }
     }
 }
 
@@ -59,11 +74,12 @@ impl Action for DisableUserAction {
     }
 
     fn supports_rollback(&self) -> bool {
-        true
+        false
     }
 
     #[instrument(skip(self, context))]
     async fn execute(&self, context: ActionContext) -> Result<ActionResult, ActionError> {
+        let started_at = Utc::now();
         let username = context.require_string("username")?;
         let reason = context
             .get_string("reason")
@@ -78,26 +94,108 @@ impl Action for DisableUserAction {
             username, reason, revoke_sessions
         );
 
-        // Return an error indicating this action is not implemented
-        // rather than returning a fake success which could mislead operators
-        // into thinking the user was actually disabled.
-        warn!(
-            "DisableUserAction cannot execute - no identity provider connector configured. \
-             User '{}' was NOT disabled.",
-            username
+        if context.dry_run {
+            let mut output = HashMap::new();
+            output.insert("username".to_string(), serde_json::json!(username));
+            output.insert("reason".to_string(), serde_json::json!(reason));
+            output.insert(
+                "revoke_sessions_requested".to_string(),
+                serde_json::json!(revoke_sessions),
+            );
+            output.insert("dry_run".to_string(), serde_json::json!(true));
+
+            return Ok(ActionResult::success(
+                self.name(),
+                &format!("Dry run: user '{}' would be disabled", username),
+                started_at,
+                output,
+            ));
+        }
+
+        let connector = self.identity_connector.as_ref().ok_or_else(|| {
+            ActionError::NotSupported(
+                "disable_user requires a configured identity connector".to_string(),
+            )
+        })?;
+
+        let user = connector.get_user(&username).await.map_err(|e| {
+            ActionError::ConnectorError(format!("Failed to resolve user '{}': {}", username, e))
+        })?;
+
+        if !user.active {
+            let mut output = HashMap::new();
+            output.insert("username".to_string(), serde_json::json!(user.username));
+            output.insert("user_id".to_string(), serde_json::json!(user.id));
+            output.insert("already_disabled".to_string(), serde_json::json!(true));
+            output.insert(
+                "revoke_sessions_requested".to_string(),
+                serde_json::json!(false),
+            );
+
+            return Ok(ActionResult::success(
+                self.name(),
+                &format!("User '{}' is already disabled", user.username),
+                started_at,
+                output,
+            ));
+        }
+
+        let suspend_result = connector
+            .suspend_user(&user.id)
+            .await
+            .map_err(|e| ActionError::ConnectorError(format!("Failed to disable user: {}", e)))?;
+
+        if !suspend_result.success {
+            return Err(ActionError::ExecutionFailed(suspend_result.message));
+        }
+
+        let mut revoke_sessions_success = false;
+        let mut message = format!("User '{}' disabled successfully", user.username);
+        if revoke_sessions {
+            match connector.revoke_sessions(&user.id).await {
+                Ok(result) if result.success => {
+                    revoke_sessions_success = true;
+                    message.push_str(" and active sessions revoked");
+                }
+                Ok(result) => {
+                    warn!(
+                        "User '{}' disabled but session revocation reported failure: {}",
+                        user.username, result.message
+                    );
+                    message.push_str(&format!("; session revocation failed: {}", result.message));
+                }
+                Err(e) => {
+                    warn!(
+                        "User '{}' disabled but session revocation failed: {}",
+                        user.username, e
+                    );
+                    message.push_str("; session revocation failed");
+                }
+            }
+        }
+
+        let mut output = HashMap::new();
+        output.insert("username".to_string(), serde_json::json!(user.username));
+        output.insert("user_id".to_string(), serde_json::json!(user.id));
+        output.insert(
+            "idp_action_id".to_string(),
+            serde_json::json!(suspend_result.action_id),
+        );
+        output.insert("reason".to_string(), serde_json::json!(reason));
+        output.insert(
+            "revoke_sessions_requested".to_string(),
+            serde_json::json!(revoke_sessions),
+        );
+        output.insert(
+            "revoke_sessions_success".to_string(),
+            serde_json::json!(revoke_sessions_success),
         );
 
-        Err(ActionError::NotSupported(
-            format!(
-                "disable_user action requires an identity provider integration (Okta, Azure AD, Google Workspace, etc.). \
-                 No IdP connector is currently configured. User '{}' was NOT disabled. \
-                 To enable this action:\n\
-                 1. Configure an identity provider connector in the system settings\n\
-                 2. Ensure the connector has permissions to manage user accounts\n\
-                 3. Restart the service to apply the configuration\n\n\
-                 For immediate user disablement, please use your identity provider's admin console directly.",
-                username
-            )
+        Ok(ActionResult::success(
+            self.name(),
+            &message,
+            started_at,
+            output,
         ))
     }
 
@@ -111,29 +209,27 @@ impl Action for DisableUserAction {
         })?;
 
         warn!(
-            "DisableUserAction rollback cannot execute - no identity provider connector configured. \
-             User '{}' status unchanged.",
+            "DisableUserAction rollback requested for '{}', but unsuspend is not supported.",
             username
         );
 
-        Err(ActionError::NotSupported(
-            format!(
-                "disable_user rollback requires an identity provider integration. \
-                 No IdP connector is currently configured. User '{}' status was NOT changed. \
-                 Please use your identity provider's admin console to re-enable the user if needed.",
-                username
-            )
-        ))
+        Err(ActionError::NotSupported(format!(
+            "disable_user rollback is not supported because identity connectors do not provide \
+                 an unsuspend operation. Re-enable '{}' manually in your identity provider.",
+            username
+        )))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use tw_connectors::{IdentityConnector, MockIdentityConnector};
     use uuid::Uuid;
 
     #[tokio::test]
-    async fn test_disable_user_returns_not_supported() {
+    async fn test_disable_user_returns_not_supported_without_connector() {
         let action = DisableUserAction::new();
 
         let context = ActionContext::new(Uuid::new_v4())
@@ -144,26 +240,33 @@ mod tests {
         assert!(matches!(result, Err(ActionError::NotSupported(_))));
 
         if let Err(ActionError::NotSupported(msg)) = result {
-            assert!(msg.contains("identity provider integration"));
-            assert!(msg.contains("jsmith@company.com"));
-            assert!(msg.contains("NOT disabled"));
+            assert!(msg.contains("configured identity connector"));
         }
     }
 
     #[tokio::test]
-    async fn test_disable_user_error_message_includes_username() {
-        let action = DisableUserAction::new();
+    async fn test_disable_user_success_with_identity_connector() {
+        let connector: Arc<dyn IdentityConnector> =
+            Arc::new(MockIdentityConnector::with_sample_data("mock-idp"));
+        let action = DisableUserAction::with_identity_connector(connector.clone());
 
         let context = ActionContext::new(Uuid::new_v4())
-            .with_param("username", serde_json::json!("admin@company.com"))
-            .with_param("revoke_sessions", serde_json::json!(true));
+            .with_param("username", serde_json::json!("jdoe"))
+            .with_param("revoke_sessions", serde_json::json!(false));
 
-        let result = action.execute(context).await;
-        assert!(matches!(result, Err(ActionError::NotSupported(_))));
+        let result = action
+            .execute(context)
+            .await
+            .expect("action should succeed");
+        assert!(result.success);
+        assert!(result.message.contains("disabled successfully"));
 
-        if let Err(ActionError::NotSupported(msg)) = result {
-            assert!(msg.contains("admin@company.com"));
-        }
+        let updated_user = connector
+            .get_user("jdoe")
+            .await
+            .expect("user should still be queryable");
+        assert!(!updated_user.active);
+        assert_eq!(updated_user.status, "suspended");
     }
 
     #[tokio::test]
@@ -189,11 +292,33 @@ mod tests {
         assert!(matches!(result, Err(ActionError::NotSupported(_))));
     }
 
+    #[tokio::test]
+    async fn test_disable_user_dry_run() {
+        let connector: Arc<dyn IdentityConnector> =
+            Arc::new(MockIdentityConnector::with_sample_data("mock-idp"));
+        let action = DisableUserAction::with_identity_connector(connector.clone());
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("username", serde_json::json!("admin"))
+            .with_dry_run(true);
+
+        let result = action
+            .execute(context)
+            .await
+            .expect("dry run should succeed");
+        assert!(result.success);
+        assert!(result.message.contains("Dry run"));
+
+        let unchanged_user = connector
+            .get_user("admin")
+            .await
+            .expect("user should exist");
+        assert!(unchanged_user.active);
+    }
+
     #[test]
-    fn test_supports_rollback_true() {
+    fn test_supports_rollback_false() {
         let action = DisableUserAction::new();
-        // Even though rollback returns NotSupported, the action claims to support it
-        // because if an IdP connector were configured, it would support rollback
-        assert!(action.supports_rollback());
+        assert!(!action.supports_rollback());
     }
 }

@@ -283,34 +283,28 @@ async fn test_create_api_key_requires_auth() {
 // Policies Endpoint Tests
 // ============================================================
 
-// Note: Policy list is currently accessible without auth
-// TODO: Consider adding auth requirement for policies in future
 #[tokio::test]
-async fn test_list_policies_accessible() {
+async fn test_list_policies_requires_auth() {
     let (app, _state) = create_test_router().await;
 
     let request = unauthenticated_request(Method::GET, "/api/v1/policies");
     let response = app.oneshot(request).await.unwrap();
 
-    // Currently accessible (policies may be needed by integrations)
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 // ============================================================
 // Notifications Endpoint Tests
 // ============================================================
 
-// Note: Notification list is currently accessible without auth
-// TODO: Consider adding auth requirement for notifications in future
 #[tokio::test]
-async fn test_list_notification_channels_accessible() {
+async fn test_list_notification_channels_requires_auth() {
     let (app, _state) = create_test_router().await;
 
     let request = unauthenticated_request(Method::GET, "/api/v1/notifications");
     let response = app.oneshot(request).await.unwrap();
 
-    // Currently accessible
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 // ============================================================
