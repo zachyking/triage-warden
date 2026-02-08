@@ -295,22 +295,30 @@ impl RunTriageAgentAction {
         (base + evidence_bonus).clamp(0.55, 0.98)
     }
 
-    fn ip_regex() -> &'static Regex {
-        static INSTANCE: OnceLock<Regex> = OnceLock::new();
-        INSTANCE.get_or_init(|| Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}\b").unwrap())
+    fn ip_regex() -> Option<&'static Regex> {
+        static INSTANCE: OnceLock<Result<Regex, regex::Error>> = OnceLock::new();
+        INSTANCE
+            .get_or_init(|| Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"))
+            .as_ref()
+            .ok()
     }
 
-    fn hash_regex() -> &'static Regex {
-        static INSTANCE: OnceLock<Regex> = OnceLock::new();
-        INSTANCE.get_or_init(|| Regex::new(r"\b[a-fA-F0-9]{64}\b").unwrap())
+    fn hash_regex() -> Option<&'static Regex> {
+        static INSTANCE: OnceLock<Result<Regex, regex::Error>> = OnceLock::new();
+        INSTANCE
+            .get_or_init(|| Regex::new(r"\b[a-fA-F0-9]{64}\b"))
+            .as_ref()
+            .ok()
     }
 
-    fn domain_regex() -> &'static Regex {
-        static INSTANCE: OnceLock<Regex> = OnceLock::new();
-        INSTANCE.get_or_init(|| {
-            Regex::new(r"\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}\b")
-                .unwrap()
-        })
+    fn domain_regex() -> Option<&'static Regex> {
+        static INSTANCE: OnceLock<Result<Regex, regex::Error>> = OnceLock::new();
+        INSTANCE
+            .get_or_init(|| {
+                Regex::new(r"\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}\b")
+            })
+            .as_ref()
+            .ok()
     }
 
     fn extract_iocs(context: &IncidentContextInput) -> Vec<String> {
@@ -340,18 +348,24 @@ impl RunTriageAgentAction {
             .into_iter()
             .flatten()
         {
-            for capture in Self::ip_regex().find_iter(text) {
-                add(capture.as_str().to_string());
+            if let Some(pattern) = Self::ip_regex() {
+                for capture in pattern.find_iter(text) {
+                    add(capture.as_str().to_string());
+                }
             }
 
-            for capture in Self::hash_regex().find_iter(text) {
-                add(capture.as_str().to_string());
+            if let Some(pattern) = Self::hash_regex() {
+                for capture in pattern.find_iter(text) {
+                    add(capture.as_str().to_string());
+                }
             }
 
-            for capture in Self::domain_regex().find_iter(text) {
-                let candidate = capture.as_str();
-                if !candidate.contains('@') {
-                    add(candidate.to_string());
+            if let Some(pattern) = Self::domain_regex() {
+                for capture in pattern.find_iter(text) {
+                    let candidate = capture.as_str();
+                    if !candidate.contains('@') {
+                        add(candidate.to_string());
+                    }
                 }
             }
         }

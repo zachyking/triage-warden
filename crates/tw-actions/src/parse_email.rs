@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use tracing::{debug, info, instrument};
 
 /// Maximum length for email body content in action output to prevent sensitive data exposure.
@@ -16,6 +17,22 @@ const MAX_BODY_OUTPUT_LENGTH: usize = 200;
 
 /// Truncation suffix appended when content is truncated.
 const TRUNCATION_SUFFIX: &str = "...";
+
+fn url_pattern() -> Option<&'static regex::Regex> {
+    static INSTANCE: OnceLock<Result<regex::Regex, regex::Error>> = OnceLock::new();
+    INSTANCE
+        .get_or_init(|| regex::Regex::new(r#"(?i)(https?://[^\s<>"'\)]+)"#))
+        .as_ref()
+        .ok()
+}
+
+fn href_pattern() -> Option<&'static regex::Regex> {
+    static INSTANCE: OnceLock<Result<regex::Regex, regex::Error>> = OnceLock::new();
+    INSTANCE
+        .get_or_init(|| regex::Regex::new(r#"href=["']([^"']+)["']"#))
+        .as_ref()
+        .ok()
+}
 
 /// Truncates a string to the specified maximum length, adding a suffix if truncated.
 /// Handles UTF-8 character boundaries safely to prevent invalid string slicing.
@@ -440,26 +457,30 @@ impl ParseEmailAction {
     fn extract_urls(&self, content: &str) -> Vec<String> {
         let mut urls = Vec::new();
 
-        // Simple URL extraction patterns
         // Match http/https URLs
-        let url_pattern = regex::Regex::new(r#"(?i)(https?://[^\s<>"'\)]+)"#).unwrap();
-
-        for cap in url_pattern.captures_iter(content) {
-            if let Some(url) = cap.get(1) {
-                let url_str = url.as_str().trim_end_matches(['.', ',', ';']);
-                urls.push(url_str.to_string());
-            }
-        }
-
-        // Also look for href attributes in HTML
-        let href_pattern = regex::Regex::new(r#"href=["']([^"']+)["']"#).unwrap();
-        for cap in href_pattern.captures_iter(content) {
-            if let Some(url) = cap.get(1) {
-                let url_str = url.as_str();
-                if url_str.starts_with("http://") || url_str.starts_with("https://") {
+        if let Some(url_pattern) = url_pattern() {
+            for cap in url_pattern.captures_iter(content) {
+                if let Some(url) = cap.get(1) {
+                    let url_str = url.as_str().trim_end_matches(['.', ',', ';']);
                     urls.push(url_str.to_string());
                 }
             }
+        } else {
+            debug!("URL regex compilation failed, skipping URL pattern extraction");
+        }
+
+        // Also look for href attributes in HTML
+        if let Some(href_pattern) = href_pattern() {
+            for cap in href_pattern.captures_iter(content) {
+                if let Some(url) = cap.get(1) {
+                    let url_str = url.as_str();
+                    if url_str.starts_with("http://") || url_str.starts_with("https://") {
+                        urls.push(url_str.to_string());
+                    }
+                }
+            }
+        } else {
+            debug!("HREF regex compilation failed, skipping href extraction");
         }
 
         // Deduplicate
