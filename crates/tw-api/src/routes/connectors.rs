@@ -992,27 +992,116 @@ async fn test_microsoft_connection(
 
 /// Tests Google Workspace connection - validates config for now.
 async fn test_google_workspace_connection(config: &serde_json::Value) -> InternalTestResult {
-    let has_credentials = config
-        .get("service_account_json")
-        .and_then(|v| v.as_str())
-        .is_some()
-        || config
-            .get("credentials_file")
-            .and_then(|v| v.as_str())
-            .is_some();
+    if let Some(raw_service_account_json) = get_non_empty_str(config, "service_account_json") {
+        return match serde_json::from_str::<serde_json::Value>(raw_service_account_json) {
+            Ok(service_account) => match validate_google_service_account_json(&service_account) {
+                Ok(()) => InternalTestResult {
+                    success: true,
+                    message: "Google Workspace service account configuration validated."
+                        .to_string(),
+                },
+                Err(msg) => InternalTestResult {
+                    success: false,
+                    message: format!("Google Workspace service account JSON is invalid: {}", msg),
+                },
+            },
+            Err(e) => InternalTestResult {
+                success: false,
+                message: format!(
+                    "Google Workspace service_account_json must be valid JSON: {}",
+                    e
+                ),
+            },
+        };
+    }
 
-    if has_credentials {
-        InternalTestResult {
-            success: true,
-            message: "Google Workspace configuration validated. Real connection test pending."
-                .to_string(),
+    if let Some(credentials_file) = get_non_empty_str(config, "credentials_file") {
+        let path = std::path::Path::new(credentials_file);
+
+        if !path.exists() {
+            return InternalTestResult {
+                success: false,
+                message: format!(
+                    "Google Workspace credentials_file does not exist: {}",
+                    credentials_file
+                ),
+            };
         }
-    } else {
-        InternalTestResult {
-            success: false,
-            message: "Google Workspace requires service account credentials.".to_string(),
+        if !path.is_file() {
+            return InternalTestResult {
+                success: false,
+                message: format!(
+                    "Google Workspace credentials_file is not a file: {}",
+                    credentials_file
+                ),
+            };
+        }
+
+        let file_content = match std::fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(e) => {
+                return InternalTestResult {
+                    success: false,
+                    message: format!("Google Workspace credentials_file could not be read: {}", e),
+                };
+            }
+        };
+
+        return match serde_json::from_str::<serde_json::Value>(&file_content) {
+            Ok(service_account) => match validate_google_service_account_json(&service_account) {
+                Ok(()) => InternalTestResult {
+                    success: true,
+                    message: "Google Workspace credentials file validated.".to_string(),
+                },
+                Err(msg) => InternalTestResult {
+                    success: false,
+                    message: format!("Google Workspace credentials_file JSON is invalid: {}", msg),
+                },
+            },
+            Err(e) => InternalTestResult {
+                success: false,
+                message: format!(
+                    "Google Workspace credentials_file must contain valid JSON: {}",
+                    e
+                ),
+            },
+        };
+    }
+
+    InternalTestResult {
+        success: false,
+        message: "Google Workspace requires 'service_account_json' or 'credentials_file'."
+            .to_string(),
+    }
+}
+
+fn validate_google_service_account_json(service_account: &serde_json::Value) -> Result<(), String> {
+    let Some(obj) = service_account.as_object() else {
+        return Err("expected JSON object".to_string());
+    };
+
+    let service_type = obj
+        .get("type")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .unwrap_or_default();
+    if service_type != "service_account" {
+        return Err("missing or invalid 'type' (expected 'service_account')".to_string());
+    }
+
+    for required_key in ["client_email", "private_key", "token_uri"] {
+        if obj
+            .get(required_key)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .is_none()
+        {
+            return Err(format!("missing or empty '{}'", required_key));
         }
     }
+
+    Ok(())
 }
 
 /// Tests Generic connector - validates config for now.
@@ -2928,7 +3017,7 @@ mod api_tests {
             "name": "Google Workspace Test",
             "connector_type": "googleworkspace",
             "config": {
-                "service_account_json": "{\"type\": \"service_account\"}"
+                "service_account_json": "{\"type\":\"service_account\",\"client_email\":\"svc-account@example.iam.gserviceaccount.com\",\"private_key\":\"-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----\\n\",\"token_uri\":\"https://oauth2.googleapis.com/token\"}"
             },
             "enabled": true
         });
@@ -2964,6 +3053,52 @@ mod api_tests {
 
         assert!(result.success);
         assert!(result.message.contains("Google Workspace"));
+    }
+
+    #[tokio::test]
+    async fn test_test_connector_google_workspace_invalid_service_account_json() {
+        let app = setup_test_app().await;
+
+        let body = serde_json::json!({
+            "name": "Google Workspace Invalid JSON",
+            "connector_type": "googleworkspace",
+            "config": {
+                "service_account_json": "{\"type\":\"service_account\"}"
+            },
+            "enabled": true
+        });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/connectors")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: ConnectorResponse = serde_json::from_slice(&body_bytes).unwrap();
+
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("/api/connectors/{}/test", created.id))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: TestConnectionResponse = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert!(!result.success);
+        assert!(result.message.contains("missing or empty 'client_email'"));
     }
 
     #[tokio::test]
