@@ -18,10 +18,11 @@ use validator::Validate;
 use crate::auth::{RequireAdmin, RequireAnalyst};
 use crate::error::ApiError;
 use crate::state::AppState;
+use tw_connectors::cloud::azure::defender::DefenderConfig;
 use tw_connectors::{
     AuthConfig, Connector, ConnectorConfig as ConnectorTraitConfig, CrowdStrikeConfig,
-    CrowdStrikeConnector, JiraConfig, JiraConnector, SplunkConfig, SplunkConnector,
-    VirusTotalConfig, VirusTotalConnector,
+    CrowdStrikeConnector, DefenderConnector, JiraConfig, JiraConnector, M365Config, M365Connector,
+    SplunkConfig, SplunkConnector, VirusTotalConfig, VirusTotalConnector,
 };
 use tw_core::connector::{ConnectorConfig, ConnectorStatus, ConnectorType};
 use tw_core::db::{create_connector_repository, ConnectorRepository, ConnectorUpdate};
@@ -523,6 +524,27 @@ fn get_non_empty_str<'a>(config: &'a serde_json::Value, key: &str) -> Option<&'a
         .filter(|v| !v.is_empty())
 }
 
+fn get_oauth_scopes(config: &serde_json::Value, default_scope: &str) -> Vec<String> {
+    let scopes: Vec<String> = config
+        .get("scopes")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if scopes.is_empty() {
+        vec![default_scope.to_string()]
+    } else {
+        scopes
+    }
+}
+
 /// Tests Jira connection using the actual connector.
 async fn test_jira_connection(config: &serde_json::Value) -> InternalTestResult {
     let base_url = match get_non_empty_str(config, "base_url") {
@@ -795,27 +817,176 @@ async fn test_crowdstrike_connection(config: &serde_json::Value) -> InternalTest
     }
 }
 
-/// Tests Microsoft (Defender/M365) connection - validates config for now.
+/// Tests Microsoft (Defender/M365) connection using real connector health checks.
 async fn test_microsoft_connection(
     connector_type: &ConnectorType,
     config: &serde_json::Value,
 ) -> InternalTestResult {
-    let has_tenant_id = config.get("tenant_id").and_then(|v| v.as_str()).is_some();
-    let has_client_id = config.get("client_id").and_then(|v| v.as_str()).is_some();
+    let tenant_id = match get_non_empty_str(config, "tenant_id") {
+        Some(v) => v,
+        None => {
+            return InternalTestResult {
+                success: false,
+                message: format!("{} requires a non-empty 'tenant_id'.", connector_type),
+            };
+        }
+    };
+    let client_id = match get_non_empty_str(config, "client_id") {
+        Some(v) => v,
+        None => {
+            return InternalTestResult {
+                success: false,
+                message: format!("{} requires a non-empty 'client_id'.", connector_type),
+            };
+        }
+    };
+    let client_secret = match get_non_empty_str(config, "client_secret") {
+        Some(v) => v,
+        None => {
+            return InternalTestResult {
+                success: false,
+                message: format!("{} requires a non-empty 'client_secret'.", connector_type),
+            };
+        }
+    };
+    let token_url = get_non_empty_str(config, "token_url")
+        .map(ToString::to_string)
+        .unwrap_or_else(|| {
+            format!(
+                "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
+                tenant_id
+            )
+        });
 
-    if has_tenant_id && has_client_id {
-        InternalTestResult {
-            success: true,
+    match connector_type {
+        ConnectorType::M365 => {
+            let base_url =
+                get_non_empty_str(config, "base_url").unwrap_or("https://graph.microsoft.com/v1.0");
+            let scopes = get_oauth_scopes(config, "https://graph.microsoft.com/.default");
+            let m365_config = M365Config {
+                connector: ConnectorTraitConfig {
+                    name: "m365".to_string(),
+                    base_url: base_url.to_string(),
+                    auth: AuthConfig::OAuth2 {
+                        client_id: client_id.to_string(),
+                        client_secret: client_secret.to_string().into(),
+                        token_url,
+                        scopes,
+                    },
+                    timeout_secs: 30,
+                    max_retries: 3,
+                    verify_tls: true,
+                    headers: std::collections::HashMap::new(),
+                },
+                tenant_id: tenant_id.to_string(),
+                target_mailbox: get_non_empty_str(config, "target_mailbox")
+                    .map(ToString::to_string),
+                use_security_center: config
+                    .get("use_security_center")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+            };
+
+            match M365Connector::new(m365_config) {
+                Ok(connector) => match connector.test_connection().await {
+                    Ok(true) => InternalTestResult {
+                        success: true,
+                        message: "M365 API connection successful.".to_string(),
+                    },
+                    Ok(false) => InternalTestResult {
+                        success: false,
+                        message: "M365 API connection failed - authentication error.".to_string(),
+                    },
+                    Err(e) => {
+                        warn!(error = %e, "M365 connection test failed");
+                        InternalTestResult {
+                            success: false,
+                            message: "M365 connection error. Check endpoint reachability and credentials."
+                                .to_string(),
+                        }
+                    }
+                },
+                Err(e) => {
+                    warn!(error = %e, "Failed to initialize M365 connector");
+                    InternalTestResult {
+                        success: false,
+                        message:
+                            "Failed to initialize M365 connector. Check connector configuration."
+                                .to_string(),
+                    }
+                }
+            }
+        }
+        ConnectorType::Defender => {
+            let subscription_id = match get_non_empty_str(config, "subscription_id") {
+                Some(v) => v,
+                None => {
+                    return InternalTestResult {
+                        success: false,
+                        message: "Defender requires a non-empty 'subscription_id'.".to_string(),
+                    };
+                }
+            };
+            let base_url =
+                get_non_empty_str(config, "base_url").unwrap_or("https://management.azure.com");
+            let scopes = get_oauth_scopes(config, "https://management.azure.com/.default");
+
+            let defender_config = DefenderConfig {
+                connector: ConnectorTraitConfig {
+                    name: "defender".to_string(),
+                    base_url: base_url.to_string(),
+                    auth: AuthConfig::OAuth2 {
+                        client_id: client_id.to_string(),
+                        client_secret: client_secret.to_string().into(),
+                        token_url,
+                        scopes,
+                    },
+                    timeout_secs: 30,
+                    max_retries: 3,
+                    verify_tls: true,
+                    headers: std::collections::HashMap::new(),
+                },
+                subscription_id: subscription_id.to_string(),
+            };
+
+            match DefenderConnector::new(defender_config) {
+                Ok(connector) => match connector.test_connection().await {
+                    Ok(true) => InternalTestResult {
+                        success: true,
+                        message: "Defender API connection successful.".to_string(),
+                    },
+                    Ok(false) => InternalTestResult {
+                        success: false,
+                        message: "Defender API connection failed - authentication error."
+                            .to_string(),
+                    },
+                    Err(e) => {
+                        warn!(error = %e, "Defender connection test failed");
+                        InternalTestResult {
+                            success: false,
+                            message: "Defender connection error. Check endpoint reachability and credentials."
+                                .to_string(),
+                        }
+                    }
+                },
+                Err(e) => {
+                    warn!(error = %e, "Failed to initialize Defender connector");
+                    InternalTestResult {
+                        success: false,
+                        message:
+                            "Failed to initialize Defender connector. Check connector configuration."
+                                .to_string(),
+                    }
+                }
+            }
+        }
+        _ => InternalTestResult {
+            success: false,
             message: format!(
-                "{} configuration validated. Real connection test pending.",
+                "{} is not a supported Microsoft connector type.",
                 connector_type
             ),
-        }
-    } else {
-        InternalTestResult {
-            success: false,
-            message: format!("{} requires 'tenant_id' and 'client_id'.", connector_type),
-        }
+        },
     }
 }
 
@@ -2608,7 +2779,7 @@ mod api_tests {
     }
 
     #[tokio::test]
-    async fn test_test_connector_defender_success() {
+    async fn test_test_connector_defender_requires_client_secret() {
         let app = setup_test_app().await;
 
         let body = serde_json::json!({
@@ -2650,8 +2821,103 @@ mod api_tests {
             .unwrap();
         let result: TestConnectionResponse = serde_json::from_slice(&body_bytes).unwrap();
 
-        assert!(result.success);
-        assert!(result.message.contains("Defender"));
+        assert!(!result.success);
+        assert!(result.message.contains("non-empty 'client_secret'"));
+    }
+
+    #[tokio::test]
+    async fn test_test_connector_defender_requires_subscription_id() {
+        let app = setup_test_app().await;
+
+        let body = serde_json::json!({
+            "name": "Defender Missing Subscription",
+            "connector_type": "defender",
+            "config": {
+                "tenant_id": "tenant-123",
+                "client_id": "client-456",
+                "client_secret": "secret-789"
+            },
+            "enabled": true
+        });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/connectors")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: ConnectorResponse = serde_json::from_slice(&body_bytes).unwrap();
+
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("/api/connectors/{}/test", created.id))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: TestConnectionResponse = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert!(!result.success);
+        assert!(result.message.contains("non-empty 'subscription_id'"));
+    }
+
+    #[tokio::test]
+    async fn test_test_connector_m365_requires_client_secret() {
+        let app = setup_test_app().await;
+
+        let body = serde_json::json!({
+            "name": "M365 Missing Secret",
+            "connector_type": "m365",
+            "config": {
+                "tenant_id": "tenant-123",
+                "client_id": "client-456"
+            },
+            "enabled": true
+        });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/connectors")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: ConnectorResponse = serde_json::from_slice(&body_bytes).unwrap();
+
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("/api/connectors/{}/test", created.id))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: TestConnectionResponse = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert!(!result.success);
+        assert!(result.message.contains("non-empty 'client_secret'"));
     }
 
     #[tokio::test]

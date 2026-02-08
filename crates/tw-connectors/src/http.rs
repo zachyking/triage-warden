@@ -143,17 +143,24 @@ impl HttpClient {
                 .map_err(|e| ConnectorError::ConfigError(e.to_string()))
         };
 
-        let client = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            build_client(false)
-        })) {
-            Ok(Ok(client)) => client,
-            Ok(Err(e)) => return Err(e),
-            Err(_) => {
-                warn!(
-                    connector_name = %config.name,
-                    "System proxy auto-discovery panicked; retrying connector HTTP client without proxy auto-discovery"
-                );
-                build_client(true)?
+        let disable_proxy_auto_discovery = should_disable_system_proxy_auto_discovery();
+        let client = if disable_proxy_auto_discovery {
+            info!(
+                connector_name = %config.name,
+                "System proxy auto-discovery disabled for connector HTTP client"
+            );
+            build_client(true)?
+        } else {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| build_client(false))) {
+                Ok(Ok(client)) => client,
+                Ok(Err(e)) => return Err(e),
+                Err(_) => {
+                    warn!(
+                        connector_name = %config.name,
+                        "System proxy auto-discovery panicked; retrying connector HTTP client without proxy auto-discovery"
+                    );
+                    build_client(true)?
+                }
             }
         };
 
@@ -552,6 +559,25 @@ impl HttpClient {
         }
 
         Ok(secure_access_token)
+    }
+}
+
+fn should_disable_system_proxy_auto_discovery() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let allow = std::env::var("TW_ENABLE_SYSTEM_PROXY_DISCOVERY")
+            .ok()
+            .map(|v| {
+                let normalized = v.trim().to_ascii_lowercase();
+                normalized == "1" || normalized == "true" || normalized == "yes"
+            })
+            .unwrap_or(false);
+        !allow
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
     }
 }
 
