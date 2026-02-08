@@ -1106,16 +1106,77 @@ fn validate_google_service_account_json(service_account: &serde_json::Value) -> 
 
 /// Tests Generic connector - validates config for now.
 async fn test_generic_connection(config: &serde_json::Value) -> InternalTestResult {
-    if config.get("base_url").and_then(|v| v.as_str()).is_some() {
-        InternalTestResult {
-            success: true,
-            message: "Generic connector configuration validated.".to_string(),
+    let base_url = match get_non_empty_str(config, "base_url") {
+        Some(v) => v,
+        None => {
+            return InternalTestResult {
+                success: false,
+                message: "Generic connector requires a non-empty 'base_url'.".to_string(),
+            };
         }
-    } else {
-        InternalTestResult {
+    };
+
+    let parsed_url = match reqwest::Url::parse(base_url) {
+        Ok(url) => url,
+        Err(e) => {
+            return InternalTestResult {
+                success: false,
+                message: format!("Generic connector base_url must be a valid URL: {}", e),
+            };
+        }
+    };
+
+    if !matches!(parsed_url.scheme(), "http" | "https") {
+        return InternalTestResult {
             success: false,
-            message: "Generic connector requires at least a 'base_url'.".to_string(),
+            message: "Generic connector base_url must use http or https.".to_string(),
+        };
+    }
+
+    if let Some(headers) = config.get("headers") {
+        let Some(header_map) = headers.as_object() else {
+            return InternalTestResult {
+                success: false,
+                message: "Generic connector 'headers' must be a JSON object.".to_string(),
+            };
+        };
+
+        for (name, value) in header_map {
+            if name.trim().is_empty() {
+                return InternalTestResult {
+                    success: false,
+                    message: "Generic connector header names cannot be empty.".to_string(),
+                };
+            }
+            if value
+                .as_str()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .is_none()
+            {
+                return InternalTestResult {
+                    success: false,
+                    message: format!(
+                        "Generic connector header '{}' must be a non-empty string.",
+                        name
+                    ),
+                };
+            }
         }
+    }
+
+    if let Some(timeout_secs) = config.get("timeout_secs").and_then(|v| v.as_u64()) {
+        if !(1..=120).contains(&timeout_secs) {
+            return InternalTestResult {
+                success: false,
+                message: "Generic connector timeout_secs must be between 1 and 120.".to_string(),
+            };
+        }
+    }
+
+    InternalTestResult {
+        success: true,
+        message: "Generic connector configuration validated.".to_string(),
     }
 }
 
@@ -3145,6 +3206,99 @@ mod api_tests {
 
         assert!(result.success);
         assert!(result.message.contains("Generic"));
+    }
+
+    #[tokio::test]
+    async fn test_test_connector_generic_invalid_url() {
+        let app = setup_test_app().await;
+
+        let body = serde_json::json!({
+            "name": "Generic Invalid URL",
+            "connector_type": "generic",
+            "config": {
+                "base_url": "not-a-valid-url"
+            },
+            "enabled": true
+        });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/connectors")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: ConnectorResponse = serde_json::from_slice(&body_bytes).unwrap();
+
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("/api/connectors/{}/test", created.id))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: TestConnectionResponse = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert!(!result.success);
+        assert!(result.message.contains("base_url must be a valid URL"));
+    }
+
+    #[tokio::test]
+    async fn test_test_connector_generic_invalid_headers_shape() {
+        let app = setup_test_app().await;
+
+        let body = serde_json::json!({
+            "name": "Generic Invalid Headers",
+            "connector_type": "generic",
+            "config": {
+                "base_url": "https://api.example.com",
+                "headers": "not-an-object"
+            },
+            "enabled": true
+        });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/connectors")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: ConnectorResponse = serde_json::from_slice(&body_bytes).unwrap();
+
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("/api/connectors/{}/test", created.id))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: TestConnectionResponse = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert!(!result.success);
+        assert!(result.message.contains("'headers' must be a JSON object"));
     }
 
     #[tokio::test]
