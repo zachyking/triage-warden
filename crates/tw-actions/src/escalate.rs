@@ -2,13 +2,16 @@
 //!
 //! This action routes an incident to the appropriate approval level.
 
+use crate::persistence::persist_jsonl_record;
 use crate::registry::{
     Action, ActionContext, ActionError, ActionResult, ParameterDef, ParameterType,
 };
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 use tracing::{info, instrument};
 
@@ -57,12 +60,36 @@ impl EscalationLevel {
         }
     }
 
-    /// Returns mock assignees for testing purposes.
-    fn mock_assignees(&self) -> Vec<&'static str> {
+    /// Returns built-in default assignees.
+    fn default_assignees(&self) -> Vec<&'static str> {
         match self {
             EscalationLevel::Analyst => vec!["analyst1@company.com", "analyst2@company.com"],
             EscalationLevel::Senior => vec!["senior.analyst@company.com"],
             EscalationLevel::Manager => vec!["soc.manager@company.com"],
+        }
+    }
+
+    fn key(&self) -> &'static str {
+        match self {
+            EscalationLevel::Analyst => "analyst",
+            EscalationLevel::Senior => "senior",
+            EscalationLevel::Manager => "manager",
+        }
+    }
+
+    fn metadata_key(&self) -> &'static str {
+        match self {
+            EscalationLevel::Analyst => "escalation_assignees_analyst",
+            EscalationLevel::Senior => "escalation_assignees_senior",
+            EscalationLevel::Manager => "escalation_assignees_manager",
+        }
+    }
+
+    fn env_key(&self) -> &'static str {
+        match self {
+            EscalationLevel::Analyst => "TW_ESCALATION_ASSIGNEES_ANALYST",
+            EscalationLevel::Senior => "TW_ESCALATION_ASSIGNEES_SENIOR",
+            EscalationLevel::Manager => "TW_ESCALATION_ASSIGNEES_MANAGER",
         }
     }
 }
@@ -88,6 +115,13 @@ pub struct EscalationRecord {
     pub priority: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EscalationPersistenceRecord {
+    escalation: EscalationRecord,
+    notify_channels: Vec<String>,
+    persisted_at: chrono::DateTime<Utc>,
+}
+
 /// Action to escalate an incident to the appropriate approval level.
 pub struct EscalateAction;
 
@@ -106,14 +140,84 @@ impl EscalateAction {
         }
     }
 
-    /// Selects an assignee for the escalation (mock implementation).
-    fn select_assignee(level: EscalationLevel) -> String {
-        // In a real implementation, this would:
-        // 1. Query the on-call schedule
-        // 2. Check workload/availability
-        // 3. Use round-robin or least-loaded algorithm
-        let assignees = level.mock_assignees();
-        assignees[0].to_string()
+    fn parse_assignee_list(value: &serde_json::Value) -> Vec<String> {
+        value
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn load_assignees_from_context(
+        level: EscalationLevel,
+        context: &ActionContext,
+    ) -> Option<Vec<String>> {
+        if let Some(value) = context.metadata.get(level.metadata_key()) {
+            let direct = Self::parse_assignee_list(value);
+            if !direct.is_empty() {
+                return Some(direct);
+            }
+        }
+
+        context
+            .metadata
+            .get("escalation_assignees")
+            .and_then(|v| v.get(level.key()))
+            .map(Self::parse_assignee_list)
+            .filter(|assignees| !assignees.is_empty())
+    }
+
+    fn load_assignees_from_env(level: EscalationLevel) -> Option<Vec<String>> {
+        std::env::var(level.env_key())
+            .ok()
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|entry| !entry.is_empty())
+                    .map(String::from)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|assignees| !assignees.is_empty())
+    }
+
+    fn candidate_assignees(level: EscalationLevel, context: &ActionContext) -> Vec<String> {
+        Self::load_assignees_from_context(level, context)
+            .or_else(|| Self::load_assignees_from_env(level))
+            .unwrap_or_else(|| {
+                level
+                    .default_assignees()
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            })
+    }
+
+    /// Selects an assignee using deterministic hashing over incident ID and level.
+    fn select_assignee(
+        level: EscalationLevel,
+        incident_id: &str,
+        context: &ActionContext,
+    ) -> Result<String, ActionError> {
+        let assignees = Self::candidate_assignees(level, context);
+        if assignees.is_empty() {
+            return Err(ActionError::ExecutionFailed(format!(
+                "No eligible assignees configured for escalation level '{}'",
+                level.key()
+            )));
+        }
+
+        let mut hasher = DefaultHasher::new();
+        incident_id.hash(&mut hasher);
+        level.hash(&mut hasher);
+        let index = (hasher.finish() as usize) % assignees.len();
+        Ok(assignees[index].clone())
     }
 }
 
@@ -195,8 +299,10 @@ impl Action for EscalateAction {
             })?;
 
         // Determine assignee
-        let assigned_to =
-            override_assignee.unwrap_or_else(|| Self::select_assignee(escalation_level));
+        let assigned_to = match override_assignee {
+            Some(assignee) => assignee,
+            None => Self::select_assignee(escalation_level, &incident_id, &context)?,
+        };
 
         // Calculate due date based on SLA
         let sla_hours = custom_sla_hours.unwrap_or_else(|| escalation_level.default_sla_hours());
@@ -213,26 +319,6 @@ impl Action for EscalateAction {
             incident_id, escalation_level, assigned_to, due_date
         );
 
-        // Create escalation record
-        let escalation = EscalationRecord {
-            escalation_id: escalation_id.clone(),
-            incident_id: incident_id.clone(),
-            level: escalation_level,
-            reason: reason.clone(),
-            assigned_to: assigned_to.clone(),
-            created_at: Utc::now(),
-            due_date,
-            priority: priority.to_string(),
-        };
-
-        // In a real implementation, this would:
-        // 1. Create an approval request in the policy engine
-        // 2. Update incident status and assignment
-        // 3. Send notifications to the assignee
-        // 4. Trigger any escalation webhooks
-        // 5. Update SLA tracking
-        // 6. Log the escalation for audit
-
         // Handle notification channels
         let notify_channels: Vec<String> = context
             .get_param("notify_channels")
@@ -245,12 +331,31 @@ impl Action for EscalateAction {
             })
             .unwrap_or_default();
 
+        // Create escalation record
+        let escalation = EscalationRecord {
+            escalation_id: escalation_id.clone(),
+            incident_id: incident_id.clone(),
+            level: escalation_level,
+            reason: reason.clone(),
+            assigned_to: assigned_to.clone(),
+            created_at: Utc::now(),
+            due_date,
+            priority: priority.to_string(),
+        };
+
+        let persistence_record = EscalationPersistenceRecord {
+            escalation: escalation.clone(),
+            notify_channels: notify_channels.clone(),
+            persisted_at: Utc::now(),
+        };
+        let persisted_to =
+            persist_jsonl_record(&context, "escalation_records.jsonl", &persistence_record)?;
+
         if !notify_channels.is_empty() {
             info!(
                 "Triggering notifications for escalation {} on channels: {:?}",
                 escalation_id, notify_channels
             );
-            // In a real implementation, trigger notifications
         }
 
         let mut output = HashMap::new();
@@ -280,6 +385,7 @@ impl Action for EscalateAction {
         );
         output.insert("reason".to_string(), serde_json::json!(escalation.reason));
         output.insert("sla_hours".to_string(), serde_json::json!(sla_hours));
+        output.insert("persisted_to".to_string(), serde_json::json!(persisted_to));
 
         if !notify_channels.is_empty() {
             output.insert(
@@ -335,6 +441,51 @@ mod tests {
 
         let priority = result.output["priority"].as_str().unwrap();
         assert_eq!(priority, "medium");
+    }
+
+    #[tokio::test]
+    async fn test_escalate_uses_metadata_assignee_roster() {
+        let action = EscalateAction::new();
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_metadata(
+                "escalation_assignees_analyst",
+                serde_json::json!(["primary.analyst@company.com"]),
+            )
+            .with_param("incident_id", serde_json::json!("INC-2024-201"))
+            .with_param("escalation_level", serde_json::json!("analyst"))
+            .with_param("reason", serde_json::json!("Requires human verification"));
+
+        let result = action.execute(context).await.unwrap();
+        assert_eq!(
+            result.output["assigned_to"].as_str().unwrap(),
+            "primary.analyst@company.com"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_escalate_persists_record() {
+        let action = EscalateAction::new();
+        let persistence_dir =
+            std::env::temp_dir().join(format!("tw-escalations-{}", Uuid::new_v4()));
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_metadata(
+                "persistence_dir",
+                serde_json::json!(persistence_dir.to_string_lossy().to_string()),
+            )
+            .with_param("incident_id", serde_json::json!("INC-2024-202"))
+            .with_param("escalation_level", serde_json::json!("manager"))
+            .with_param("reason", serde_json::json!("Critical escalation"))
+            .with_param("notify_channels", serde_json::json!(["slack"]));
+
+        let result = action.execute(context).await.unwrap();
+        let persisted_to = result.output["persisted_to"].as_str().unwrap();
+        let persisted = std::fs::read_to_string(persisted_to).unwrap();
+        assert!(persisted.contains("\"incident_id\":\"INC-2024-202\""));
+        assert!(persisted.contains("\"notify_channels\":[\"slack\"]"));
+
+        std::fs::remove_dir_all(&persistence_dir).ok();
     }
 
     #[tokio::test]

@@ -191,6 +191,12 @@ impl ActionContext {
         self
     }
 
+    /// Adds metadata to the action context.
+    pub fn with_metadata(mut self, key: &str, value: serde_json::Value) -> Self {
+        self.metadata.insert(key.to_string(), value);
+        self
+    }
+
     /// Sets the timeout.
     pub fn with_timeout(mut self, timeout_secs: u64) -> Self {
         self.timeout_secs = timeout_secs;

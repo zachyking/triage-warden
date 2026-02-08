@@ -3,6 +3,7 @@
 //! This action sends a status update to the original incident reporter.
 
 use crate::email_sanitizer::{sanitize_email, EmailSanitizationError};
+use crate::persistence::persist_jsonl_record;
 use crate::registry::{
     Action, ActionContext, ActionError, ActionResult, ParameterDef, ParameterType,
 };
@@ -42,6 +43,20 @@ impl std::fmt::Display for IncidentStatus {
             IncidentStatus::Closed => write!(f, "Closed"),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReporterNotificationRecord {
+    notification_id: String,
+    incident_id: String,
+    reporter_email: String,
+    status: String,
+    subject: String,
+    body: String,
+    include_details: bool,
+    content_sanitized: bool,
+    sanitization_details: Vec<String>,
+    sent_at: chrono::DateTime<Utc>,
 }
 
 /// Action to send a status update notification to the original incident reporter.
@@ -140,7 +155,7 @@ impl Action for NotifyReporterAction {
         let reporter_email = context.require_string("reporter_email")?;
         let status = context.require_string("status")?;
         let message = context.require_string("message")?;
-        let _include_details = context
+        let include_details = context
             .get_param("include_details")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
@@ -203,12 +218,24 @@ impl Action for NotifyReporterAction {
         let final_subject = sanitized.subject;
         let final_body = sanitized.body;
 
-        // In a real implementation, this would:
-        // 1. Validate the reporter email against known reporters
-        // 2. Fetch additional incident details if include_details is true
-        // 3. Send the email via email gateway/SMTP service
-        // 4. Track the notification for audit purposes
-        // 5. Handle delivery failures and retries
+        let sent_at = Utc::now();
+        let notification_record = ReporterNotificationRecord {
+            notification_id: notification_id.clone(),
+            incident_id: incident_id.clone(),
+            reporter_email: reporter_email.clone(),
+            status: status.clone(),
+            subject: final_subject.clone(),
+            body: final_body.clone(),
+            include_details,
+            content_sanitized: sanitized.was_sanitized,
+            sanitization_details: sanitized.sanitization_details.clone(),
+            sent_at,
+        };
+        let persisted_to = persist_jsonl_record(
+            &context,
+            "notify_reporter_records.jsonl",
+            &notification_record,
+        )?;
 
         let mut output = HashMap::new();
         output.insert(
@@ -225,12 +252,17 @@ impl Action for NotifyReporterAction {
         output.insert("success".to_string(), serde_json::json!(true));
         output.insert(
             "sent_at".to_string(),
-            serde_json::json!(Utc::now().to_rfc3339()),
+            serde_json::json!(sent_at.to_rfc3339()),
         );
         output.insert(
             "formatted_message".to_string(),
             serde_json::json!(final_body),
         );
+        output.insert(
+            "include_details".to_string(),
+            serde_json::json!(include_details),
+        );
+        output.insert("persisted_to".to_string(), serde_json::json!(persisted_to));
         output.insert(
             "content_sanitized".to_string(),
             serde_json::json!(sanitized.was_sanitized),
@@ -288,6 +320,36 @@ mod tests {
 
         let notif_id = result.output["notification_id"].as_str().unwrap();
         assert!(notif_id.starts_with("notif-reporter-"));
+    }
+
+    #[tokio::test]
+    async fn test_notify_reporter_persists_record() {
+        let action = NotifyReporterAction::new();
+        let persistence_dir =
+            std::env::temp_dir().join(format!("tw-notify-reporter-{}", Uuid::new_v4()));
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_metadata(
+                "persistence_dir",
+                serde_json::json!(persistence_dir.to_string_lossy().to_string()),
+            )
+            .with_param("incident_id", serde_json::json!("INC-2024-001"))
+            .with_param("reporter_email", serde_json::json!("user@company.com"))
+            .with_param("status", serde_json::json!("investigating"))
+            .with_param(
+                "message",
+                serde_json::json!(
+                    "Your reported phishing email is being investigated by our security team."
+                ),
+            );
+
+        let result = action.execute(context).await.unwrap();
+        let persisted_to = result.output["persisted_to"].as_str().unwrap();
+        let persisted = std::fs::read_to_string(persisted_to).unwrap();
+        assert!(persisted.contains("\"incident_id\":\"INC-2024-001\""));
+        assert!(persisted.contains("\"reporter_email\":\"user@company.com\""));
+
+        std::fs::remove_dir_all(&persistence_dir).ok();
     }
 
     #[tokio::test]

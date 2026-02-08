@@ -2,10 +2,13 @@
 //!
 //! Command-line interface for the Triage Warden SOC automation system.
 
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
+use serde::{Deserialize, Serialize};
+use std::fs::OpenOptions;
 use std::path::PathBuf;
+use std::process::Stdio;
 
 mod api_client;
 mod commands;
@@ -269,7 +272,7 @@ async fn main() -> Result<()> {
             )
             .await
         }
-        Commands::Start { foreground } => cmd_start(config, foreground).await,
+        Commands::Start { foreground } => cmd_start(config, foreground, &config_path).await,
         Commands::Stop => cmd_stop().await,
         Commands::Status => cmd_status(cli.format).await,
         Commands::Validate { config: cfg_path } => {
@@ -293,6 +296,159 @@ fn default_config_path() -> PathBuf {
     } else {
         PathBuf::from("config/default.yaml")
     }
+}
+
+const DAEMON_RUNTIME_DIR_ENV: &str = "TW_DAEMON_RUNTIME_DIR";
+const DAEMON_STATE_FILE: &str = "daemon_state.json";
+const DAEMON_LOG_FILE: &str = "daemon.log";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DaemonState {
+    pid: u32,
+    started_at: chrono::DateTime<chrono::Utc>,
+    operation_mode: String,
+    config_path: String,
+}
+
+fn daemon_runtime_dir() -> PathBuf {
+    if let Ok(path) = std::env::var(DAEMON_RUNTIME_DIR_ENV) {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+
+    if let Some(dirs) = directories::ProjectDirs::from("com", "triage-warden", "triage-warden") {
+        return dirs.data_local_dir().join("runtime");
+    }
+
+    PathBuf::from(".triage-warden/runtime")
+}
+
+fn daemon_state_path() -> PathBuf {
+    daemon_runtime_dir().join(DAEMON_STATE_FILE)
+}
+
+fn daemon_log_path() -> PathBuf {
+    daemon_runtime_dir().join(DAEMON_LOG_FILE)
+}
+
+fn ensure_daemon_runtime_dir() -> Result<PathBuf> {
+    let runtime_dir = daemon_runtime_dir();
+    std::fs::create_dir_all(&runtime_dir).with_context(|| {
+        format!(
+            "Failed to create daemon runtime directory '{}'",
+            runtime_dir.display()
+        )
+    })?;
+    Ok(runtime_dir)
+}
+
+fn write_daemon_state(state: &DaemonState) -> Result<PathBuf> {
+    let runtime_dir = ensure_daemon_runtime_dir()?;
+    let state_path = runtime_dir.join(DAEMON_STATE_FILE);
+    let serialized = serde_json::to_vec_pretty(state)
+        .context("Failed to serialize daemon state for persistence")?;
+    std::fs::write(&state_path, serialized).with_context(|| {
+        format!(
+            "Failed to write daemon state file '{}'",
+            state_path.display()
+        )
+    })?;
+    Ok(state_path)
+}
+
+fn read_daemon_state() -> Result<Option<DaemonState>> {
+    let state_path = daemon_state_path();
+    if !state_path.exists() {
+        return Ok(None);
+    }
+
+    let bytes = std::fs::read(&state_path).with_context(|| {
+        format!(
+            "Failed to read daemon state file '{}'",
+            state_path.display()
+        )
+    })?;
+    let state = serde_json::from_slice::<DaemonState>(&bytes).map_err(|e| {
+        anyhow!(
+            "Failed to parse daemon state file '{}': {}",
+            state_path.display(),
+            e
+        )
+    })?;
+    Ok(Some(state))
+}
+
+fn clear_daemon_state() -> Result<()> {
+    let state_path = daemon_state_path();
+    if state_path.exists() {
+        std::fs::remove_file(&state_path).with_context(|| {
+            format!(
+                "Failed to remove daemon state file '{}'",
+                state_path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn process_is_running(pid: u32) -> bool {
+    std::process::Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "pid="])
+        .output()
+        .map(|output| {
+            output.status.success() && !String::from_utf8_lossy(&output.stdout).trim().is_empty()
+        })
+        .unwrap_or(false)
+}
+
+fn signal_process(pid: u32, signal: &str) -> Result<()> {
+    let status = std::process::Command::new("kill")
+        .arg(signal)
+        .arg(pid.to_string())
+        .status()
+        .with_context(|| format!("Failed to run kill command for pid {}", pid))?;
+
+    if !status.success() {
+        return Err(anyhow!(
+            "Failed to send signal {} to daemon process {}",
+            signal,
+            pid
+        ));
+    }
+
+    Ok(())
+}
+
+async fn wait_for_process_exit(pid: u32, timeout: std::time::Duration) -> bool {
+    let start = std::time::Instant::now();
+    while start.elapsed() < timeout {
+        if !process_is_running(pid) {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    !process_is_running(pid)
+}
+
+#[cfg(unix)]
+async fn wait_for_shutdown_signal() -> Result<&'static str> {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut sigterm =
+        signal(SignalKind::terminate()).context("Failed to install SIGTERM handler")?;
+
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => Ok("ctrl_c"),
+        _ = sigterm.recv() => Ok("sigterm"),
+    }
+}
+
+#[cfg(not(unix))]
+async fn wait_for_shutdown_signal() -> Result<&'static str> {
+    tokio::signal::ctrl_c().await?;
+    Ok("ctrl_c")
 }
 
 async fn cmd_serve(
@@ -345,14 +501,109 @@ async fn cmd_serve(
     run_server(serve_config, app_config).await
 }
 
-async fn cmd_start(config: AppConfig, foreground: bool) -> Result<()> {
+async fn cmd_start(config: AppConfig, foreground: bool, config_path: &PathBuf) -> Result<()> {
     println!("{}", "Starting Triage Warden...".green().bold());
     println!("Mode: {}", config.operation_mode);
 
+    if let Some(existing) = read_daemon_state()? {
+        if process_is_running(existing.pid) {
+            println!(
+                "{}: Daemon already running (pid: {})",
+                "Info".yellow(),
+                existing.pid
+            );
+            println!("Use `triage-warden status` to inspect or `triage-warden stop` to stop.");
+            return Ok(());
+        }
+
+        println!(
+            "{}: Found stale daemon state for pid {}, cleaning up.",
+            "Warning".yellow(),
+            existing.pid
+        );
+        clear_daemon_state()?;
+    }
+
     if !foreground {
         println!("Running in daemon mode (use --foreground to run in foreground)");
-        // In a real implementation, this would daemonize the process
+
+        ensure_daemon_runtime_dir()?;
+        let log_path = daemon_log_path();
+        let log_file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .with_context(|| format!("Failed to open daemon log file '{}'", log_path.display()))?;
+        let stderr_log = log_file
+            .try_clone()
+            .context("Failed to duplicate daemon log file handle")?;
+
+        let current_exe =
+            std::env::current_exe().context("Failed to resolve current executable")?;
+        let mut command = std::process::Command::new(current_exe);
+        command
+            .arg("--config")
+            .arg(config_path)
+            .arg("start")
+            .arg("--foreground")
+            .stdout(Stdio::from(log_file))
+            .stderr(Stdio::from(stderr_log));
+
+        let mut child = command.spawn().context("Failed to spawn daemon process")?;
+        let child_pid = child.id();
+
+        for _ in 0..20 {
+            if let Some(state) = read_daemon_state()? {
+                if state.pid == child_pid && process_is_running(state.pid) {
+                    println!(
+                        "{} (pid: {})",
+                        "Triage Warden daemon started successfully".green(),
+                        child_pid
+                    );
+                    println!("State file: {}", daemon_state_path().display());
+                    println!("Logs: {}", log_path.display());
+                    return Ok(());
+                }
+            }
+
+            if let Some(status) = child
+                .try_wait()
+                .context("Failed to monitor daemon process startup")?
+            {
+                return Err(anyhow!(
+                    "Daemon process exited during startup with status {}. Check logs at {}",
+                    status,
+                    log_path.display()
+                ));
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+
+        if process_is_running(child_pid) {
+            println!(
+                "{} (pid: {})",
+                "Triage Warden daemon started".green(),
+                child_pid
+            );
+            println!("State file: {}", daemon_state_path().display());
+            println!("Logs: {}", log_path.display());
+            return Ok(());
+        }
+
+        return Err(anyhow!(
+            "Daemon process {} did not stay running after startup",
+            child_pid
+        ));
     }
+
+    let state = DaemonState {
+        pid: std::process::id(),
+        started_at: chrono::Utc::now(),
+        operation_mode: config.operation_mode.clone(),
+        config_path: config_path.display().to_string(),
+    };
+    let state_path = write_daemon_state(&state)?;
 
     // Create orchestrator
     let orchestrator =
@@ -366,40 +617,115 @@ async fn cmd_start(config: AppConfig, foreground: bool) -> Result<()> {
         });
 
     // Start the orchestrator
-    orchestrator.start().await?;
+    if let Err(e) = orchestrator.start().await {
+        clear_daemon_state().ok();
+        return Err(e.into());
+    }
 
     println!("{}", "Triage Warden started successfully".green());
     println!("Event bus listening for alerts...");
+    println!("State file: {}", state_path.display());
+    println!("Press Ctrl+C to stop");
 
-    // In a real implementation, this would:
-    // 1. Set up signal handlers for graceful shutdown
-    // 2. Start alert ingestion from configured sources
-    // 3. Run the main event loop
+    let signal = wait_for_shutdown_signal().await?;
+    println!("\n{} ({})", "Shutting down...".yellow(), signal);
 
-    // For now, just wait
-    if foreground {
-        println!("Press Ctrl+C to stop");
-        tokio::signal::ctrl_c().await?;
-        println!("\n{}", "Shutting down...".yellow());
-        orchestrator.stop().await?;
+    let stop_result = orchestrator.stop().await;
+    if let Err(e) = clear_daemon_state() {
+        eprintln!("{}: {}", "Warning".yellow(), e);
     }
-
-    Ok(())
+    stop_result.map_err(Into::into)
 }
 
 async fn cmd_stop() -> Result<()> {
     println!("{}", "Stopping Triage Warden...".yellow());
-    // In a real implementation, this would send a signal to the daemon
+
+    let Some(state) = read_daemon_state()? else {
+        println!("{}", "Triage Warden is not running".green());
+        return Ok(());
+    };
+
+    if !process_is_running(state.pid) {
+        println!(
+            "{}: Found stale daemon state for pid {}, cleaning up.",
+            "Info".yellow(),
+            state.pid
+        );
+        clear_daemon_state()?;
+        println!("{}", "Triage Warden is not running".green());
+        return Ok(());
+    }
+
+    signal_process(state.pid, "-TERM")?;
+    if !wait_for_process_exit(state.pid, std::time::Duration::from_secs(10)).await {
+        println!(
+            "{}: Daemon did not exit after SIGTERM, sending SIGKILL.",
+            "Warning".yellow()
+        );
+        signal_process(state.pid, "-KILL")?;
+
+        if !wait_for_process_exit(state.pid, std::time::Duration::from_secs(3)).await {
+            return Err(anyhow!(
+                "Failed to stop daemon process {} after SIGKILL",
+                state.pid
+            ));
+        }
+    }
+
+    clear_daemon_state()?;
     println!("{}", "Triage Warden stopped".green());
     Ok(())
 }
 
 async fn cmd_status(format: OutputFormat) -> Result<()> {
-    // In a real implementation, this would query the running daemon
+    let state = read_daemon_state()?;
+    let running = state
+        .as_ref()
+        .map(|s| process_is_running(s.pid))
+        .unwrap_or(false);
+
+    if state.is_some() && !running {
+        clear_daemon_state().ok();
+    }
+
+    let pid = if running {
+        state.as_ref().map(|s| s.pid)
+    } else {
+        None
+    };
+    let started_at = if running {
+        state.as_ref().map(|s| s.started_at.to_rfc3339())
+    } else {
+        None
+    };
+    let uptime_seconds = if running {
+        state
+            .as_ref()
+            .map(|s| (chrono::Utc::now() - s.started_at).num_seconds().max(0))
+    } else {
+        None
+    };
+    let operation_mode = if running {
+        state.as_ref().map(|s| s.operation_mode.clone())
+    } else {
+        None
+    };
+    let active_config_path = if running {
+        state.as_ref().map(|s| s.config_path.clone())
+    } else {
+        None
+    };
+
     let status = serde_json::json!({
-        "running": false,
+        "running": running,
         "version": env!("CARGO_PKG_VERSION"),
-        "uptime": null,
+        "pid": pid,
+        "started_at": started_at,
+        "uptime_seconds": uptime_seconds,
+        "operation_mode": operation_mode,
+        "config_path": active_config_path,
+        "state_file": daemon_state_path(),
+        "log_file": daemon_log_path(),
         "incidents_in_progress": 0,
         "pending_approvals": 0,
     });
@@ -409,8 +735,25 @@ async fn cmd_status(format: OutputFormat) -> Result<()> {
     } else {
         println!("{}", "Triage Warden Status".bold());
         println!("─────────────────────");
-        println!("Running: {}", "No".red());
+        println!(
+            "Running: {}",
+            if running { "Yes".green() } else { "No".red() }
+        );
         println!("Version: {}", env!("CARGO_PKG_VERSION"));
+        if let Some(pid) = pid {
+            println!("PID: {}", pid);
+        }
+        if let Some(uptime) = uptime_seconds {
+            println!("Uptime: {}s", uptime);
+        }
+        if let Some(mode) = operation_mode {
+            println!("Mode: {}", mode);
+        }
+        if let Some(config_path) = active_config_path {
+            println!("Config: {}", config_path);
+        }
+        println!("State file: {}", daemon_state_path().display());
+        println!("Logs: {}", daemon_log_path().display());
     }
 
     Ok(())

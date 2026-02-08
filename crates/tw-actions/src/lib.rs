@@ -44,6 +44,7 @@ pub mod lookup_urls;
 pub mod notify_reporter;
 pub mod notify_user;
 pub mod parse_email;
+mod persistence;
 pub mod quarantine_email;
 pub mod registry;
 pub mod run_triage_agent;

@@ -2,6 +2,7 @@
 //!
 //! This action records a false positive for tuning and learning purposes.
 
+use crate::persistence::persist_jsonl_record;
 use crate::registry::{
     Action, ActionContext, ActionError, ActionResult, ParameterDef, ParameterType,
 };
@@ -131,12 +132,8 @@ impl Action for LogFalsePositiveAction {
             notes: notes.clone(),
         };
 
-        // In a real implementation, this would:
-        // 1. Store the FP record in the database
-        // 2. Update incident status to "false_positive"
-        // 3. Potentially trigger ML model retraining or feedback loop
-        // 4. Update detection rule statistics
-        // 5. Notify relevant parties
+        let persisted_to =
+            persist_jsonl_record(&context, "false_positive_records.jsonl", &fp_record)?;
 
         let mut output = HashMap::new();
         output.insert(
@@ -160,6 +157,7 @@ impl Action for LogFalsePositiveAction {
             "timestamp".to_string(),
             serde_json::json!(fp_record.timestamp.to_rfc3339()),
         );
+        output.insert("persisted_to".to_string(), serde_json::json!(persisted_to));
 
         if let Some(ref analyst) = recorded_by {
             output.insert("recorded_by".to_string(), serde_json::json!(analyst));
@@ -212,6 +210,34 @@ mod tests {
 
         let fp_id = result.output["fp_record_id"].as_str().unwrap();
         assert!(fp_id.starts_with("fp-"));
+    }
+
+    #[tokio::test]
+    async fn test_log_false_positive_persists_record() {
+        let action = LogFalsePositiveAction::new();
+        let persistence_dir =
+            std::env::temp_dir().join(format!("tw-false-positive-{}", Uuid::new_v4()));
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_metadata(
+                "persistence_dir",
+                serde_json::json!(persistence_dir.to_string_lossy().to_string()),
+            )
+            .with_param("incident_id", serde_json::json!("INC-2024-001"))
+            .with_param(
+                "reason",
+                serde_json::json!("Legitimate internal email miscategorized"),
+            )
+            .with_param("original_verdict", serde_json::json!("malicious"))
+            .with_param("correct_verdict", serde_json::json!("benign"));
+
+        let result = action.execute(context).await.unwrap();
+        let persisted_to = result.output["persisted_to"].as_str().unwrap();
+        let persisted = std::fs::read_to_string(persisted_to).unwrap();
+        assert!(persisted.contains("\"incident_id\":\"INC-2024-001\""));
+        assert!(persisted.contains("\"correct_verdict\":\"benign\""));
+
+        std::fs::remove_dir_all(&persistence_dir).ok();
     }
 
     #[tokio::test]
