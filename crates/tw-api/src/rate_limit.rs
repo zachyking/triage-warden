@@ -205,7 +205,10 @@ impl LoginRateLimiter {
     /// Gets or creates a rate limiter for the given IP address.
     /// Uses LRU cache to automatically evict least-recently-used entries.
     fn get_or_create_ip_limiter(&self, ip: IpAddr) -> Arc<IpRateLimiter> {
-        let mut cache = self.per_ip.lock().unwrap();
+        let mut cache = self
+            .per_ip
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         // Try to get existing limiter (this also promotes it in LRU order)
         if let Some(limiter) = cache.get(&ip) {
@@ -231,7 +234,10 @@ impl LoginRateLimiter {
 
         if was_at_capacity {
             // Increment eviction counter
-            let mut eviction_count = self.eviction_count.lock().unwrap();
+            let mut eviction_count = self
+                .eviction_count
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             *eviction_count += 1;
             counter!("triage_warden_rate_limiter_evictions_total", "cache" => "login_ip")
                 .increment(1);
@@ -250,7 +256,10 @@ impl LoginRateLimiter {
     /// Clears rate limit state for an IP (for testing or manual unblocking).
     #[allow(dead_code)]
     pub fn clear_ip(&self, ip: IpAddr) {
-        let mut cache = self.per_ip.lock().unwrap();
+        let mut cache = self
+            .per_ip
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         cache.pop(&ip);
         gauge!("triage_warden_rate_limiter_ip_cache_size").set(cache.len() as f64);
     }
@@ -258,7 +267,10 @@ impl LoginRateLimiter {
     /// Returns the number of IPs being tracked.
     #[allow(dead_code)]
     pub fn tracked_ips(&self) -> usize {
-        self.per_ip.lock().unwrap().len()
+        self.per_ip
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len()
     }
 
     /// Returns the maximum number of entries allowed in the cache.
@@ -270,7 +282,10 @@ impl LoginRateLimiter {
     /// Returns the total number of evictions that have occurred.
     #[allow(dead_code)]
     pub fn eviction_count(&self) -> u64 {
-        *self.eviction_count.lock().unwrap()
+        *self
+            .eviction_count
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Performs periodic cleanup of stale entries.
@@ -281,7 +296,10 @@ impl LoginRateLimiter {
     /// Note: The LRU eviction policy ensures memory bounds automatically.
     #[allow(dead_code)]
     pub fn periodic_cleanup(&self) {
-        let cache = self.per_ip.lock().unwrap();
+        let cache = self
+            .per_ip
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         gauge!("triage_warden_rate_limiter_ip_cache_size").set(cache.len() as f64);
         tracing::debug!(
             cache_size = cache.len(),
@@ -548,7 +566,10 @@ impl ApiRateLimiter {
     /// Gets or creates a rate limiter for the given IP address.
     /// Uses LRU cache to automatically evict least-recently-used entries.
     fn get_or_create_ip_limiter(&self, ip: IpAddr) -> Arc<IpRateLimiter> {
-        let mut cache = self.per_ip.lock().unwrap();
+        let mut cache = self
+            .per_ip
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         // Try to get existing limiter (this also promotes it in LRU order)
         if let Some(limiter) = cache.get(&ip) {
@@ -574,7 +595,10 @@ impl ApiRateLimiter {
 
         if was_at_capacity {
             // Increment eviction counter
-            let mut eviction_count = self.ip_eviction_count.lock().unwrap();
+            let mut eviction_count = self
+                .ip_eviction_count
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             *eviction_count += 1;
             counter!("triage_warden_rate_limiter_evictions_total", "cache" => "api_ip")
                 .increment(1);
@@ -593,7 +617,10 @@ impl ApiRateLimiter {
     /// Gets or creates a rate limiter for the given user ID.
     /// Uses LRU cache to automatically evict least-recently-used entries.
     fn get_or_create_user_limiter(&self, user_id: Uuid) -> Arc<IpRateLimiter> {
-        let mut cache = self.per_user.lock().unwrap();
+        let mut cache = self
+            .per_user
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         // Try to get existing limiter (this also promotes it in LRU order)
         if let Some(limiter) = cache.get(&user_id) {
@@ -619,7 +646,10 @@ impl ApiRateLimiter {
 
         if was_at_capacity {
             // Increment eviction counter
-            let mut eviction_count = self.user_eviction_count.lock().unwrap();
+            let mut eviction_count = self
+                .user_eviction_count
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             *eviction_count += 1;
             counter!("triage_warden_rate_limiter_evictions_total", "cache" => "api_user")
                 .increment(1);
@@ -638,7 +668,10 @@ impl ApiRateLimiter {
     /// Clears rate limit state for an IP (for testing or manual unblocking).
     #[allow(dead_code)]
     pub fn clear_ip(&self, ip: IpAddr) {
-        let mut cache = self.per_ip.lock().unwrap();
+        let mut cache = self
+            .per_ip
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         cache.pop(&ip);
         gauge!("triage_warden_rate_limiter_ip_cache_size").set(cache.len() as f64);
     }
@@ -646,7 +679,10 @@ impl ApiRateLimiter {
     /// Clears rate limit state for a user (for testing or manual unblocking).
     #[allow(dead_code)]
     pub fn clear_user(&self, user_id: Uuid) {
-        let mut cache = self.per_user.lock().unwrap();
+        let mut cache = self
+            .per_user
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         cache.pop(&user_id);
         gauge!("triage_warden_rate_limiter_user_cache_size").set(cache.len() as f64);
     }
@@ -654,13 +690,19 @@ impl ApiRateLimiter {
     /// Returns the number of IPs being tracked.
     #[allow(dead_code)]
     pub fn tracked_ips(&self) -> usize {
-        self.per_ip.lock().unwrap().len()
+        self.per_ip
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len()
     }
 
     /// Returns the number of users being tracked.
     #[allow(dead_code)]
     pub fn tracked_users(&self) -> usize {
-        self.per_user.lock().unwrap().len()
+        self.per_user
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len()
     }
 
     /// Returns the maximum number of IP entries allowed in the cache.
@@ -678,13 +720,19 @@ impl ApiRateLimiter {
     /// Returns the total number of IP cache evictions that have occurred.
     #[allow(dead_code)]
     pub fn ip_eviction_count(&self) -> u64 {
-        *self.ip_eviction_count.lock().unwrap()
+        *self
+            .ip_eviction_count
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Returns the total number of user cache evictions that have occurred.
     #[allow(dead_code)]
     pub fn user_eviction_count(&self) -> u64 {
-        *self.user_eviction_count.lock().unwrap()
+        *self
+            .user_eviction_count
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Performs periodic cleanup of stale entries.
@@ -693,8 +741,14 @@ impl ApiRateLimiter {
     /// can be called periodically to update metrics and log cache status.
     #[allow(dead_code)]
     pub fn periodic_cleanup(&self) {
-        let ip_cache = self.per_ip.lock().unwrap();
-        let user_cache = self.per_user.lock().unwrap();
+        let ip_cache = self
+            .per_ip
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let user_cache = self
+            .per_user
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         gauge!("triage_warden_rate_limiter_ip_cache_size").set(ip_cache.len() as f64);
         gauge!("triage_warden_rate_limiter_user_cache_size").set(user_cache.len() as f64);
@@ -968,7 +1022,10 @@ impl WebhookRateLimiter {
     /// Gets or creates a rate limiter for the given source.
     /// Uses LRU cache to automatically evict least-recently-used entries.
     fn get_or_create_source_limiter(&self, source: &str) -> Arc<IpRateLimiter> {
-        let mut cache = self.per_source.lock().unwrap();
+        let mut cache = self
+            .per_source
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         // Try to get existing limiter (this also promotes it in LRU order)
         if let Some(limiter) = cache.get(source) {
@@ -992,7 +1049,10 @@ impl WebhookRateLimiter {
 
         if was_at_capacity {
             // Increment eviction counter
-            let mut eviction_count = self.source_eviction_count.lock().unwrap();
+            let mut eviction_count = self
+                .source_eviction_count
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             *eviction_count += 1;
             counter!("triage_warden_rate_limiter_evictions_total", "cache" => "webhook_source")
                 .increment(1);
@@ -1053,7 +1113,10 @@ impl WebhookRateLimiter {
     /// Returns the number of sources being tracked.
     #[allow(dead_code)]
     pub fn tracked_sources(&self) -> usize {
-        self.per_source.lock().unwrap().len()
+        self.per_source
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len()
     }
 
     /// Returns the maximum number of source entries allowed in the cache.
@@ -1065,13 +1128,19 @@ impl WebhookRateLimiter {
     /// Returns the total number of source cache evictions that have occurred.
     #[allow(dead_code)]
     pub fn source_eviction_count(&self) -> u64 {
-        *self.source_eviction_count.lock().unwrap()
+        *self
+            .source_eviction_count
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Clears rate limit state for a source (for testing or manual unblocking).
     #[allow(dead_code)]
     pub fn clear_source(&self, source: &str) {
-        let mut cache = self.per_source.lock().unwrap();
+        let mut cache = self
+            .per_source
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         cache.pop(source);
     }
 
@@ -1081,7 +1150,10 @@ impl WebhookRateLimiter {
     /// can be called periodically to update metrics and log cache status.
     #[allow(dead_code)]
     pub fn periodic_cleanup(&self) {
-        let cache = self.per_source.lock().unwrap();
+        let cache = self
+            .per_source
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         tracing::debug!(
             source_cache_size = cache.len(),
             max_source_entries = self.max_source_entries,
@@ -1107,7 +1179,11 @@ impl WebhookRateLimiter {
             queue_overflow_rejections: self.queue_overflow_rejections(),
             current_queue_depth: self.current_queue_depth(),
             max_queue_depth: self.max_queue_depth,
-            tracked_sources: self.per_source.lock().unwrap().len(),
+            tracked_sources: self
+                .per_source
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len(),
         }
     }
 }
