@@ -1,6 +1,8 @@
 //! Feature flag repository for database operations.
 
 use super::{DbError, DbPool};
+#[cfg(not(feature = "database"))]
+use crate::features::InMemoryFeatureFlagStore;
 use crate::features::{FeatureFlag, FeatureFlagError, FeatureFlagStore};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -334,7 +336,7 @@ pub fn create_feature_flag_store(pool: &DbPool) -> Box<dyn FeatureFlagStore> {
 
 #[cfg(not(feature = "database"))]
 pub fn create_feature_flag_store(_pool: &DbPool) -> Box<dyn FeatureFlagStore> {
-    panic!("Database support not enabled. Compile with --features database")
+    Box::new(InMemoryFeatureFlagStore::new())
 }
 
 // ============================================================================
