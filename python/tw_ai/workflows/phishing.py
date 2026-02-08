@@ -681,9 +681,15 @@ class PhishingTriageWorkflow:
                 logger.warning(
                     "sender_reputation_bridge_failed", sender=sender_email, error=str(exc)
                 )
-                reputation_data = self._mock_sender_reputation(sender_email, domain)
+                if self._mock_fallbacks_allowed():
+                    reputation_data = self._mock_sender_reputation(sender_email, domain)
+                else:
+                    reputation_data = self._conservative_sender_reputation(sender_email, domain)
         else:
-            reputation_data = self._mock_sender_reputation(sender_email, domain)
+            if self._mock_fallbacks_allowed():
+                reputation_data = self._mock_sender_reputation(sender_email, domain)
+            else:
+                reputation_data = self._conservative_sender_reputation(sender_email, domain)
 
         result = SenderReputationResult(
             sender_email=sender_email,
@@ -822,6 +828,22 @@ class PhishingTriageWorkflow:
             "is_mock": True,
         }
 
+    def _conservative_sender_reputation(self, sender_email: str, domain: str) -> dict[str, Any]:
+        """Fail-safe sender reputation when threat intel mock fallback is disabled."""
+        logger.warning(
+            "sender_reputation_fail_closed",
+            sender=sender_email,
+            domain=domain,
+            reason="threat_intel_unavailable_and_mock_disabled",
+        )
+        return {
+            "score": 0,
+            "is_known_sender": False,
+            "domain_age_days": None,
+            "risk_level": "high",
+            "is_mock": False,
+        }
+
     async def _check_urls(self, email_analysis: EmailAnalysis) -> list[URLCheckResult]:
         """Check safety of URLs in the email.
 
@@ -885,9 +907,15 @@ class PhishingTriageWorkflow:
                 }
             except Exception as exc:
                 logger.warning("url_bridge_lookup_failed", url=url, domain=domain, error=str(exc))
-                result = self._mock_url_check(url, domain)
+                if self._mock_fallbacks_allowed():
+                    result = self._mock_url_check(url, domain)
+                else:
+                    result = self._conservative_url_verdict(url, domain)
         else:
-            result = self._mock_url_check(url, domain)
+            if self._mock_fallbacks_allowed():
+                result = self._mock_url_check(url, domain)
+            else:
+                result = self._conservative_url_verdict(url, domain)
 
         verdict = str(result.get("verdict", "unknown"))
         score_raw = result.get("score", 0)
@@ -982,6 +1010,21 @@ class PhishingTriageWorkflow:
             "score": 30,
             "categories": [],
             "is_mock": True,
+        }
+
+    def _conservative_url_verdict(self, url: str, domain: str) -> dict[str, Any]:
+        """Fail-safe URL verdict when threat intel mock fallback is disabled."""
+        logger.warning(
+            "url_verdict_fail_closed",
+            url=url,
+            domain=domain,
+            reason="threat_intel_unavailable_and_mock_disabled",
+        )
+        return {
+            "verdict": "suspicious",
+            "score": 100,
+            "categories": ["threat_intel_unavailable"],
+            "is_mock": False,
         }
 
     def _make_decision(

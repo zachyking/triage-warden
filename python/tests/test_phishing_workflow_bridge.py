@@ -136,3 +136,35 @@ async def test_notify_action_fails_closed_without_tools_in_production() -> None:
     assert result.success is False
     assert result.error is not None
     assert "mock fallback is disabled" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_sender_reputation_fails_closed_without_threat_intel_in_production() -> None:
+    """In production, sender enrichment should use conservative fail-closed values."""
+    workflow = PhishingTriageWorkflow()
+
+    with patch.dict(os.environ, {"TW_ENV": "production"}):
+        with patch.object(workflow, "_get_threat_intel_bridge", return_value=None):
+            result = await workflow._check_sender_reputation("user@unknown.example")
+
+    assert result.is_mock is False
+    assert result.score == 0
+    assert result.risk_level == "high"
+
+
+@pytest.mark.asyncio
+async def test_url_check_fails_closed_without_threat_intel_in_production() -> None:
+    """In production, URL enrichment should use conservative fail-closed verdicts."""
+    workflow = PhishingTriageWorkflow()
+
+    with patch.dict(os.environ, {"TW_ENV": "production"}):
+        with patch.object(workflow, "_get_threat_intel_bridge", return_value=None):
+            result = await workflow._check_single_url(
+                "http://unknown.example/path",
+                "unknown.example",
+            )
+
+    assert result.is_mock is False
+    assert result.verdict == "suspicious"
+    assert result.score == 100
+    assert "threat_intel_unavailable" in result.categories
