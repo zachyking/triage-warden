@@ -474,6 +474,15 @@ class TestParseAuthenticationHeaders:
         assert auth.dkim == "pass"
         assert auth.dmarc == "pass"
 
+    def test_parse_dkim_signature_without_auth_result(self):
+        """Treat DKIM signatures without auth verdict as neutral."""
+        headers = {
+            "DKIM-Signature": "v=1; a=rsa-sha256; d=example.com; s=selector1; b=abc123;"
+        }
+        auth = parse_authentication_headers(headers)
+
+        assert auth.dkim == "neutral"
+
     def test_parse_missing_headers(self):
         """Test parsing missing authentication headers."""
         headers = {}

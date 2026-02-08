@@ -58,7 +58,7 @@ class EmailAuthResult:
 
     Attributes:
         spf: SPF check result ("pass", "fail", "softfail", "none").
-        dkim: DKIM check result ("pass", "fail", "none").
+        dkim: DKIM check result ("pass", "fail", "neutral", "none").
         dmarc: DMARC check result ("pass", "fail", "none").
     """
 
@@ -511,10 +511,9 @@ def parse_authentication_headers(headers: dict[str, Any]) -> EmailAuthResult:
     dmarc_result = _parse_dmarc_result(auth_results)
 
     # If no DKIM result from Authentication-Results but DKIM-Signature exists,
-    # we can't determine pass/fail but know it was attempted
+    # we can't determine pass/fail but know signing was attempted.
     if dkim_result == "none" and dkim_signature:
-        # DKIM signature present but not verified in auth-results
-        pass
+        dkim_result = "neutral"
 
     return EmailAuthResult(
         spf=spf_result,
