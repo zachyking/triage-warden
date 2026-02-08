@@ -242,8 +242,11 @@ fn substitute_env_vars(input: &str) -> Result<String, ConfigError> {
     let mut errors = Vec::new();
 
     for cap in re.captures_iter(input) {
-        let full_match = cap.get(0).unwrap().as_str();
-        let var_name = cap.get(1).unwrap().as_str();
+        let (Some(full_match), Some(var_name)) = (cap.get(0), cap.get(1)) else {
+            continue;
+        };
+        let full_match = full_match.as_str();
+        let var_name = var_name.as_str();
 
         match env::var(var_name) {
             Ok(value) => {

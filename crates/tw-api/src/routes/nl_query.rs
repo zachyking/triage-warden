@@ -2,6 +2,7 @@
 
 use axum::{extract::State, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 use crate::auth::RequireAnalyst;
 use crate::error::ApiError;
@@ -29,7 +30,16 @@ fn default_backend() -> String {
     "splunk".to_string()
 }
 
-#[derive(Debug, Serialize)]
+fn normalize_backend(backend: &str) -> String {
+    let trimmed = backend.trim();
+    if trimmed.is_empty() {
+        default_backend()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct NLQueryResponse {
     pub query_string: String,
     pub query_type: String,
@@ -48,6 +58,13 @@ async fn translate_query(
     RequireAnalyst(_user): RequireAnalyst,
     Json(request): Json<NLQueryRequest>,
 ) -> Result<Json<NLQueryResponse>, ApiError> {
+    let query = request.query.trim();
+    if query.is_empty() {
+        return Err(ApiError::BadRequest(
+            "NL query cannot be empty.".to_string(),
+        ));
+    }
+
     let nl_url = state.nl_query_url.as_deref().ok_or_else(|| {
         ApiError::BadRequest(
             "NL query service is not configured. Set NL_QUERY_URL environment variable."
@@ -55,12 +72,15 @@ async fn translate_query(
         )
     })?;
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| ApiError::Internal(format!("Failed to build NL query client: {}", e)))?;
     let response = client
-        .post(format!("{}/api/nl/query", nl_url))
+        .post(format!("{}/api/nl/query", nl_url.trim_end_matches('/')))
         .json(&serde_json::json!({
-            "query": request.query,
-            "backend": request.backend,
+            "query": query,
+            "backend": normalize_backend(&request.backend),
             "context": request.context,
         }))
         .send()
@@ -69,32 +89,18 @@ async fn translate_query(
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
         return Err(ApiError::Internal(format!(
-            "NL query service returned {}: {}",
-            status, body
+            "NL query service returned {}",
+            status
         )));
     }
 
-    let nl_response: serde_json::Value = response
+    let nl_response: NLQueryResponse = response
         .json()
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to parse NL response: {}", e)))?;
 
-    Ok(Json(NLQueryResponse {
-        query_string: nl_response["query_string"]
-            .as_str()
-            .unwrap_or("")
-            .to_string(),
-        query_type: nl_response["query_type"].as_str().unwrap_or("").to_string(),
-        intent: nl_response["intent"].as_str().unwrap_or("").to_string(),
-        confidence: nl_response["confidence"].as_f64().unwrap_or(0.0),
-        entities: nl_response["entities"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default(),
-        metadata: nl_response["metadata"].clone(),
-    }))
+    Ok(Json(nl_response))
 }
 
 // ============================================================================
@@ -108,6 +114,13 @@ mod tests {
     #[test]
     fn test_default_backend() {
         assert_eq!(default_backend(), "splunk");
+    }
+
+    #[test]
+    fn test_normalize_backend() {
+        assert_eq!(normalize_backend(""), "splunk");
+        assert_eq!(normalize_backend("   "), "splunk");
+        assert_eq!(normalize_backend("elasticsearch"), "elasticsearch");
     }
 
     #[test]

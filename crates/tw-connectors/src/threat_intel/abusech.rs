@@ -219,21 +219,16 @@ impl ThreatIntelConnector for AbusechConnector {
         let result = match response {
             Ok(r) if r.status().is_success() => match r.json::<ThreatFoxResponse>().await {
                 Ok(data) if data.query_status == "ok" => {
-                    let ioc_count = data.data.as_ref().map(|d| d.len()).unwrap_or(0);
-                    if ioc_count > 0 {
-                        let tags: Vec<String> = data
-                            .data
-                            .as_ref()
-                            .unwrap()
+                    if let Some(entries) = data.data.as_ref().filter(|entries| !entries.is_empty())
+                    {
+                        let ioc_count = entries.len();
+                        let tags: Vec<String> = entries
                             .iter()
                             .flat_map(|i| i.tags.clone().unwrap_or_default())
                             .collect::<std::collections::HashSet<_>>()
                             .into_iter()
                             .collect();
-                        let malware: Vec<String> = data
-                            .data
-                            .as_ref()
-                            .unwrap()
+                        let malware: Vec<String> = entries
                             .iter()
                             .filter_map(|i| i.malware_printable.clone())
                             .collect::<std::collections::HashSet<_>>()

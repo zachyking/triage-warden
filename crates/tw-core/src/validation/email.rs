@@ -168,6 +168,34 @@ impl ValidatedEmail {
         email: &str,
         options: &EmailValidationOptions,
     ) -> Result<Self, EmailValidationError> {
+        if options.require_mx_validation {
+            return Err(EmailValidationError::MxValidationFailed(
+                "MX validation requires async API; use ValidatedEmail::with_options_async or validate_email_with_options_async".to_string(),
+            ));
+        }
+
+        Self::validate_syntax(email, options)
+    }
+
+    /// Creates a new ValidatedEmail with custom validation options, including optional
+    /// asynchronous MX record validation.
+    pub async fn with_options_async(
+        email: &str,
+        options: &EmailValidationOptions,
+    ) -> Result<Self, EmailValidationError> {
+        let validated = Self::validate_syntax(email, options)?;
+
+        if options.require_mx_validation {
+            validate_mx_records(validated.domain()).await?;
+        }
+
+        Ok(validated)
+    }
+
+    fn validate_syntax(
+        email: &str,
+        options: &EmailValidationOptions,
+    ) -> Result<Self, EmailValidationError> {
         // Trim whitespace
         let email = email.trim();
 
@@ -445,6 +473,9 @@ pub fn validate_email(email: &str) -> Result<ValidatedEmail, EmailValidationErro
 
 /// Validates an email address with custom options.
 ///
+/// Note: This is a synchronous API. If `require_mx_validation` is enabled,
+/// this function returns an error instructing the caller to use the async variant.
+///
 /// # Example
 ///
 /// ```
@@ -464,6 +495,14 @@ pub fn validate_email_with_options(
     options: &EmailValidationOptions,
 ) -> Result<ValidatedEmail, EmailValidationError> {
     ValidatedEmail::with_options(email, options)
+}
+
+/// Validates an email address with custom options, including optional MX lookup.
+pub async fn validate_email_with_options_async(
+    email: &str,
+    options: &EmailValidationOptions,
+) -> Result<ValidatedEmail, EmailValidationError> {
+    ValidatedEmail::with_options_async(email, options).await
 }
 
 /// Performs MX record validation for a domain.
@@ -500,12 +539,12 @@ pub async fn validate_mx_records(domain: &str) -> Result<Vec<String>, EmailValid
     }
 }
 
-/// Stub for MX validation when the feature is not enabled.
-/// Returns Ok with an empty vec to indicate MX validation was skipped.
+/// MX validation requires the `mx-validation` feature.
 #[cfg(not(feature = "mx-validation"))]
 pub async fn validate_mx_records(_domain: &str) -> Result<Vec<String>, EmailValidationError> {
-    // MX validation is disabled, return success with empty records
-    Ok(vec![])
+    Err(EmailValidationError::MxValidationFailed(
+        "mx-validation feature is not enabled".to_string(),
+    ))
 }
 
 #[cfg(test)]
@@ -893,6 +932,21 @@ mod tests {
         assert!(validate_email_with_options("user@example.com", &options).is_ok());
     }
 
+    #[test]
+    fn test_validate_email_with_options_requires_async_for_mx() {
+        let options = EmailValidationOptions {
+            require_mx_validation: true,
+            ..Default::default()
+        };
+
+        let result = validate_email_with_options("user@example.com", &options);
+        assert!(matches!(
+            result,
+            Err(EmailValidationError::MxValidationFailed(message))
+            if message.contains("async API")
+        ));
+    }
+
     // Real-world email format tests
     #[test]
     fn test_gmail_style() {
@@ -940,11 +994,31 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // MX validation tests (stub)
+    // MX validation tests
+    #[cfg(not(feature = "mx-validation"))]
     #[tokio::test]
-    async fn test_mx_validation_stub() {
-        // When mx-validation feature is disabled, this should return Ok with empty vec
+    async fn test_validate_email_with_options_async_requires_feature_for_mx() {
+        let options = EmailValidationOptions {
+            require_mx_validation: true,
+            ..Default::default()
+        };
+
+        let result = validate_email_with_options_async("user@example.com", &options).await;
+        assert!(matches!(
+            result,
+            Err(EmailValidationError::MxValidationFailed(message))
+            if message.contains("feature is not enabled")
+        ));
+    }
+
+    #[cfg(not(feature = "mx-validation"))]
+    #[tokio::test]
+    async fn test_mx_validation_without_feature_returns_error() {
         let result = validate_mx_records("example.com").await;
-        assert!(result.is_ok());
+        assert!(matches!(
+            result,
+            Err(EmailValidationError::MxValidationFailed(message))
+            if message.contains("feature is not enabled")
+        ));
     }
 }

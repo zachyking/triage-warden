@@ -102,8 +102,9 @@ pub use crypto::{
 
 // Validation exports
 pub use validation::{
-    validate_email, validate_email_with_options, EmailValidationError, EmailValidationOptions,
-    HostnameValidationError, ValidatedEmail, ValidatedHostname,
+    validate_email, validate_email_with_options, validate_email_with_options_async,
+    EmailValidationError, EmailValidationOptions, HostnameValidationError, ValidatedEmail,
+    ValidatedHostname,
 };
 
 // Cache exports

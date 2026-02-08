@@ -19,7 +19,7 @@ pub mod email;
 mod hostname;
 
 pub use email::{
-    validate_email, validate_email_with_options, EmailValidationError, EmailValidationOptions,
-    ValidatedEmail,
+    validate_email, validate_email_with_options, validate_email_with_options_async,
+    EmailValidationError, EmailValidationOptions, ValidatedEmail,
 };
 pub use hostname::{HostnameValidationError, ValidatedHostname};

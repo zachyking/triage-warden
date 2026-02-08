@@ -1126,7 +1126,10 @@ async fn run_nl_query(state: &AppState, query: &str) -> Result<NlQueryServiceRes
         .as_deref()
         .ok_or_else(|| "NL query service is not configured (set NL_QUERY_URL)".to_string())?;
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("failed to build NL client: {}", e))?;
     let response = client
         .post(format!("{}/api/nl/query", nl_url.trim_end_matches('/')))
         .json(&serde_json::json!({
