@@ -616,7 +616,7 @@ class IncidentIngester(BaseIngester):
         """
         # Create hash from alert_id and key analysis fields
         content = f"{alert_id}:{analysis.verdict}:{analysis.summary[:100]}"
-        hash_suffix = hashlib.md5(content.encode()).hexdigest()[:8]
+        hash_suffix = hashlib.sha256(content.encode()).hexdigest()[:8]
         return f"incident_{alert_id}_{hash_suffix}"
 
     def _build_content(self, analysis: TriageAnalysis) -> str:

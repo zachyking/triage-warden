@@ -196,7 +196,7 @@ class FewShotSelector:
             return False
 
         # Hash the incident for consistent assignment
-        hash_val = int(hashlib.md5(incident_text.encode()).hexdigest(), 16)
+        hash_val = int(hashlib.sha256(incident_text.encode()).hexdigest(), 16)
         use_dynamic = (hash_val % 100) < self._config.ab_test_dynamic_percentage
 
         return not use_dynamic

@@ -236,7 +236,7 @@ class ABTestManager:
         """Assign variant using consistent hashing."""
         # Combine experiment name with incident for deterministic assignment
         hash_input = f"{experiment.name}:{incident_id}:{incident_text[:100]}"
-        hash_val = int(hashlib.md5(hash_input.encode()).hexdigest(), 16)
+        hash_val = int(hashlib.sha256(hash_input.encode()).hexdigest(), 16)
         bucket = hash_val % 1000
 
         cumulative = 0.0

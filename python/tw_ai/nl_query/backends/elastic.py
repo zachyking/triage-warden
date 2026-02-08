@@ -46,7 +46,8 @@ class ElasticBackend(QueryBackend):
 
     def _generate_incident_search(self, translated: TranslatedQuery) -> QueryResult:
         q = translated.incident_search
-        assert q is not None
+        if q is None:
+            raise ValueError("incident_search payload is required for SEARCH_INCIDENTS intent")
         clauses: list[str] = []
 
         if q.severity:
@@ -78,7 +79,8 @@ class ElasticBackend(QueryBackend):
 
     def _generate_log_search(self, translated: TranslatedQuery) -> QueryResult:
         q = translated.log_search
-        assert q is not None
+        if q is None:
+            raise ValueError("log_search payload is required for SEARCH_LOGS intent")
         clauses: list[str] = []
 
         for ip in q.source_ips:
@@ -110,7 +112,8 @@ class ElasticBackend(QueryBackend):
 
     def _generate_ioc_lookup(self, translated: TranslatedQuery) -> QueryResult:
         q = translated.ioc_lookup
-        assert q is not None
+        if q is None:
+            raise ValueError("ioc_lookup payload is required for LOOKUP_IOC intent")
         field_map = {
             "ip": ["source.ip", "destination.ip"],
             "domain": ["dns.question.name", "url.domain"],
@@ -136,7 +139,8 @@ class ElasticBackend(QueryBackend):
 
     def _generate_timeline(self, translated: TranslatedQuery) -> QueryResult:
         q = translated.timeline
-        assert q is not None
+        if q is None:
+            raise ValueError("timeline payload is required for TIMELINE_QUERY intent")
         clauses: list[str] = []
 
         if q.incident_id:
@@ -165,7 +169,8 @@ class ElasticBackend(QueryBackend):
 
     def _generate_statistics(self, translated: TranslatedQuery) -> QueryResult:
         q = translated.statistics
-        assert q is not None
+        if q is None:
+            raise ValueError("statistics payload is required for STATISTICS intent")
         filter_clauses: list[str] = []
 
         for field_name, value in q.filters.items():

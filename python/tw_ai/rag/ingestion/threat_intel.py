@@ -573,7 +573,7 @@ class ThreatIntelIngester(BaseIngester):
             Unique document ID.
         """
         content = f"{indicator_type}:{indicator}"
-        hash_value = hashlib.md5(content.encode()).hexdigest()[:12]
+        hash_value = hashlib.sha256(content.encode()).hexdigest()[:12]
         return f"ti_{indicator_type}_{hash_value}"
 
     def _build_content(

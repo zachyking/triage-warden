@@ -60,7 +60,8 @@ class SQLBackend(QueryBackend):
 
     def _generate_incident_search(self, translated: TranslatedQuery) -> QueryResult:
         q = translated.incident_search
-        assert q is not None
+        if q is None:
+            raise ValueError("incident_search payload is required for SEARCH_INCIDENTS intent")
         conditions: list[str] = []
         params: dict[str, Any] = {}
         param_idx = 0
@@ -111,7 +112,8 @@ class SQLBackend(QueryBackend):
 
     def _generate_log_search(self, translated: TranslatedQuery) -> QueryResult:
         q = translated.log_search
-        assert q is not None
+        if q is None:
+            raise ValueError("log_search payload is required for SEARCH_LOGS intent")
         conditions: list[str] = []
         params: dict[str, Any] = {}
         param_idx = 0
@@ -162,7 +164,8 @@ class SQLBackend(QueryBackend):
 
     def _generate_ioc_lookup(self, translated: TranslatedQuery) -> QueryResult:
         q = translated.ioc_lookup
-        assert q is not None
+        if q is None:
+            raise ValueError("ioc_lookup payload is required for LOOKUP_IOC intent")
         conditions = ["value = :value"]
         params: dict[str, Any] = {"value": q.ioc_value}
 
@@ -182,7 +185,8 @@ class SQLBackend(QueryBackend):
 
     def _generate_timeline(self, translated: TranslatedQuery) -> QueryResult:
         q = translated.timeline
-        assert q is not None
+        if q is None:
+            raise ValueError("timeline payload is required for TIMELINE_QUERY intent")
         conditions: list[str] = []
         params: dict[str, Any] = {}
         param_idx = 0
@@ -220,7 +224,8 @@ class SQLBackend(QueryBackend):
 
     def _generate_statistics(self, translated: TranslatedQuery) -> QueryResult:
         q = translated.statistics
-        assert q is not None
+        if q is None:
+            raise ValueError("statistics payload is required for STATISTICS intent")
         conditions: list[str] = []
         params: dict[str, Any] = {}
         param_idx = 0

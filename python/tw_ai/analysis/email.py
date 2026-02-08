@@ -354,8 +354,8 @@ def extract_urls_from_html(html: str) -> list[ExtractedURL]:
     try:
         parser.feed(html)
     except Exception:
-        # If HTML parsing fails, fall back to regex extraction
-        pass
+        # If HTML parsing fails, ignore partial link extraction and rely on regex fallback.
+        parser.links = []
 
     for href, display_text in parser.links:
         # Normalize the URL
@@ -655,7 +655,7 @@ def _parse_attachments(attachments_data: list[Any]) -> list[AttachmentInfo]:
                 if isinstance(content, str):
                     content = content.encode("utf-8")
                 if not md5:
-                    md5 = hashlib.md5(content).hexdigest()
+                    md5 = hashlib.md5(content, usedforsecurity=False).hexdigest()
                 if not sha256:
                     sha256 = hashlib.sha256(content).hexdigest()
                 if size == 0:

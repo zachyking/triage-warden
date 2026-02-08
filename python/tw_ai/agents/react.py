@@ -506,8 +506,8 @@ class TokenCounter:
         if self._encoder:
             try:
                 return len(self._encoder.encode(text))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("token_count_fallback_estimate", error=str(e))
 
         # Fallback: estimate ~4 characters per token
         return len(text) // 4

@@ -2047,7 +2047,8 @@ class PhishingTriageWorkflow:
             domain = email_analysis.sender.split("@")[-1].lower().strip()
             if domain:
                 try:
-                    assert self.tools is not None
+                    if self.tools is None:
+                        raise RuntimeError("tool registry is not configured for AI enrichment")
                     domain_result = await self.tools.execute("lookup_domain", {"domain": domain})
                     results["domain_result"] = {
                         "domain": domain,
@@ -2061,7 +2062,8 @@ class PhishingTriageWorkflow:
                     )
 
         # Lookup URLs (limit to first 5 to avoid excessive calls)
-        assert self.tools is not None
+        if self.tools is None:
+            return results
         for url_info in email_analysis.urls[:5]:
             try:
                 domain = url_info.domain
@@ -2120,7 +2122,8 @@ class PhishingTriageWorkflow:
         )
 
         # Run the agent
-        assert self.agent is not None
+        if self.agent is None:
+            raise RuntimeError("agent is not configured for AI workflow execution")
         return await self.agent.run(request)
 
     def _build_ai_agent_context(
