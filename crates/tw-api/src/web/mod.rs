@@ -18,14 +18,17 @@ use uuid::Uuid;
 #[cfg(test)]
 use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::db::{
-    create_api_key_repository, create_audit_repository, create_connector_repository,
-    create_incident_repository, create_knowledge_repository, create_notification_repository,
-    create_playbook_repository, create_policy_repository, create_settings_repository,
-    GeneralSettings, IncidentFilter, IncidentRepository, LlmSettings, Pagination, PlaybookFilter,
-    PolicyRepository, RateLimits,
+    create_api_key_repository, create_audit_repository, create_comment_repository,
+    create_connector_repository, create_incident_repository, create_knowledge_repository,
+    create_lesson_repository, create_notification_repository, create_playbook_repository,
+    create_policy_repository, create_settings_repository, create_user_repository, GeneralSettings,
+    IncidentFilter, IncidentRepository, LlmSettings, Pagination, PlaybookFilter, PolicyRepository,
+    RateLimits,
 };
 use tw_core::incident::{ApprovalStatus, IncidentStatus, Severity};
 use tw_core::knowledge::{KnowledgeFilter, KnowledgeType};
+use tw_core::lesson::LessonFilter;
+use tw_core::{CommentType, IncidentComment, UserFilter};
 
 use crate::auth::AuthenticatedUser;
 use crate::error::ApiError;
@@ -1173,13 +1176,54 @@ async fn partials_mitre_matrix(
 
 /// Returns the comments section for an incident.
 async fn partials_incident_comments(
-    AuthenticatedUser(_user): AuthenticatedUser,
+    State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // Comments are not yet persisted; will be wired to the comment store
+    let incident_repo = create_incident_repository(&state.db);
+    if incident_repo
+        .get_for_tenant(id, user.tenant_id)
+        .await?
+        .is_none()
+    {
+        return Err(ApiError::NotFound(format!("Incident {} not found", id)));
+    }
+
+    let comment_repo = create_comment_repository(&state.db);
+    let user_repo = create_user_repository(&state.db);
+    let comments = comment_repo.get_for_incident(user.tenant_id, id).await?;
+
+    let mut author_cache: std::collections::HashMap<Uuid, String> =
+        std::collections::HashMap::new();
+    let mut mapped_comments = Vec::with_capacity(comments.len());
+    for comment in comments {
+        let author = if comment.author_id == user.id {
+            user.username.clone()
+        } else if let Some(cached) = author_cache.get(&comment.author_id) {
+            cached.clone()
+        } else {
+            let resolved = user_repo
+                .get_for_tenant(comment.author_id, user.tenant_id)
+                .await?
+                .map(|u| u.username)
+                .unwrap_or_else(|| format!("user-{}", comment.author_id));
+            author_cache.insert(comment.author_id, resolved.clone());
+            resolved
+        };
+
+        mapped_comments.push(CommentData {
+            id: comment.id,
+            author,
+            content: comment.content,
+            comment_type: comment.comment_type.to_string(),
+            created_at: format_time_ago(comment.created_at),
+            is_own: comment.author_id == user.id,
+        });
+    }
+
     let template = CommentThreadTemplate {
         incident_id: id,
-        comments: vec![],
+        comments: mapped_comments,
     };
     Ok(HtmlTemplate(template))
 }
@@ -1195,19 +1239,85 @@ fn default_comment_type() -> String {
     "note".to_string()
 }
 
+const MAX_COMMENT_CONTENT_LEN: usize = 10_000;
+
+fn parse_comment_type(value: &str) -> Result<CommentType, ApiError> {
+    match value.trim().to_lowercase().as_str() {
+        "note" => Ok(CommentType::Note),
+        "analysis" | "finding" => Ok(CommentType::Analysis),
+        "action_taken" | "action-taken" | "action taken" => Ok(CommentType::ActionTaken),
+        "question" => Ok(CommentType::Question),
+        "resolution" => Ok(CommentType::Resolution),
+        _ => Err(ApiError::BadRequest(format!(
+            "Invalid comment type '{}'",
+            value
+        ))),
+    }
+}
+
+async fn fetch_available_usernames(
+    state: &AppState,
+    tenant_id: Uuid,
+    current_username: &str,
+) -> Result<Vec<String>, ApiError> {
+    let user_repo = create_user_repository(&state.db);
+    let users = user_repo
+        .list(&UserFilter {
+            tenant_id: Some(tenant_id),
+            enabled: Some(true),
+            ..Default::default()
+        })
+        .await?;
+
+    let mut usernames: Vec<String> = users.into_iter().map(|u| u.username).collect();
+    if !usernames.iter().any(|name| name == current_username) {
+        usernames.push(current_username.to_string());
+    }
+    usernames.sort();
+    usernames.dedup();
+    Ok(usernames)
+}
+
 /// Post a new comment on an incident.
 async fn web_post_comment(
+    State(state): State<AppState>,
     AuthenticatedUser(user): AuthenticatedUser,
     Path(id): Path<Uuid>,
     Form(form): Form<PostCommentForm>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // Return a new comment item partial
+    let incident_repo = create_incident_repository(&state.db);
+    if incident_repo
+        .get_for_tenant(id, user.tenant_id)
+        .await?
+        .is_none()
+    {
+        return Err(ApiError::NotFound(format!("Incident {} not found", id)));
+    }
+
+    let content = form.content.trim();
+    if content.is_empty() {
+        return Err(ApiError::BadRequest(
+            "Comment content cannot be empty".to_string(),
+        ));
+    }
+    if content.len() > MAX_COMMENT_CONTENT_LEN {
+        return Err(ApiError::BadRequest(format!(
+            "Comment exceeds maximum length of {} characters",
+            MAX_COMMENT_CONTENT_LEN
+        )));
+    }
+
+    let comment_type = parse_comment_type(&form.comment_type)?;
+    let comment_repo = create_comment_repository(&state.db);
+    let comment = IncidentComment::new(id, user.id, content.to_string(), comment_type);
+    let saved_comment = comment_repo.create(&comment, user.tenant_id).await?;
+
     let comment = CommentData {
-        id: Uuid::new_v4(),
+        id: saved_comment.id,
         author: user.username.clone(),
-        content: form.content,
-        comment_type: form.comment_type,
-        created_at: "just now".to_string(),
+        content: saved_comment.content,
+        comment_type: saved_comment.comment_type.to_string(),
+        created_at: format_time_ago(saved_comment.created_at),
         is_own: true,
     };
     let template = CommentItemTemplate {
@@ -1219,27 +1329,64 @@ async fn web_post_comment(
 
 /// Delete a comment from an incident.
 async fn web_delete_comment(
-    AuthenticatedUser(_user): AuthenticatedUser,
-    Path((_id, _comment_id)): Path<(Uuid, Uuid)>,
+    State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
+    Path((id, comment_id)): Path<(Uuid, Uuid)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // Comment deletion not yet persisted; returns empty to remove from DOM
+    let comment_repo = create_comment_repository(&state.db);
+    let comment = comment_repo
+        .get_for_tenant(comment_id, user.tenant_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Comment {} not found", comment_id)))?;
+
+    if comment.incident_id != id {
+        return Err(ApiError::NotFound(format!(
+            "Comment {} not found for incident {}",
+            comment_id, id
+        )));
+    }
+
+    if comment.author_id != user.id && !user.is_admin() {
+        return Err(ApiError::Forbidden(
+            "You can only delete your own comments".to_string(),
+        ));
+    }
+
+    let deleted = comment_repo.delete(comment_id, user.tenant_id).await?;
+    if !deleted {
+        return Err(ApiError::NotFound(format!(
+            "Comment {} not found",
+            comment_id
+        )));
+    }
+
     Ok("")
 }
 
 /// Returns the assignment picker partial for an incident.
 async fn partials_incident_assignment(
-    AuthenticatedUser(_user): AuthenticatedUser,
+    State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // Assignment not yet persisted; shows available users from static list
+    let incident_repo = create_incident_repository(&state.db);
+    let incident = incident_repo
+        .get_for_tenant(id, user.tenant_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Incident {} not found", id)))?;
+
+    let current_assignee = incident
+        .metadata
+        .get("assignee")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let available_users = fetch_available_usernames(&state, user.tenant_id, &user.username).await?;
+
     let template = AssignmentPickerTemplate {
         incident_id: id,
-        current_assignee: None,
-        available_users: vec![
-            "admin".to_string(),
-            "analyst1".to_string(),
-            "analyst2".to_string(),
-        ],
+        current_assignee,
+        available_users,
     };
     Ok(HtmlTemplate(template))
 }
@@ -1251,26 +1398,58 @@ struct AssignForm {
 
 /// Assign an incident to a user.
 async fn web_assign_incident(
+    State(state): State<AppState>,
     AuthenticatedUser(user): AuthenticatedUser,
     Path(id): Path<Uuid>,
     Form(form): Form<AssignForm>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let assignee = if form.assignee == "me" {
+    let requested_assignee = form.assignee.trim();
+    let assignee = if requested_assignee == "me" {
         Some(user.username.clone())
-    } else if form.assignee.is_empty() {
+    } else if requested_assignee.is_empty() {
         None
     } else {
-        Some(form.assignee)
+        Some(requested_assignee.to_string())
     };
+
+    if let Some(ref assignee_username) = assignee {
+        if assignee_username != &user.username {
+            let user_repo = create_user_repository(&state.db);
+            let exists = user_repo
+                .get_by_username_for_tenant(assignee_username, user.tenant_id)
+                .await?
+                .is_some();
+            if !exists {
+                return Err(ApiError::BadRequest(format!(
+                    "Assignee '{}' does not exist in this tenant",
+                    assignee_username
+                )));
+            }
+        }
+    }
+
+    let incident_repo = create_incident_repository(&state.db);
+    let mut incident = incident_repo
+        .get_for_tenant(id, user.tenant_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Incident {} not found", id)))?;
+
+    if let Some(ref assignee_username) = assignee {
+        incident
+            .metadata
+            .insert("assignee".to_string(), serde_json::json!(assignee_username));
+    } else {
+        incident.metadata.remove("assignee");
+    }
+    incident.updated_at = Utc::now();
+    incident_repo.save(&incident).await?;
+
+    let available_users = fetch_available_usernames(&state, user.tenant_id, &user.username).await?;
 
     let template = AssignmentPickerTemplate {
         incident_id: id,
         current_assignee: assignee,
-        available_users: vec![
-            "admin".to_string(),
-            "analyst1".to_string(),
-            "analyst2".to_string(),
-        ],
+        available_users,
     };
     Ok(HtmlTemplate(template))
 }
@@ -1553,10 +1732,52 @@ async fn analytics(
 
 /// Returns the lessons learned table partial.
 async fn partials_lessons(
-    AuthenticatedUser(_user): AuthenticatedUser,
+    State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
 ) -> Result<impl IntoResponse, ApiError> {
-    // Lessons not yet persisted; will be wired to the lessons store
-    let template = LessonsTableTemplate { lessons: vec![] };
+    let lesson_repo = create_lesson_repository(&state.db);
+    let incident_repo = create_incident_repository(&state.db);
+    let paginated = lesson_repo
+        .list(
+            user.tenant_id,
+            &LessonFilter::default(),
+            &Pagination::new(1, 100),
+        )
+        .await?;
+
+    let mut incident_titles: std::collections::HashMap<Uuid, Option<String>> =
+        std::collections::HashMap::new();
+    let mut lessons = Vec::with_capacity(paginated.items.len());
+
+    for lesson in paginated.items {
+        let incident_title = if let Some(cached) = incident_titles.get(&lesson.incident_id) {
+            cached.clone()
+        } else {
+            let title = incident_repo
+                .get_for_tenant(lesson.incident_id, user.tenant_id)
+                .await?
+                .map(|incident| extract_title(&incident.alert_data));
+            incident_titles.insert(lesson.incident_id, title.clone());
+            title
+        };
+
+        lessons.push(LessonData {
+            id: lesson.id,
+            title: lesson.title,
+            category: lesson.category.as_str().to_string(),
+            status: match lesson.status {
+                tw_core::LessonStatus::Identified => "open".to_string(),
+                tw_core::LessonStatus::InProgress => "in_progress".to_string(),
+                tw_core::LessonStatus::Implemented => "implemented".to_string(),
+                tw_core::LessonStatus::WontFix => "wont_fix".to_string(),
+            },
+            incident_id: Some(lesson.incident_id),
+            incident_title,
+            created_at: format_time_ago(lesson.created_at),
+        });
+    }
+
+    let template = LessonsTableTemplate { lessons };
     Ok(HtmlTemplate(template))
 }
 
@@ -2257,6 +2478,20 @@ mod tests {
         .await
         .expect("Failed to run knowledge base schema");
 
+        sqlx::query(include_str!(
+            "../../../tw-core/src/db/migrations/sqlite/20240310_000001_create_comments_activity.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("Failed to run comments/activity schema");
+
+        sqlx::query(include_str!(
+            "../../../tw-core/src/db/migrations/sqlite/20240311_000001_create_lessons_handoffs.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("Failed to run lessons/handoffs schema");
+
         let db = DbPool::Sqlite(pool);
         let event_bus = EventBus::new(100);
         let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
@@ -2390,6 +2625,20 @@ mod tests {
         .execute(&pool)
         .await
         .expect("Failed to run knowledge base schema");
+
+        sqlx::query(include_str!(
+            "../../../tw-core/src/db/migrations/sqlite/20240310_000001_create_comments_activity.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("Failed to run comments/activity schema");
+
+        sqlx::query(include_str!(
+            "../../../tw-core/src/db/migrations/sqlite/20240311_000001_create_lessons_handoffs.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("Failed to run lessons/handoffs schema");
 
         let db = DbPool::Sqlite(pool);
         let event_bus = EventBus::new(100);
@@ -5819,5 +6068,152 @@ mod tests {
             html.contains("3") || html.contains("Approvals"),
             "Dashboard should show approval count or link to approvals"
         );
+    }
+
+    #[tokio::test]
+    async fn test_comments_partial_uses_persisted_comments() {
+        use tw_core::db::{create_comment_repository, create_incident_repository};
+        use tw_core::incident::{IncidentStatus, Severity};
+
+        let (app, state) = setup_test_app_with_state().await;
+
+        let incident = create_test_incident(
+            "Comment Persistence Incident",
+            Severity::High,
+            IncidentStatus::New,
+        );
+        let incident_id = incident.id;
+        let incident_repo = create_incident_repository(&state.db);
+        incident_repo.create(&incident).await.unwrap();
+
+        let post_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/web/incidents/{}/comments", incident_id))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(
+                        "content=Needs+investigation&comment_type=finding",
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(post_response.status(), StatusCode::OK);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/web/partials/incidents/{}/comments", incident_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("Needs investigation"));
+        assert!(html.contains("analysis"));
+
+        let comment_repo = create_comment_repository(&state.db);
+        let comments = comment_repo
+            .get_for_incident(DEFAULT_TENANT_ID, incident_id)
+            .await
+            .unwrap();
+        assert_eq!(comments.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_assignment_persists_on_incident_metadata() {
+        use tw_core::db::create_incident_repository;
+        use tw_core::incident::{IncidentStatus, Severity};
+
+        let (app, state) = setup_test_app_with_state().await;
+
+        let incident = create_test_incident(
+            "Assignment Persistence Incident",
+            Severity::Medium,
+            IncidentStatus::New,
+        );
+        let incident_id = incident.id;
+        let incident_repo = create_incident_repository(&state.db);
+        incident_repo.create(&incident).await.unwrap();
+
+        let assign_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/web/incidents/{}/assign", incident_id))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("assignee=me"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(assign_response.status(), StatusCode::OK);
+
+        let updated = incident_repo
+            .get_for_tenant(incident_id, DEFAULT_TENANT_ID)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            updated.metadata.get("assignee").and_then(|v| v.as_str()),
+            Some("test_admin")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_lessons_partial_renders_persisted_lessons() {
+        use tw_core::db::{create_incident_repository, create_lesson_repository};
+        use tw_core::incident::{IncidentStatus, Severity};
+        use tw_core::{LessonCategory, LessonLearned};
+
+        let (app, state) = setup_test_app_with_state().await;
+
+        let incident = create_test_incident(
+            "Lessons Linked Incident",
+            Severity::Low,
+            IncidentStatus::Resolved,
+        );
+        let incident_id = incident.id;
+        let incident_repo = create_incident_repository(&state.db);
+        incident_repo.create(&incident).await.unwrap();
+
+        let lesson_repo = create_lesson_repository(&state.db);
+        let lesson = LessonLearned::new(
+            DEFAULT_TENANT_ID,
+            incident_id,
+            LessonCategory::Detection,
+            "Tune detection rule threshold",
+            "Repeated benign activity triggered noisy alerts",
+            "Adjust threshold and add allowlist exceptions",
+        );
+        lesson_repo.create(&lesson).await.unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/web/partials/lessons")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("Tune detection rule threshold"));
+        assert!(html.contains("Lessons Linked Incident"));
+        assert!(html.contains("detection"));
     }
 }
