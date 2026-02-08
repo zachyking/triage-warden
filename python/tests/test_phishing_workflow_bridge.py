@@ -168,3 +168,49 @@ async def test_url_check_fails_closed_without_threat_intel_in_production() -> No
     assert result.verdict == "suspicious"
     assert result.score == 100
     assert "threat_intel_unavailable" in result.categories
+
+
+def test_ai_policy_checks_fail_closed_without_checker_in_production() -> None:
+    """In production, AI action approvals should not default-allow without checker."""
+    workflow = PhishingTriageWorkflow(policy_checker=None)
+    actions = [
+        {
+            "action": "quarantine_email",
+            "priority": "high",
+            "reason": "high risk",
+            "requires_approval": False,
+        }
+    ]
+
+    with patch.dict(os.environ, {"TW_ENV": "production"}):
+        approved, rejected = workflow._check_ai_actions_against_policy(actions, confidence=90)
+
+    assert approved == []
+    assert len(rejected) == 1
+    assert rejected[0]["policy_decision"] == "denied"
+
+
+def test_ai_policy_checks_allow_default_behavior_with_override() -> None:
+    """Production override should keep legacy default-approval behavior."""
+    workflow = PhishingTriageWorkflow(policy_checker=None)
+    actions = [
+        {
+            "action": "notify_user",
+            "priority": "low",
+            "reason": "notify recipient",
+            "requires_approval": False,
+        }
+    ]
+
+    with patch.dict(
+        os.environ,
+        {
+            "TW_ENV": "production",
+            "TW_ALLOW_MOCK_FALLBACKS": "true",
+        },
+    ):
+        approved, rejected = workflow._check_ai_actions_against_policy(actions, confidence=80)
+
+    assert rejected == []
+    assert len(approved) == 1
+    assert approved[0]["policy_decision"] == "allowed"

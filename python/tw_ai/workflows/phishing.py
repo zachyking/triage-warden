@@ -2262,7 +2262,17 @@ class PhishingTriageWorkflow:
                     )
             else:
                 # No policy checker - default behavior
-                if action.get("requires_approval", False):
+                if not self._mock_fallbacks_allowed():
+                    rejected.append(
+                        {
+                            **action,
+                            "policy_decision": "denied",
+                            "rejection_reason": (
+                                "Policy checker required when mock fallback is disabled"
+                            ),
+                        }
+                    )
+                elif action.get("requires_approval", False):
                     approved.append(
                         {
                             **action,
