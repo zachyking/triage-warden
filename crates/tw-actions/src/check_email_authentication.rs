@@ -382,13 +382,9 @@ impl Action for CheckEmailAuthenticationAction {
     }
 
     fn validate(&self, context: &ActionContext) -> Result<(), ActionError> {
-        let has_auth_results = context.get_param("authentication_results").is_some()
-            && !context
-                .get_param("authentication_results")
-                .unwrap()
-                .is_null();
-        let has_headers = context.get_param("headers").is_some()
-            && !context.get_param("headers").unwrap().is_null();
+        let has_auth_results =
+            matches!(context.get_param("authentication_results"), Some(value) if !value.is_null());
+        let has_headers = matches!(context.get_param("headers"), Some(value) if !value.is_null());
 
         if !has_auth_results && !has_headers {
             return Err(ActionError::InvalidParameters(

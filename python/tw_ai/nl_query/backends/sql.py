@@ -6,11 +6,30 @@ Uses parameterized queries to prevent SQL injection.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from tw_ai.nl_query.backends.base import QueryBackend, QueryResult
 from tw_ai.nl_query.intent import QueryIntent
 from tw_ai.nl_query.translator import TranslatedQuery
+
+_ALLOWED_STATISTICS_FIELDS = frozenset(
+    {
+        "alert_type",
+        "assignee",
+        "category",
+        "confidence",
+        "created_at",
+        "incident_id",
+        "priority",
+        "severity",
+        "source",
+        "status",
+        "tenant_id",
+        "updated_at",
+        "verdict",
+    }
+)
 
 
 class SQLBackend(QueryBackend):
@@ -95,6 +114,7 @@ class SQLBackend(QueryBackend):
             param_idx += 1
 
         where = " AND ".join(conditions) if conditions else "1=1"
+        # Dynamic SQL structure is built from trusted identifiers plus bound params.
         sql = (
             f"SELECT * FROM {self._incidents_table}"
             f" WHERE {where}"
@@ -231,7 +251,7 @@ class SQLBackend(QueryBackend):
         param_idx = 0
 
         for field_name, value in q.filters.items():
-            safe_field = _sanitize_column_name(field_name)
+            safe_field = _validate_statistics_field(field_name)
             conditions.append(f"{safe_field} = :p{param_idx}")
             params[f"p{param_idx}"] = value
             param_idx += 1
@@ -247,7 +267,7 @@ class SQLBackend(QueryBackend):
         where = " AND ".join(conditions) if conditions else "1=1"
 
         if q.metric == "count" and q.group_by:
-            safe_group = _sanitize_column_name(q.group_by)
+            safe_group = _validate_statistics_field(q.group_by)
             sql = (
                 f"SELECT {safe_group}, COUNT(*) as count"
                 f" FROM {self._incidents_table}"
@@ -256,7 +276,7 @@ class SQLBackend(QueryBackend):
                 f" ORDER BY count DESC"
             )
         elif q.metric == "top" and q.group_by:
-            safe_group = _sanitize_column_name(q.group_by)
+            safe_group = _validate_statistics_field(q.group_by)
             sql = (
                 f"SELECT {safe_group}, COUNT(*) as count"
                 f" FROM {self._incidents_table}"
@@ -321,18 +341,23 @@ def _sanitize_column_name(name: str) -> str:
 
     Only allows alphanumeric characters and underscores.
     """
-    import re
+    if not name:
+        return ""
+    return re.sub(r"[^a-zA-Z0-9_]", "", name)
 
-    sanitized = re.sub(r"[^a-zA-Z0-9_]", "", name)
-    if not sanitized:
-        return "unknown"
+
+def _validate_statistics_field(name: str) -> str:
+    """Validate a stats field name against an allowlist after sanitization."""
+    sanitized = _sanitize_column_name(name)
+    if sanitized not in _ALLOWED_STATISTICS_FIELDS:
+        raise ValueError(f"Unsupported statistics field: {name!r}")
     return sanitized
 
 
 def _sanitize_table_name(name: str, fallback: str) -> str:
     """Sanitize table name identifiers used in SQL query templates."""
     sanitized = _sanitize_column_name(name)
-    if sanitized == "unknown":
+    if not sanitized:
         return fallback
     return sanitized
 

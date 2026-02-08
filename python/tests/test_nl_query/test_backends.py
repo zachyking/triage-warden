@@ -2,8 +2,8 @@
 
 import pytest
 
-from tw_ai.nl_query.backends import ElasticBackend, QueryBackend, SQLBackend, SplunkBackend
-from tw_ai.nl_query.translator import NLQueryTranslator, QueryContext
+from tw_ai.nl_query.backends import ElasticBackend, SplunkBackend, SQLBackend
+from tw_ai.nl_query.translator import NLQueryTranslator
 
 
 @pytest.fixture
@@ -150,6 +150,26 @@ class TestSQLBackend:
         result = sql.generate(translated)
         # Column names should be safe
         assert "severity" in result.query_string
+
+    def test_statistics_rejects_invalid_group_by(
+        self, sql: SQLBackend, translator: NLQueryTranslator
+    ):
+        translated = translator.translate("how many incidents by severity")
+        assert translated.statistics is not None
+        translated.statistics.group_by = "severity; DROP TABLE incidents"
+
+        with pytest.raises(ValueError, match="Unsupported statistics field"):
+            sql.generate(translated)
+
+    def test_statistics_rejects_invalid_filter_field(
+        self, sql: SQLBackend, translator: NLQueryTranslator
+    ):
+        translated = translator.translate("how many incidents total")
+        assert translated.statistics is not None
+        translated.statistics.filters["severity; DROP TABLE incidents"] = "critical"
+
+        with pytest.raises(ValueError, match="Unsupported statistics field"):
+            sql.generate(translated)
 
     def test_table_name_sanitization(self, translator: NLQueryTranslator):
         sql = SQLBackend(

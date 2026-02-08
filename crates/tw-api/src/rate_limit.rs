@@ -48,6 +48,18 @@ pub const DEFAULT_API_RATE_GLOBAL: u32 = 10000;
 /// Default maximum entries in rate limiter LRU cache.
 pub const DEFAULT_RATE_LIMIT_MAX_ENTRIES: usize = 10_000;
 
+/// Minimum allowed rate limit value when sanitizing invalid config.
+const MIN_RATE_LIMIT_VALUE: u32 = 1;
+
+/// Minimum allowed cache entries when sanitizing invalid config.
+const MIN_CACHE_ENTRIES: usize = 1;
+
+/// Minimum allowed queue depth when sanitizing invalid config.
+const MIN_QUEUE_DEPTH: usize = 1;
+
+/// Minimum allowed rate limit window in seconds when sanitizing invalid config.
+const MIN_RATE_LIMIT_WINDOW_SECS: u64 = 1;
+
 /// Environment variable name for configuring max entries.
 pub const RATE_LIMIT_MAX_ENTRIES_ENV: &str = "RATE_LIMIT_MAX_ENTRIES";
 
@@ -60,6 +72,81 @@ fn get_max_entries() -> usize {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_RATE_LIMIT_MAX_ENTRIES)
+}
+
+fn sanitize_rate_limit(value: u32, limiter: &str, field: &str) -> u32 {
+    if value == 0 {
+        tracing::warn!(
+            limiter = limiter,
+            field = field,
+            provided = value,
+            fallback = MIN_RATE_LIMIT_VALUE,
+            "Invalid zero rate limit configured; using minimum value"
+        );
+        MIN_RATE_LIMIT_VALUE
+    } else {
+        value
+    }
+}
+
+fn sanitize_cache_entries(value: usize, limiter: &str, field: &str) -> usize {
+    if value == 0 {
+        tracing::warn!(
+            limiter = limiter,
+            field = field,
+            provided = value,
+            fallback = MIN_CACHE_ENTRIES,
+            "Invalid zero cache size configured; using minimum value"
+        );
+        MIN_CACHE_ENTRIES
+    } else {
+        value
+    }
+}
+
+fn sanitize_queue_depth(value: usize, limiter: &str, field: &str) -> usize {
+    if value == 0 {
+        tracing::warn!(
+            limiter = limiter,
+            field = field,
+            provided = value,
+            fallback = MIN_QUEUE_DEPTH,
+            "Invalid zero queue depth configured; using minimum value"
+        );
+        MIN_QUEUE_DEPTH
+    } else {
+        value
+    }
+}
+
+fn sanitize_window(window: Duration, limiter: &str) -> Duration {
+    if window.is_zero() {
+        tracing::warn!(
+            limiter = limiter,
+            provided_window_secs = 0u64,
+            fallback_window_secs = MIN_RATE_LIMIT_WINDOW_SECS,
+            "Invalid zero rate limit window configured; using minimum window"
+        );
+        Duration::from_secs(MIN_RATE_LIMIT_WINDOW_SECS)
+    } else {
+        window
+    }
+}
+
+fn to_non_zero_u32(value: u32) -> NonZeroU32 {
+    NonZeroU32::new(value).unwrap_or(NonZeroU32::MIN)
+}
+
+fn to_non_zero_usize(value: usize) -> NonZeroUsize {
+    NonZeroUsize::new(value).unwrap_or(NonZeroUsize::MIN)
+}
+
+fn build_quota(window: Duration, limit: u32) -> Quota {
+    let burst = to_non_zero_u32(limit);
+    match Quota::with_period(window) {
+        Some(quota) => quota.allow_burst(burst),
+        None => Quota::per_second(burst),
+    }
 }
 
 /// Registers rate limiter metrics descriptions.
@@ -149,11 +236,13 @@ impl LoginRateLimiter {
         window: Duration,
         max_entries: usize,
     ) -> Self {
-        let global_quota = Quota::with_period(window)
-            .expect("Rate limit window must be > 0")
-            .allow_burst(NonZeroU32::new(global_limit).expect("Global limit must be > 0"));
+        let window = sanitize_window(window, "login");
+        let per_ip_limit = sanitize_rate_limit(per_ip_limit, "login", "per_ip_limit");
+        let global_limit = sanitize_rate_limit(global_limit, "login", "global_limit");
+        let max_entries = sanitize_cache_entries(max_entries, "login", "max_entries");
 
-        let cache_size = NonZeroUsize::new(max_entries).expect("Max entries must be > 0");
+        let global_quota = build_quota(window, global_limit);
+        let cache_size = to_non_zero_usize(max_entries);
 
         // Record max entries metric
         gauge!("triage_warden_rate_limiter_max_entries").set(max_entries as f64);
@@ -219,9 +308,7 @@ impl LoginRateLimiter {
         let was_at_capacity = cache.len() >= self.max_entries;
 
         // Create new limiter for this IP
-        let quota = Quota::with_period(self.window)
-            .expect("Rate limit window must be > 0")
-            .allow_burst(NonZeroU32::new(self.per_ip_limit).expect("Per-IP limit must be > 0"));
+        let quota = build_quota(self.window, self.per_ip_limit);
 
         let limiter = Arc::new(RateLimiter::direct(quota));
 
@@ -457,17 +544,19 @@ impl ApiRateLimiter {
         max_ip_entries: usize,
         max_user_entries: usize,
     ) -> Self {
-        let webhook_quota = Quota::with_period(window)
-            .expect("Rate limit window must be > 0")
-            .allow_burst(NonZeroU32::new(webhook_limit).expect("Webhook limit must be > 0"));
+        let window = sanitize_window(window, "api");
+        let per_ip_limit = sanitize_rate_limit(per_ip_limit, "api", "per_ip_limit");
+        let per_user_limit = sanitize_rate_limit(per_user_limit, "api", "per_user_limit");
+        let webhook_limit = sanitize_rate_limit(webhook_limit, "api", "webhook_limit");
+        let global_limit = sanitize_rate_limit(global_limit, "api", "global_limit");
+        let max_ip_entries = sanitize_cache_entries(max_ip_entries, "api", "max_ip_entries");
+        let max_user_entries = sanitize_cache_entries(max_user_entries, "api", "max_user_entries");
 
-        let global_quota = Quota::with_period(window)
-            .expect("Rate limit window must be > 0")
-            .allow_burst(NonZeroU32::new(global_limit).expect("Global limit must be > 0"));
+        let webhook_quota = build_quota(window, webhook_limit);
+        let global_quota = build_quota(window, global_limit);
 
-        let ip_cache_size = NonZeroUsize::new(max_ip_entries).expect("Max IP entries must be > 0");
-        let user_cache_size =
-            NonZeroUsize::new(max_user_entries).expect("Max user entries must be > 0");
+        let ip_cache_size = to_non_zero_usize(max_ip_entries);
+        let user_cache_size = to_non_zero_usize(max_user_entries);
 
         Self {
             per_ip: Arc::new(Mutex::new(LruCache::new(ip_cache_size))),
@@ -580,9 +669,7 @@ impl ApiRateLimiter {
         let was_at_capacity = cache.len() >= self.max_ip_entries;
 
         // Create new limiter for this IP
-        let quota = Quota::with_period(self.window)
-            .expect("Rate limit window must be > 0")
-            .allow_burst(NonZeroU32::new(self.per_ip_limit).expect("Per-IP limit must be > 0"));
+        let quota = build_quota(self.window, self.per_ip_limit);
 
         let limiter = Arc::new(RateLimiter::direct(quota));
 
@@ -631,9 +718,7 @@ impl ApiRateLimiter {
         let was_at_capacity = cache.len() >= self.max_user_entries;
 
         // Create new limiter for this user
-        let quota = Quota::with_period(self.window)
-            .expect("Rate limit window must be > 0")
-            .allow_burst(NonZeroU32::new(self.per_user_limit).expect("Per-user limit must be > 0"));
+        let quota = build_quota(self.window, self.per_user_limit);
 
         let limiter = Arc::new(RateLimiter::direct(quota));
 
@@ -933,12 +1018,15 @@ impl WebhookRateLimiter {
         window: Duration,
         max_source_entries: usize,
     ) -> Self {
-        let global_quota = Quota::with_period(window)
-            .expect("Rate limit window must be > 0")
-            .allow_burst(NonZeroU32::new(global_limit).expect("Global limit must be > 0"));
+        let window = sanitize_window(window, "webhook");
+        let per_source_limit = sanitize_rate_limit(per_source_limit, "webhook", "per_source_limit");
+        let global_limit = sanitize_rate_limit(global_limit, "webhook", "global_limit");
+        let max_source_entries =
+            sanitize_cache_entries(max_source_entries, "webhook", "max_source_entries");
+        let max_queue_depth = sanitize_queue_depth(max_queue_depth, "webhook", "max_queue_depth");
 
-        let cache_size =
-            NonZeroUsize::new(max_source_entries).expect("Max source entries must be > 0");
+        let global_quota = build_quota(window, global_limit);
+        let cache_size = to_non_zero_usize(max_source_entries);
 
         Self {
             per_source: Arc::new(Mutex::new(LruCache::new(cache_size))),
@@ -1036,11 +1124,7 @@ impl WebhookRateLimiter {
         let was_at_capacity = cache.len() >= self.max_source_entries;
 
         // Create new limiter for this source
-        let quota = Quota::with_period(self.window)
-            .expect("Rate limit window must be > 0")
-            .allow_burst(
-                NonZeroU32::new(self.per_source_limit).expect("Per-source limit must be > 0"),
-            );
+        let quota = build_quota(self.window, self.per_source_limit);
 
         let limiter = Arc::new(RateLimiter::direct(quota));
 
@@ -1560,6 +1644,16 @@ mod tests {
         assert_eq!(api_limiter.max_user_entries(), 2000);
     }
 
+    #[test]
+    fn test_login_rate_limiter_sanitizes_zero_values() {
+        let limiter = LoginRateLimiter::with_config_and_max_entries(0, 0, Duration::ZERO, 0);
+        let ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10));
+
+        assert_eq!(limiter.max_entries(), 1);
+        assert!(limiter.check(ip).is_ok());
+        assert_eq!(limiter.check(ip), Err(RateLimitError::GlobalLimitExceeded));
+    }
+
     // ========================================================================
     // ApiRateLimiter Tests
     // ========================================================================
@@ -1774,6 +1868,20 @@ mod tests {
         assert_eq!(limiter.user_eviction_count(), 1);
     }
 
+    #[test]
+    fn test_api_rate_limiter_sanitizes_zero_values() {
+        let limiter = ApiRateLimiter::with_config_and_max_entries(0, 0, 0, 0, Duration::ZERO, 0, 0);
+        let ip = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 42));
+
+        assert_eq!(limiter.max_ip_entries(), 1);
+        assert_eq!(limiter.max_user_entries(), 1);
+        assert!(limiter.check_ip(ip).is_ok());
+        assert_eq!(
+            limiter.check_ip(ip),
+            Err(ApiRateLimitError::GlobalLimitExceeded)
+        );
+    }
+
     // ========================================================================
     // WebhookRateLimiter Tests
     // ========================================================================
@@ -1909,5 +2017,18 @@ mod tests {
         limiter.check("source4").ok();
         assert_eq!(limiter.tracked_sources(), 3); // Still 3 (LRU evicted one)
         assert_eq!(limiter.source_eviction_count(), 1);
+    }
+
+    #[test]
+    fn test_webhook_rate_limiter_sanitizes_zero_values() {
+        let limiter = WebhookRateLimiter::with_config_and_max_entries(0, 0, 0, Duration::ZERO, 0);
+
+        assert_eq!(limiter.max_source_entries(), 1);
+        assert_eq!(limiter.max_queue_depth(), 1);
+        assert!(limiter.check("splunk").is_ok());
+        assert_eq!(
+            limiter.check("splunk"),
+            Err(WebhookRateLimitError::GlobalLimitExceeded)
+        );
     }
 }

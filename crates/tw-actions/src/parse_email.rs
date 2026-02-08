@@ -503,10 +503,9 @@ impl Action for ParseEmailAction {
     }
 
     fn validate(&self, context: &ActionContext) -> Result<(), ActionError> {
-        let has_raw = context.get_param("raw_email").is_some()
-            && !context.get_param("raw_email").unwrap().is_null();
-        let has_structured = context.get_param("email_data").is_some()
-            && !context.get_param("email_data").unwrap().is_null();
+        let has_raw = matches!(context.get_param("raw_email"), Some(value) if !value.is_null());
+        let has_structured =
+            matches!(context.get_param("email_data"), Some(value) if !value.is_null());
 
         if !has_raw && !has_structured {
             return Err(ActionError::InvalidParameters(
