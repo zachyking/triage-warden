@@ -333,7 +333,7 @@ impl CalibrationCurveBuilder {
     /// Builds the calibration curve.
     pub fn build(mut self) -> CalibrationCurve {
         // Sort points by input value
-        self.points.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        self.points.sort_by(|a, b| a.0.total_cmp(&b.0));
 
         // Remove duplicates (keep last value for each input)
         self.points.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-9);

@@ -124,11 +124,17 @@ impl ValidationErrorDetails {
     /// Creates a validation error from multiple field errors.
     pub fn from_fields(errors: HashMap<String, Vec<FieldError>>) -> Self {
         let field_count = errors.len();
-        let message = if field_count == 1 {
-            let field = errors.keys().next().unwrap();
-            format!("Validation failed for field '{}'", field)
-        } else {
-            format!("Validation failed for {} fields", field_count)
+        let message = match field_count {
+            0 => "Validation failed".to_string(),
+            1 => {
+                let field = errors
+                    .keys()
+                    .next()
+                    .map(std::string::String::as_str)
+                    .unwrap_or("unknown");
+                format!("Validation failed for field '{}'", field)
+            }
+            _ => format!("Validation failed for {} fields", field_count),
         };
         Self {
             message,
@@ -545,6 +551,13 @@ mod tests {
 
         let details = ValidationErrorDetails::from_fields(fields);
         assert!(details.message.contains("2 fields"));
+    }
+
+    #[test]
+    fn test_validation_error_details_empty_fields() {
+        let details = ValidationErrorDetails::from_fields(HashMap::new());
+        assert_eq!(details.message, "Validation failed");
+        assert!(details.fields.is_empty());
     }
 
     #[test]

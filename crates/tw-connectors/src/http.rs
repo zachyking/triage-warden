@@ -164,13 +164,39 @@ impl HttpClient {
             }
         };
 
-        // Create rate limiter if configured
-        let rate_limiter = rate_limit.map(|rl| {
-            let quota = Quota::with_period(rl.period / rl.max_requests)
-                .expect("Invalid rate limit period")
-                .allow_burst(NonZeroU32::new(rl.burst_size).unwrap_or(NonZeroU32::MIN));
-            Arc::new(GovernorRateLimiter::direct(quota))
-        });
+        // Create rate limiter if configured.
+        let rate_limiter = match rate_limit {
+            Some(rl) => {
+                if rl.max_requests == 0 {
+                    return Err(ConnectorError::ConfigError(
+                        "Rate limit max_requests must be greater than zero".to_string(),
+                    ));
+                }
+
+                let period = rl.period.checked_div(rl.max_requests).ok_or_else(|| {
+                    ConnectorError::ConfigError(
+                        "Rate limit period is too short for the configured max_requests"
+                            .to_string(),
+                    )
+                })?;
+                if period.is_zero() {
+                    return Err(ConnectorError::ConfigError(
+                        "Rate limit period is too short for the configured max_requests"
+                            .to_string(),
+                    ));
+                }
+
+                let quota = Quota::with_period(period)
+                    .ok_or_else(|| {
+                        ConnectorError::ConfigError(
+                            "Rate limit period must be greater than zero".to_string(),
+                        )
+                    })?
+                    .allow_burst(NonZeroU32::new(rl.burst_size).unwrap_or(NonZeroU32::MIN));
+                Some(Arc::new(GovernorRateLimiter::direct(quota)))
+            }
+            None => None,
+        };
 
         Ok(Self {
             client,
@@ -843,5 +869,43 @@ mod tests {
         assert_eq!(config.max_requests, 100);
         assert_eq!(config.period, Duration::from_secs(60));
         assert_eq!(config.burst_size, 10);
+    }
+
+    #[test]
+    fn test_with_rate_limit_rejects_zero_max_requests() {
+        let config = create_test_config();
+        let result = HttpClient::with_rate_limit(
+            config,
+            Some(RateLimitConfig {
+                max_requests: 0,
+                period: Duration::from_secs(60),
+                burst_size: 10,
+            }),
+        );
+
+        assert!(matches!(
+            result,
+            Err(ConnectorError::ConfigError(message))
+            if message.contains("max_requests")
+        ));
+    }
+
+    #[test]
+    fn test_with_rate_limit_rejects_too_short_period() {
+        let config = create_test_config();
+        let result = HttpClient::with_rate_limit(
+            config,
+            Some(RateLimitConfig {
+                max_requests: 2,
+                period: Duration::from_nanos(1),
+                burst_size: 10,
+            }),
+        );
+
+        assert!(matches!(
+            result,
+            Err(ConnectorError::ConfigError(message))
+            if message.contains("too short")
+        ));
     }
 }

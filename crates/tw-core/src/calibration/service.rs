@@ -134,7 +134,7 @@ impl IsotonicCalibrator {
 
         // Sort by input value
         let mut sorted: Vec<_> = data.to_vec();
-        sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
 
         // Apply PAV algorithm
         // Each block represents a group of points that should have the same output
