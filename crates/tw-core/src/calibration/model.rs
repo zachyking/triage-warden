@@ -242,8 +242,11 @@ impl CalibrationCurve {
     /// Uses linear interpolation for values between defined points.
     /// Values outside the range are clamped to [0, 1].
     pub fn calibrate(&self, raw_confidence: f64) -> f64 {
-        if self.inputs.is_empty() {
-            return raw_confidence;
+        if self.inputs.is_empty()
+            || self.outputs.is_empty()
+            || self.inputs.len() != self.outputs.len()
+        {
+            return raw_confidence.clamp(0.0, 1.0);
         }
 
         // Clamp input to valid range
@@ -266,7 +269,11 @@ impl CalibrationCurve {
                 let y1 = self.outputs[i];
 
                 // Linear interpolation
-                let t = (clamped - x0) / (x1 - x0);
+                let span = x1 - x0;
+                if span.abs() < f64::EPSILON {
+                    return y1.clamp(0.0, 1.0);
+                }
+                let t = (clamped - x0) / span;
                 let result = y0 + t * (y1 - y0);
                 return result.clamp(0.0, 1.0);
             }
@@ -637,6 +644,23 @@ mod tests {
         // Values outside range should be clamped
         assert!((curve.calibrate(-0.5) - 0.1).abs() < 1e-9);
         assert!((curve.calibrate(1.5) - 0.9).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_calibration_curve_invalid_shape_falls_back_to_clamped_input() {
+        let curve = CalibrationCurve {
+            id: Uuid::new_v4(),
+            calibration_type: CalibrationType::Isotonic,
+            stratification_key: StratificationKey::global(),
+            inputs: vec![0.0, 1.0],
+            outputs: vec![0.0],
+            sample_count: 1,
+            created_at: Utc::now(),
+        };
+
+        assert!((curve.calibrate(0.7) - 0.7).abs() < 1e-9);
+        assert!((curve.calibrate(1.4) - 1.0).abs() < 1e-9);
+        assert!((curve.calibrate(-0.2) - 0.0).abs() < 1e-9);
     }
 
     #[test]
