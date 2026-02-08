@@ -239,17 +239,12 @@ def get_phishing_triage_prompt(
     Returns:
         Complete prompt ready for LLM.
     """
-    prompt_parts = [PHISHING_PROMPT]
+    prompt_parts = [_render_base_prompt(include_examples)]
 
     if organization_context:
         prompt_parts.append(f"""## Organization Context
 
 {organization_context}""")
-
-    if not include_examples:
-        # Remove examples section if not wanted (already in PHISHING_PROMPT)
-        # For production, examples are usually helpful, so default is True
-        pass
 
     prompt_parts.append(f"""## Alert to Analyze
 
@@ -259,6 +254,15 @@ Analyze this alert following the methodology above. Gather additional evidence u
 tools as needed, then provide your structured assessment.""")
 
     return "\n\n".join(prompt_parts)
+
+
+def _render_base_prompt(include_examples: bool) -> str:
+    """Render phishing base prompt with optional static examples."""
+    if include_examples:
+        return PHISHING_PROMPT
+
+    # Remove embedded static examples for zero-shot prompts.
+    return PHISHING_PROMPT.replace(f"\n\n{PHISHING_EXAMPLES}", "", 1)
 
 
 def build_phishing_alert_context(

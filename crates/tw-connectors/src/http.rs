@@ -115,12 +115,6 @@ impl HttpClient {
             true // TLS verification requested, always honor it
         };
 
-        let mut builder = Client::builder()
-            .timeout(Duration::from_secs(config.timeout_secs))
-            .danger_accept_invalid_certs(!verify_tls)
-            .pool_max_idle_per_host(10)
-            .pool_idle_timeout(Duration::from_secs(90));
-
         // Add default headers
         let mut headers = reqwest::header::HeaderMap::new();
         for (key, value) in &config.headers {
@@ -131,11 +125,37 @@ impl HttpClient {
                 headers.insert(name, val);
             }
         }
-        builder = builder.default_headers(headers);
+        let build_client = |disable_proxy_auto_discovery: bool| -> ConnectorResult<Client> {
+            let mut builder = Client::builder()
+                .timeout(Duration::from_secs(config.timeout_secs))
+                .danger_accept_invalid_certs(!verify_tls)
+                .pool_max_idle_per_host(10)
+                .pool_idle_timeout(Duration::from_secs(90));
 
-        let client = builder
-            .build()
-            .map_err(|e| ConnectorError::ConfigError(e.to_string()))?;
+            if disable_proxy_auto_discovery {
+                // Fallback path for environments where system proxy discovery panics.
+                builder = builder.no_proxy();
+            }
+
+            builder
+                .default_headers(headers.clone())
+                .build()
+                .map_err(|e| ConnectorError::ConfigError(e.to_string()))
+        };
+
+        let client = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            build_client(false)
+        })) {
+            Ok(Ok(client)) => client,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => {
+                warn!(
+                    connector_name = %config.name,
+                    "System proxy auto-discovery panicked; retrying connector HTTP client without proxy auto-discovery"
+                );
+                build_client(true)?
+            }
+        };
 
         // Create rate limiter if configured
         let rate_limiter = rate_limit.map(|rl| {

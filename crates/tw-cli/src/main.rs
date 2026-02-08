@@ -15,7 +15,7 @@ mod commands;
 mod config;
 mod validator;
 
-use api_client::{ApiClient, ListIncidentsParams};
+use api_client::{ApiClient, ExecuteActionRequest, ListIncidentsParams};
 use commands::{run_server, ServeConfig};
 use config::{AppConfig, ConnectorConfig};
 use validator::ConfigValidator;
@@ -281,7 +281,7 @@ async fn main() -> Result<()> {
         Commands::Config { show_secrets } => cmd_config(config, show_secrets, cli.format).await,
         Commands::Incident { action } => cmd_incident(action, cli.format, &cli.api_url).await,
         Commands::Connector { action } => cmd_connector(action, config, cli.format).await,
-        Commands::Action { action } => cmd_action(action, config, cli.format).await,
+        Commands::Action { action } => cmd_action(action, config, cli.format, &cli.api_url).await,
         Commands::Metrics => cmd_metrics(cli.format, &cli.api_url).await,
         Commands::Test {
             alert_type,
@@ -1073,6 +1073,7 @@ async fn cmd_action(
     action: ActionCommands,
     _config: AppConfig,
     format: OutputFormat,
+    api_url: &str,
 ) -> Result<()> {
     match action {
         ActionCommands::List => {
@@ -1150,11 +1151,39 @@ async fn cmd_action(
                 return Ok(());
             }
 
+            let (incident_id, request) = parse_action_execute_params(&name, &params)?;
+
             if dry_run {
-                println!("{}: Would execute action '{}'", "Dry run".yellow(), name);
+                if format == OutputFormat::Json {
+                    let payload = serde_json::json!({
+                        "dry_run": true,
+                        "incident_id": incident_id,
+                        "request": request
+                    });
+                    println!("{}", serde_json::to_string_pretty(&payload)?);
+                } else {
+                    println!("{}: Would execute action '{}'", "Dry run".yellow(), name);
+                    println!("Incident ID: {}", incident_id);
+                    println!("Reason: {}", request.reason);
+                    println!("Target: {}", serde_json::to_string_pretty(&request.target)?);
+                    if let Some(parameters) = &request.parameters {
+                        println!("Parameters: {}", serde_json::to_string_pretty(parameters)?);
+                    }
+                }
             } else {
                 println!("Executing action: {}", name.cyan());
-                println!("(daemon not running)");
+                let client = ApiClient::new(api_url)?;
+                let response = client.execute_action(incident_id, &request).await?;
+
+                if format == OutputFormat::Json {
+                    println!("{}", serde_json::to_string_pretty(&response)?);
+                } else {
+                    println!("{}", "Action execution request accepted".green());
+                    println!("Action ID: {}", response.action_id);
+                    println!("Incident ID: {}", response.incident_id);
+                    println!("Status: {}", response.status);
+                    println!("Message: {}", response.message);
+                }
             }
         }
     }
@@ -1239,6 +1268,198 @@ fn get_action_details(action_name: &str) -> Option<ActionDetails> {
             supports_dry_run: true,
         }),
         _ => None,
+    }
+}
+
+fn parse_action_execute_params(
+    action_name: &str,
+    params: &str,
+) -> Result<(uuid::Uuid, ExecuteActionRequest)> {
+    let parsed: serde_json::Value = serde_json::from_str(params)
+        .with_context(|| "Invalid --params JSON. Expected an object.".to_string())?;
+    let mut params_obj = parsed
+        .as_object()
+        .cloned()
+        .ok_or_else(|| anyhow!("Action parameters must be a JSON object"))?;
+
+    let incident_id_raw = params_obj
+        .remove("incident_id")
+        .and_then(|v| v.as_str().map(ToOwned::to_owned))
+        .ok_or_else(|| anyhow!("`incident_id` is required in --params as a UUID string"))?;
+    let incident_id = uuid::Uuid::parse_str(&incident_id_raw)
+        .with_context(|| format!("Invalid `incident_id` UUID: {}", incident_id_raw))?;
+
+    let reason = params_obj
+        .remove("reason")
+        .and_then(|v| v.as_str().map(str::trim).map(ToOwned::to_owned))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| format!("Action '{}' requested via triage-warden CLI", action_name));
+
+    let skip_policy_check = params_obj
+        .remove("skip_policy_check")
+        .map(|v| {
+            v.as_bool()
+                .ok_or_else(|| anyhow!("`skip_policy_check` must be a boolean"))
+        })
+        .transpose()?
+        .unwrap_or(false);
+
+    let target = match params_obj.remove("target") {
+        Some(target) => target,
+        None => infer_action_target(action_name, &params_obj)?,
+    };
+
+    let mut request_parameters = match params_obj.remove("parameters") {
+        Some(value) => value
+            .as_object()
+            .cloned()
+            .ok_or_else(|| anyhow!("`parameters` must be a JSON object when provided"))?,
+        None => serde_json::Map::new(),
+    };
+
+    for (key, value) in params_obj {
+        request_parameters.entry(key).or_insert(value);
+    }
+
+    // Copy common fields from target into parameters for action handlers.
+    enrich_parameters_from_target(&target, &mut request_parameters);
+    request_parameters
+        .entry("reason".to_string())
+        .or_insert_with(|| serde_json::Value::String(reason.clone()));
+
+    let parameters = if request_parameters.is_empty() {
+        None
+    } else {
+        Some(serde_json::Value::Object(request_parameters))
+    };
+
+    Ok((
+        incident_id,
+        ExecuteActionRequest {
+            action_type: action_name.to_string(),
+            target,
+            reason,
+            parameters,
+            skip_policy_check,
+        },
+    ))
+}
+
+fn infer_action_target(
+    action_name: &str,
+    params: &serde_json::Map<String, serde_json::Value>,
+) -> Result<serde_json::Value> {
+    let normalized = action_name.to_ascii_lowercase();
+    let target = match normalized.as_str() {
+        "isolate_host" | "unisolate_host" => serde_json::json!({
+            "type": "host",
+            "hostname": required_string_param(params, "hostname", action_name)?,
+            "ip": optional_string_param(params, "ip")
+        }),
+        "disable_user" | "enable_user" | "reset_password" | "revoke_sessions" => {
+            let username = optional_string_param(params, "username")
+                .or_else(|| optional_string_param(params, "email"))
+                .ok_or_else(|| {
+                    anyhow!(
+                        "`username` (or `email`) is required in --params for action `{}` when no explicit `target` is supplied",
+                        action_name
+                    )
+                })?;
+            serde_json::json!({
+                "type": "user",
+                "username": username,
+                "email": optional_string_param(params, "email")
+            })
+        }
+        "block_ip" | "unblock_ip" => serde_json::json!({
+            "type": "ip_address",
+            "ip": required_string_param(params, "ip", action_name)?
+        }),
+        "block_domain" => serde_json::json!({
+            "type": "domain",
+            "domain": required_string_param(params, "domain", action_name)?
+        }),
+        "quarantine_email" | "delete_email" => serde_json::json!({
+            "type": "email",
+            "message_id": required_string_param(params, "message_id", action_name)?
+        }),
+        "update_ticket" | "add_ticket_comment" => serde_json::json!({
+            "type": "ticket",
+            "ticket_id": required_string_param(params, "ticket_id", action_name)?
+        }),
+        _ => serde_json::json!({ "type": "none" }),
+    };
+
+    Ok(target)
+}
+
+fn required_string_param(
+    params: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    action_name: &str,
+) -> Result<String> {
+    optional_string_param(params, key).ok_or_else(|| {
+        anyhow!(
+            "`{}` is required in --params for action `{}` when no explicit `target` is supplied",
+            key,
+            action_name
+        )
+    })
+}
+
+fn optional_string_param(
+    params: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Option<String> {
+    params
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn enrich_parameters_from_target(
+    target: &serde_json::Value,
+    parameters: &mut serde_json::Map<String, serde_json::Value>,
+) {
+    let Some(target_obj) = target.as_object() else {
+        return;
+    };
+
+    match target_obj
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+    {
+        "host" => {
+            copy_target_field(target_obj, "hostname", "hostname", parameters);
+            copy_target_field(target_obj, "ip", "ip", parameters);
+        }
+        "user" => {
+            copy_target_field(target_obj, "username", "username", parameters);
+            copy_target_field(target_obj, "email", "email", parameters);
+        }
+        "ip_address" => copy_target_field(target_obj, "ip", "ip", parameters),
+        "domain" => copy_target_field(target_obj, "domain", "domain", parameters),
+        "email" => copy_target_field(target_obj, "message_id", "message_id", parameters),
+        "ticket" => copy_target_field(target_obj, "ticket_id", "ticket_id", parameters),
+        _ => {}
+    }
+}
+
+fn copy_target_field(
+    target_obj: &serde_json::Map<String, serde_json::Value>,
+    source_key: &str,
+    parameter_key: &str,
+    parameters: &mut serde_json::Map<String, serde_json::Value>,
+) {
+    if let Some(value) = target_obj.get(source_key) {
+        if !value.is_null() {
+            parameters
+                .entry(parameter_key.to_string())
+                .or_insert_with(|| value.clone());
+        }
     }
 }
 
@@ -1369,4 +1590,76 @@ async fn cmd_test(_config: AppConfig, alert_type: &str, dry_run: bool) -> Result
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_action_params_inferrs_host_target_and_parameters() {
+        let params = serde_json::json!({
+            "incident_id": "00000000-0000-0000-0000-000000000001",
+            "hostname": "workstation-001",
+            "reason": "Contain active malware",
+            "ip": "10.0.0.8"
+        })
+        .to_string();
+
+        let (incident_id, request) = parse_action_execute_params("isolate_host", &params).unwrap();
+        assert_eq!(
+            incident_id,
+            uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap()
+        );
+        assert_eq!(request.action_type, "isolate_host");
+        assert_eq!(request.target["type"], "host");
+        assert_eq!(request.target["hostname"], "workstation-001");
+        assert_eq!(request.target["ip"], "10.0.0.8");
+
+        let request_params = request.parameters.as_ref().unwrap();
+        assert_eq!(request_params["hostname"], "workstation-001");
+        assert_eq!(request_params["ip"], "10.0.0.8");
+        assert_eq!(request_params["reason"], "Contain active malware");
+    }
+
+    #[test]
+    fn parse_action_params_merges_explicit_parameters() {
+        let params = serde_json::json!({
+            "incident_id": "00000000-0000-0000-0000-000000000002",
+            "target": {
+                "type": "user",
+                "username": "alice",
+                "email": "alice@example.com"
+            },
+            "parameters": {
+                "revoke_sessions": false
+            }
+        })
+        .to_string();
+
+        let (_, request) = parse_action_execute_params("disable_user", &params).unwrap();
+        let request_params = request.parameters.as_ref().unwrap();
+        assert_eq!(request.target["type"], "user");
+        assert_eq!(request_params["username"], "alice");
+        assert_eq!(request_params["email"], "alice@example.com");
+        assert_eq!(request_params["revoke_sessions"], false);
+        assert_eq!(
+            request.reason,
+            "Action 'disable_user' requested via triage-warden CLI"
+        );
+    }
+
+    #[test]
+    fn parse_action_params_rejects_invalid_incident_id() {
+        let params = serde_json::json!({
+            "incident_id": "not-a-uuid",
+            "hostname": "workstation-001"
+        })
+        .to_string();
+
+        let err = parse_action_execute_params("isolate_host", &params).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Invalid `incident_id` UUID: not-a-uuid"));
+    }
 }
