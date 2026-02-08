@@ -1398,7 +1398,16 @@ use crate::state::AppState;
 
 /// Extracts client IP from request, checking X-Forwarded-For header first.
 fn extract_client_ip(req: &Request<Body>) -> IpAddr {
-    // Try X-Forwarded-For header first (for reverse proxy setups)
+    // Prefer socket-level ConnectInfo when available to avoid trusting spoofable headers.
+    if let Some(connect_info) = req
+        .extensions()
+        .get::<axum::extract::connect_info::ConnectInfo<std::net::SocketAddr>>()
+    {
+        return connect_info.0.ip();
+    }
+
+    // Fallback to X-Forwarded-For header (for reverse proxy setups where
+    // ConnectInfo is not propagated into this request).
     if let Some(forwarded_for) = req.headers().get("x-forwarded-for") {
         if let Ok(value) = forwarded_for.to_str() {
             // Take the first IP in the comma-separated list
@@ -1473,7 +1482,7 @@ pub async fn global_rate_limit_middleware(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::Ipv4Addr;
+    use std::net::{Ipv4Addr, SocketAddr};
 
     #[test]
     fn test_rate_limiter_allows_within_limit() {
@@ -2029,6 +2038,44 @@ mod tests {
         assert_eq!(
             limiter.check("splunk"),
             Err(WebhookRateLimitError::GlobalLimitExceeded)
+        );
+    }
+
+    #[test]
+    fn test_extract_client_ip_prefers_connect_info_over_forwarded_header() {
+        let mut req = Request::builder()
+            .uri("/api/incidents")
+            .body(Body::empty())
+            .unwrap();
+        req.headers_mut().insert(
+            "x-forwarded-for",
+            "203.0.113.99, 198.51.100.21".parse().unwrap(),
+        );
+        req.extensions_mut()
+            .insert(axum::extract::connect_info::ConnectInfo(SocketAddr::from(
+                ([10, 1, 2, 3], 44321),
+            )));
+
+        assert_eq!(
+            extract_client_ip(&req),
+            IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3))
+        );
+    }
+
+    #[test]
+    fn test_extract_client_ip_uses_forwarded_header_without_connect_info() {
+        let mut req = Request::builder()
+            .uri("/api/incidents")
+            .body(Body::empty())
+            .unwrap();
+        req.headers_mut().insert(
+            "x-forwarded-for",
+            "198.51.100.10, 198.51.100.11".parse().unwrap(),
+        );
+
+        assert_eq!(
+            extract_client_ip(&req),
+            IpAddr::V4(Ipv4Addr::new(198, 51, 100, 10))
         );
     }
 }
