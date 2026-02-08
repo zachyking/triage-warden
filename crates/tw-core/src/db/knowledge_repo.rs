@@ -482,43 +482,42 @@ impl KnowledgeRepository for SqliteKnowledgeRepository {
     ) -> Result<Vec<KnowledgeDocument>, DbError> {
         let tenant_id_str = tenant_id.to_string();
 
-        // Use FTS5 for full-text search
-        let mut sql = String::from(
+        let mut query_builder = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
             r#"
             SELECT kd.id, kd.tenant_id, kd.doc_type, kd.title, kd.content, kd.summary,
                    kd.metadata, kd.is_active, kd.created_at, kd.updated_at, kd.indexed_at,
                    kd.created_by, kd.updated_by
             FROM knowledge_documents kd
             JOIN knowledge_documents_fts fts ON kd.rowid = fts.rowid
-            WHERE kd.tenant_id = ? AND knowledge_documents_fts MATCH ?
+            WHERE kd.tenant_id = 
             "#,
         );
+        query_builder.push_bind(&tenant_id_str);
+        query_builder.push(" AND knowledge_documents_fts MATCH ");
+        query_builder.push_bind(query);
 
         if let Some(is_active) = filter.is_active {
-            sql.push_str(&format!(
-                " AND kd.is_active = {}",
-                if is_active { 1 } else { 0 }
-            ));
+            query_builder.push(" AND kd.is_active = ");
+            query_builder.push_bind(if is_active { 1_i32 } else { 0_i32 });
         }
 
         if let Some(ref doc_types) = filter.doc_types {
             if !doc_types.is_empty() {
-                let types: Vec<String> = doc_types
-                    .iter()
-                    .map(|t| format!("'{}'", t.as_str()))
-                    .collect();
-                sql.push_str(&format!(" AND kd.doc_type IN ({})", types.join(", ")));
+                query_builder.push(" AND kd.doc_type IN (");
+                {
+                    let mut separated = query_builder.separated(", ");
+                    for doc_type in doc_types {
+                        separated.push_bind(doc_type.as_str());
+                    }
+                }
+                query_builder.push(")");
             }
         }
 
-        sql.push_str(" ORDER BY rank LIMIT ?");
+        query_builder.push(" ORDER BY rank LIMIT ");
+        query_builder.push_bind(limit as i64);
 
-        let rows: Vec<KnowledgeRow> = sqlx::query_as(&sql)
-            .bind(&tenant_id_str)
-            .bind(query)
-            .bind(limit as i64)
-            .fetch_all(&self.pool)
-            .await?;
+        let rows: Vec<KnowledgeRow> = query_builder.build_query_as().fetch_all(&self.pool).await?;
 
         rows.into_iter().map(|r| r.try_into()).collect()
     }

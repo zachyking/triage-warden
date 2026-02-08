@@ -1056,27 +1056,121 @@ struct NlQueryForm {
     query: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct NlQueryServiceResponse {
+    query_string: String,
+    query_type: String,
+    intent: String,
+    confidence: f64,
+    #[serde(default)]
+    metadata: serde_json::Value,
+}
+
 /// Handle NL query from chat sidebar; returns a chat message partial.
 async fn web_nl_query(
+    State(state): State<AppState>,
     AuthenticatedUser(_user): AuthenticatedUser,
     Form(form): Form<NlQueryForm>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // NL query engine runs in Python service; returns guided response for now
-    let response_content = format!(
-        "I understand you're asking about: \"{}\". The NL query engine is being connected. \
-         In the meantime, you can use the search bar and filters to find incidents.",
-        form.query
-    );
-    let suggestions = vec![
-        "Show critical incidents".to_string(),
-        "What are the top threats?".to_string(),
-    ];
+    let query = form.query.trim();
+    if query.is_empty() {
+        let template = ChatMessageTemplate {
+            role: "assistant".to_string(),
+            content: "Please enter a query first. For example: \"show critical incidents from the last 24 hours\".".to_string(),
+            suggestions: default_nl_suggestions(),
+        };
+        return Ok(HtmlTemplate(template));
+    }
+
+    let (response_content, suggestions) = match run_nl_query(&state, query).await {
+        Ok(nl_response) => {
+            let mut suggestions = extract_follow_up_suggestions(&nl_response.metadata);
+            if suggestions.is_empty() {
+                suggestions = vec![
+                    "Show incidents from the last 24 hours".to_string(),
+                    "Show high severity incidents".to_string(),
+                ];
+            }
+
+            (
+                format!(
+                    "I translated your request into a {} query (intent: {}, confidence: {:.0}%):\n\n{}\n\nYou can run this query in your configured backend.",
+                    nl_response.query_type,
+                    nl_response.intent,
+                    nl_response.confidence * 100.0,
+                    nl_response.query_string
+                ),
+                suggestions,
+            )
+        }
+        Err(message) => (
+            format!(
+                "I couldn’t translate that query right now: {}. You can still use dashboard filters while the NL service recovers.",
+                message
+            ),
+            default_nl_suggestions(),
+        ),
+    };
+
     let template = ChatMessageTemplate {
         role: "assistant".to_string(),
         content: response_content,
         suggestions,
     };
     Ok(HtmlTemplate(template))
+}
+
+async fn run_nl_query(state: &AppState, query: &str) -> Result<NlQueryServiceResponse, String> {
+    let nl_url = state
+        .nl_query_url
+        .as_deref()
+        .ok_or_else(|| "NL query service is not configured (set NL_QUERY_URL)".to_string())?;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("{}/api/nl/query", nl_url.trim_end_matches('/')))
+        .json(&serde_json::json!({
+            "query": query,
+            "backend": "splunk",
+            "context": {}
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("service returned {}", response.status()));
+    }
+
+    response
+        .json::<NlQueryServiceResponse>()
+        .await
+        .map_err(|e| format!("invalid response: {}", e))
+}
+
+fn extract_follow_up_suggestions(metadata: &serde_json::Value) -> Vec<String> {
+    metadata
+        .get("suggested_follow_ups")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string)
+                .take(3)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn default_nl_suggestions() -> Vec<String> {
+    vec![
+        "Show critical incidents".to_string(),
+        "Find incidents from last 24 hours".to_string(),
+        "List unresolved high severity incidents".to_string(),
+    ]
 }
 
 // ============================================
@@ -6215,5 +6309,30 @@ mod tests {
         assert!(html.contains("Tune detection rule threshold"));
         assert!(html.contains("Lessons Linked Incident"));
         assert!(html.contains("detection"));
+    }
+
+    #[test]
+    fn test_extract_follow_up_suggestions_from_metadata() {
+        let metadata = serde_json::json!({
+            "suggested_follow_ups": [
+                " show critical incidents ",
+                "",
+                "Investigate lateral movement",
+                "List unresolved high severity incidents"
+            ]
+        });
+
+        let suggestions = extract_follow_up_suggestions(&metadata);
+        assert_eq!(suggestions.len(), 3);
+        assert_eq!(suggestions[0], "show critical incidents");
+        assert_eq!(suggestions[1], "Investigate lateral movement");
+        assert_eq!(suggestions[2], "List unresolved high severity incidents");
+    }
+
+    #[test]
+    fn test_default_nl_suggestions_non_empty() {
+        let suggestions = default_nl_suggestions();
+        assert!(suggestions.len() >= 2);
+        assert!(suggestions.iter().all(|s| !s.trim().is_empty()));
     }
 }

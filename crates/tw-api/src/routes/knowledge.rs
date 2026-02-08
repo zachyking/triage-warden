@@ -11,6 +11,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use tracing::{debug, warn};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -740,24 +741,25 @@ async fn search_documents(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
+    let query_terms = extract_query_terms(&query.q);
+    let normalized_query = query.q.to_lowercase();
+
     let results: Vec<SearchResultResponse> = documents
         .into_iter()
-        .map(|doc| SearchResultResponse {
-            document_id: doc.id,
-            title: doc.title,
-            doc_type: doc.doc_type.as_str().to_string(),
-            score: 1.0, // Text search doesn't have a score, use 1.0 as placeholder
-            snippet: doc.summary.or_else(|| {
-                // Generate snippet from content
-                let content = &doc.content;
-                if content.len() > 200 {
-                    Some(format!("{}...", &content[..200]))
-                } else {
-                    Some(content.clone())
-                }
-            }),
-            tags: doc.metadata.tags,
-            mitre_techniques: doc.metadata.mitre_techniques,
+        .enumerate()
+        .map(|(rank, doc)| {
+            let score = compute_text_relevance_score(&doc, &query_terms, &normalized_query, rank);
+            let snippet = build_search_snippet(&doc);
+
+            SearchResultResponse {
+                document_id: doc.id,
+                title: doc.title,
+                doc_type: doc.doc_type.as_str().to_string(),
+                score,
+                snippet,
+                tags: doc.metadata.tags,
+                mitre_techniques: doc.metadata.mitre_techniques,
+            }
         })
         .collect();
 
@@ -768,6 +770,94 @@ async fn search_documents(
         query: query.q,
         total,
     }))
+}
+
+fn extract_query_terms(query: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+
+    query
+        .split_whitespace()
+        .filter_map(|token| {
+            let normalized = token
+                .trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase();
+
+            if normalized.len() < 2 {
+                return None;
+            }
+
+            if seen.insert(normalized.clone()) {
+                Some(normalized)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn compute_text_relevance_score(
+    document: &KnowledgeDocument,
+    query_terms: &[String],
+    full_query_lower: &str,
+    rank: usize,
+) -> f32 {
+    let rank_fallback = 1.0 / (1.0 + rank as f32);
+
+    if query_terms.is_empty() {
+        return rank_fallback;
+    }
+
+    let title_lower = document.title.to_lowercase();
+    let summary_lower = document.summary.clone().unwrap_or_default().to_lowercase();
+    let content_lower = document.content.to_lowercase();
+
+    let mut title_hits = 0.0;
+    let mut summary_hits = 0.0;
+    let mut content_hits = 0.0;
+
+    for term in query_terms {
+        if title_lower.contains(term) {
+            title_hits += 1.0;
+        }
+        if summary_lower.contains(term) {
+            summary_hits += 1.0;
+        }
+        if content_lower.contains(term) {
+            content_hits += 1.0;
+        }
+    }
+
+    let term_count = query_terms.len() as f32;
+    let title_ratio = title_hits / term_count;
+    let summary_ratio = summary_hits / term_count;
+    let content_ratio = content_hits / term_count;
+
+    let phrase_bonus = if !full_query_lower.is_empty()
+        && (title_lower.contains(full_query_lower)
+            || summary_lower.contains(full_query_lower)
+            || content_lower.contains(full_query_lower))
+    {
+        0.15
+    } else {
+        0.0
+    };
+
+    let weighted = 0.5 * title_ratio + 0.3 * summary_ratio + 0.2 * content_ratio + phrase_bonus;
+
+    // Ensure rank still influences the final score so ordering and score align.
+    let blended = 0.85 * weighted + 0.15 * rank_fallback;
+    blended.clamp(0.01, 1.0)
+}
+
+fn build_search_snippet(document: &KnowledgeDocument) -> Option<String> {
+    document.summary.clone().or_else(|| {
+        let content = &document.content;
+        if content.len() > 200 {
+            Some(format!("{}...", &content[..200]))
+        } else {
+            Some(content.clone())
+        }
+    })
 }
 
 /// Get knowledge base statistics.
@@ -922,5 +1012,38 @@ mod tests {
         assert_eq!(job.action, "upsert");
         assert_eq!(job.tenant_id, tenant_id);
         assert_eq!(job.document_id, document_id);
+    }
+
+    #[test]
+    fn test_extract_query_terms_deduplicates_and_normalizes() {
+        let terms = extract_query_terms("Phishing, phishing!!! email");
+        assert_eq!(terms, vec!["phishing".to_string(), "email".to_string(),]);
+    }
+
+    #[test]
+    fn test_compute_text_relevance_score_prefers_title_matches() {
+        let tenant_id = Uuid::new_v4();
+        let query_terms = vec!["phishing".to_string()];
+
+        let strong_title_doc = KnowledgeDocument::new(
+            tenant_id,
+            KnowledgeType::Runbook,
+            "Phishing Response Guide",
+            "General incident handling process.",
+        );
+        let weak_title_doc = KnowledgeDocument::new(
+            tenant_id,
+            KnowledgeType::Runbook,
+            "Incident Handling Guide",
+            "This section includes phishing response steps.",
+        );
+
+        let strong_score =
+            compute_text_relevance_score(&strong_title_doc, &query_terms, "phishing", 0);
+        let weak_score = compute_text_relevance_score(&weak_title_doc, &query_terms, "phishing", 1);
+
+        assert!(strong_score > weak_score);
+        assert!(strong_score <= 1.0);
+        assert!(weak_score >= 0.01);
     }
 }
