@@ -10,9 +10,17 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use tracing::warn;
 
 use crate::auth::AuthenticatedUser;
 use crate::state::AppState;
+use tw_core::auth::Role;
+use tw_core::db::create_rbac_repository;
+use tw_core::rbac::{
+    builtin_roles, Action as RbacAction, AuthorizationRequest, Permission as RbacPermission,
+    PermissionEvaluator, Resource as RbacResource,
+};
 
 /// Response for kill switch status.
 #[derive(Debug, Serialize, Deserialize)]
@@ -81,6 +89,22 @@ async fn activate(
     AuthenticatedUser(user): AuthenticatedUser,
     Json(request): Json<ActivateRequest>,
 ) -> Result<Json<KillSwitchOperationResponse>, (StatusCode, Json<KillSwitchOperationResponse>)> {
+    if let Err(reason) = authorize_kill_switch_operation(&state, &user).await {
+        let status = state.kill_switch.status().await;
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(KillSwitchOperationResponse {
+                success: false,
+                message: reason,
+                status: KillSwitchStatusResponse {
+                    active: status.active,
+                    activated_at: status.activated_at.map(|t| t.to_rfc3339()),
+                    activated_by: status.activated_by,
+                },
+            }),
+        ));
+    }
+
     let activated_by = if let Some(reason) = request.reason {
         format!("{} ({})", user.username, reason)
     } else {
@@ -125,6 +149,22 @@ async fn deactivate(
     AuthenticatedUser(user): AuthenticatedUser,
     Json(request): Json<DeactivateRequest>,
 ) -> Result<Json<KillSwitchOperationResponse>, (StatusCode, Json<KillSwitchOperationResponse>)> {
+    if let Err(reason) = authorize_kill_switch_operation(&state, &user).await {
+        let status = state.kill_switch.status().await;
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(KillSwitchOperationResponse {
+                success: false,
+                message: reason,
+                status: KillSwitchStatusResponse {
+                    active: status.active,
+                    activated_at: status.activated_at.map(|t| t.to_rfc3339()),
+                    activated_by: status.activated_by,
+                },
+            }),
+        ));
+    }
+
     let deactivated_by = if let Some(reason) = request.reason {
         format!("{} ({})", user.username, reason)
     } else {
@@ -160,6 +200,54 @@ async fn deactivate(
             ))
         }
     }
+}
+
+async fn authorize_kill_switch_operation(
+    state: &AppState,
+    user: &tw_core::User,
+) -> Result<(), String> {
+    let mut effective_permissions = builtin_permissions_for_role(user.role, user.tenant_id);
+    let rbac_repo = create_rbac_repository(&state.db);
+    let custom_permissions = rbac_repo
+        .get_user_permissions(user.tenant_id, user.id)
+        .await
+        .map_err(|e| format!("Failed to evaluate RBAC permissions: {e}"))?;
+    effective_permissions.extend(custom_permissions);
+
+    let request = AuthorizationRequest {
+        user_id: user.id,
+        tenant_id: user.tenant_id,
+        resource: RbacResource::Guardrail,
+        action: RbacAction::Manage,
+        context: HashMap::new(),
+    };
+    let decision = PermissionEvaluator.evaluate(&effective_permissions, &request);
+    if !decision.allowed {
+        warn!(
+            user_id = %user.id,
+            tenant_id = %user.tenant_id,
+            role = %user.role,
+            reason = ?decision.reason,
+            "Kill switch operation denied by RBAC"
+        );
+        return Err("Missing permission guardrail:manage".to_string());
+    }
+
+    Ok(())
+}
+
+fn builtin_permissions_for_role(role: Role, tenant_id: uuid::Uuid) -> Vec<RbacPermission> {
+    let roles = builtin_roles(Some(tenant_id));
+    let role_name = match role {
+        Role::Admin => "tenant_admin",
+        Role::Analyst => "analyst",
+        Role::Viewer => "viewer",
+    };
+    roles
+        .into_iter()
+        .find(|candidate| candidate.name == role_name)
+        .map(|matched| matched.permissions)
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
