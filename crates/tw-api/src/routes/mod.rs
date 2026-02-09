@@ -154,15 +154,7 @@ fn api_routes(state: AppState) -> Router<AppState> {
                 RbacAction::Read,
             ),
         )
-        .nest(
-            "/kill-switch",
-            with_permission(
-                kill_switch::routes(),
-                state.clone(),
-                RbacResource::Guardrail,
-                RbacAction::Read,
-            ),
-        )
+        .nest("/kill-switch", kill_switch::routes())
         .nest(
             "/guardrails",
             with_permission(
