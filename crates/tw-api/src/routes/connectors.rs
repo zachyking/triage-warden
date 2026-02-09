@@ -1630,7 +1630,8 @@ mod api_tests {
         let event_bus = EventBus::new(100);
         let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
         let feature_flags = FeatureFlags::new(store);
-        let state = AppState::new(db, event_bus, feature_flags);
+        let state =
+            AppState::new(db, event_bus, feature_flags).expect("Failed to initialize AppState");
 
         axum::Router::new()
             .nest("/api/connectors", routes())

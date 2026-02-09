@@ -2620,7 +2620,8 @@ mod tests {
         let event_bus = EventBus::new(100);
         let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
         let feature_flags = FeatureFlags::new(store);
-        let state = AppState::new(db, event_bus, feature_flags);
+        let state =
+            AppState::new(db, event_bus, feature_flags).expect("Failed to initialize AppState");
 
         // Add test user middleware to bypass authentication
         create_web_router(state).layer(middleware::from_fn(move |req, next| {
@@ -2768,7 +2769,8 @@ mod tests {
         let event_bus = EventBus::new(100);
         let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
         let feature_flags = FeatureFlags::new(store);
-        let state = AppState::new(db, event_bus, feature_flags);
+        let state =
+            AppState::new(db, event_bus, feature_flags).expect("Failed to initialize AppState");
         // Add test user middleware to bypass authentication
         let router =
             create_web_router(state.clone()).layer(middleware::from_fn(move |req, next| {

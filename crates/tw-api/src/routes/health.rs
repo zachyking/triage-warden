@@ -391,7 +391,7 @@ mod tests {
         let event_bus = EventBus::new(100);
         let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
         let feature_flags = FeatureFlags::new(store);
-        AppState::new(db, event_bus, feature_flags)
+        AppState::new(db, event_bus, feature_flags).expect("Failed to initialize AppState")
     }
 
     /// Creates a test router with the health routes.

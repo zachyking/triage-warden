@@ -430,7 +430,8 @@ mod tests {
         let event_bus = EventBus::new(100);
         let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
         let feature_flags = FeatureFlags::new(store);
-        let state = AppState::new(pool, event_bus, feature_flags);
+        let state =
+            AppState::new(pool, event_bus, feature_flags).expect("Failed to initialize AppState");
 
         let server = ApiServer::with_state(state);
         let _router = server.router();

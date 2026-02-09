@@ -298,7 +298,7 @@ pub async fn create_test_state() -> AppState {
     let db = DbPool::Sqlite(pool);
     let event_bus = EventBus::new(100);
     let feature_flags = create_test_feature_flags();
-    AppState::new(db, event_bus, feature_flags)
+    AppState::new(db, event_bus, feature_flags).expect("Failed to initialize AppState")
 }
 
 /// Creates an `AppState` from an existing SQLite pool.
@@ -317,7 +317,7 @@ pub fn create_test_state_from_pool(pool: SqlitePool) -> AppState {
     let db = DbPool::Sqlite(pool);
     let event_bus = EventBus::new(100);
     let feature_flags = create_test_feature_flags();
-    AppState::new(db, event_bus, feature_flags)
+    AppState::new(db, event_bus, feature_flags).expect("Failed to initialize AppState")
 }
 
 /// Creates an `AppState` and returns both the state and the underlying pool.
@@ -333,7 +333,7 @@ pub async fn create_test_state_with_pool() -> (AppState, SqlitePool) {
     let db = DbPool::Sqlite(pool.clone());
     let event_bus = EventBus::new(100);
     let feature_flags = create_test_feature_flags();
-    let state = AppState::new(db, event_bus, feature_flags);
+    let state = AppState::new(db, event_bus, feature_flags).expect("Failed to initialize AppState");
     (state, pool)
 }
 

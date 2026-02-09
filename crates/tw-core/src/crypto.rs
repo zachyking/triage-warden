@@ -354,17 +354,27 @@ pub fn create_encryptor() -> Result<Arc<dyn CredentialEncryptor>, CryptoError> {
     }
 }
 
-/// Creates the encryptor, panicking on failure in production.
+/// Creates the encryptor, exiting the process on failure in production.
 ///
-/// This is a convenience wrapper around `create_encryptor()` that panics
+/// This is a convenience wrapper around `create_encryptor()` that exits
 /// if encryption cannot be initialized in production. Use this in application
 /// startup code where a failed initialization should abort the process.
 ///
-/// # Panics
+/// # Process Exit
 ///
-/// Panics if `create_encryptor()` returns an error (production without valid key).
+/// Exits with status code 1 if `create_encryptor()` returns an error
+/// (production without a valid key).
 pub fn create_encryptor_or_panic() -> Arc<dyn CredentialEncryptor> {
-    create_encryptor().expect("Failed to initialize encryption - check TW_ENCRYPTION_KEY")
+    match create_encryptor() {
+        Ok(encryptor) => encryptor,
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                "Failed to initialize encryption - check TW_ENCRYPTION_KEY"
+            );
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Generates a random 32-byte encryption key, base64 encoded.

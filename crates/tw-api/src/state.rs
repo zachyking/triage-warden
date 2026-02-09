@@ -59,9 +59,12 @@ impl AppState {
     /// Creates a new application state with minimal configuration.
     ///
     /// For more control over initialization, use [`AppStateBuilder`] instead.
-    pub fn new(db: DbPool, event_bus: EventBus, feature_flags: FeatureFlags) -> Self {
+    pub fn new(
+        db: DbPool,
+        event_bus: EventBus,
+        feature_flags: FeatureFlags,
+    ) -> Result<Self, CryptoError> {
         Self::try_new(db, event_bus, feature_flags)
-            .unwrap_or_else(|err| panic!("Failed to initialize AppState: {}", err))
     }
 
     /// Creates a new application state with minimal configuration.
@@ -319,11 +322,9 @@ impl AppStateBuilder {
 
     /// Builds the AppState with all configured components.
     ///
-    /// Panics when encryption initialization fails.
-    /// Use [`AppStateBuilder::try_build`] for a fallible variant.
-    pub fn build(self) -> AppState {
+    /// Returns an error when encryption initialization fails.
+    pub fn build(self) -> Result<AppState, CryptoError> {
         self.try_build()
-            .unwrap_or_else(|err| panic!("Failed to initialize AppState: {}", err))
     }
 
     /// Builds the AppState with all configured components.
