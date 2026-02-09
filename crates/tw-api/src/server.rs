@@ -375,17 +375,32 @@ impl ApiServer {
 /// Default shutdown signal handler.
 async fn shutdown_signal() {
     let ctrl_c = async {
-        signal::ctrl_c()
-            .await
-            .expect("Failed to install Ctrl+C handler");
+        match signal::ctrl_c().await {
+            Ok(()) => {}
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    "Failed to install Ctrl+C handler; waiting on alternative shutdown signals"
+                );
+                std::future::pending::<()>().await;
+            }
+        }
     };
 
     #[cfg(unix)]
     let terminate = async {
-        signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("Failed to install SIGTERM handler")
-            .recv()
-            .await;
+        match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            Ok(mut sigterm) => {
+                sigterm.recv().await;
+            }
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    "Failed to install SIGTERM handler; waiting on alternative shutdown signals"
+                );
+                std::future::pending::<()>().await;
+            }
+        }
     };
 
     #[cfg(not(unix))]
