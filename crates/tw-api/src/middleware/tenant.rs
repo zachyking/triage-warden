@@ -96,7 +96,27 @@ pub struct TenantCache {
 impl TenantCache {
     /// Creates a new tenant cache with the given capacity and TTL.
     pub fn new(capacity: usize, ttl: Duration) -> Self {
-        let cap = NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::new(1).unwrap());
+        let normalized_capacity = if capacity == 0 {
+            warn!(
+                provided_capacity = capacity,
+                "Invalid tenant cache capacity configured; using minimum value 1"
+            );
+            1
+        } else {
+            capacity
+        };
+
+        let ttl = if ttl.is_zero() {
+            warn!(
+                provided_ttl_secs = 0u64,
+                "Invalid tenant cache TTL configured; using minimum value 1s"
+            );
+            Duration::from_secs(1)
+        } else {
+            ttl
+        };
+
+        let cap = NonZeroUsize::new(normalized_capacity).unwrap_or(NonZeroUsize::MIN);
         Self {
             by_slug: RwLock::new(LruCache::new(cap)),
             by_id: RwLock::new(LruCache::new(cap)),
@@ -1245,6 +1265,28 @@ mod tests {
             // t2 and t3 should still be present
             assert!(cache.get_by_slug("slug-2").await.is_some());
             assert!(cache.get_by_slug("slug-3").await.is_some());
+        });
+    }
+
+    #[test]
+    fn test_tenant_cache_sanitizes_zero_capacity_and_ttl() {
+        use tokio::runtime::Runtime;
+
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let cache = TenantCache::new(0, Duration::ZERO);
+
+            let t1 = Tenant::new("zero-test-1", "Tenant 1").unwrap();
+            let t2 = Tenant::new("zero-test-2", "Tenant 2").unwrap();
+
+            cache.insert(&t1).await;
+            // With sanitized TTL, immediate reads should still hit.
+            assert!(cache.get_by_slug("zero-test-1").await.is_some());
+
+            cache.insert(&t2).await;
+            // With sanitized capacity=1, the first tenant is evicted.
+            assert!(cache.get_by_slug("zero-test-1").await.is_none());
+            assert!(cache.get_by_slug("zero-test-2").await.is_some());
         });
     }
 
