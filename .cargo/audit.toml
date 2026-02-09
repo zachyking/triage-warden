@@ -1,0 +1,10 @@
+[advisories]
+ignore = [
+  # `rsa` is only pulled in through optional SQLx MySQL support metadata and is not part
+  # of the active workspace dependency graph (`cargo tree -i rsa` has no active path).
+  "RUSTSEC-2023-0071",
+
+  # `rustls-pemfile` is an unmaintained advisory in dev-only testcontainers dependencies.
+  # It is not present in production runtime artifacts.
+  "RUSTSEC-2025-0134",
+]

@@ -59,16 +59,17 @@ metrics = "0.22"
 metrics-exporter-prometheus = "0.14"
 
 # PyO3 for Python interop
-pyo3 = { version = "0.22", features = ["extension-module"] }
+pyo3 = { version = "0.24.1", features = ["extension-module"] }
 
 # Testing
 mockall = "0.12"
 wiremock = "0.6"
-testcontainers = "0.23"
-testcontainers-modules = { version = "0.11", features = ["postgres", "redis"] }
+testcontainers = "0.26"
+testcontainers-modules = { version = "0.14", features = ["postgres", "redis"] }
 
 # Database
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "postgres", "uuid", "chrono", "json"] }
+# Disable sqlx default features to avoid pulling unused drivers (e.g. `any`/MySQL).
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "postgres", "uuid", "chrono", "json", "macros", "migrate"] }
 
 # Web framework
 axum = { version = "0.7", features = ["json", "macros"] }
@@ -95,6 +96,10 @@ hex = "0.4"
 # Redis
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager", "streams"] }
 deadpool-redis = "0.18"
+
+[patch.crates-io]
+tower-sessions-sqlx-store = { path = "vendor/tower-sessions-sqlx-store-patched" }
+sqlx-macros = { path = "vendor/sqlx-macros-patched" }
 
 [profile.release]
 lto = true

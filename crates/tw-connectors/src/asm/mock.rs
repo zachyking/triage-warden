@@ -42,7 +42,7 @@ impl MockAsmProvider {
     pub fn add_exposures(&self, domain: &str, exposures: Vec<ExternalExposure>) {
         self.exposures
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .insert(domain.to_string(), exposures);
     }
 
@@ -50,7 +50,7 @@ impl MockAsmProvider {
     pub fn set_risk_score(&self, domain: &str, score: f32) {
         self.risk_scores
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .insert(domain.to_string(), score);
     }
 
