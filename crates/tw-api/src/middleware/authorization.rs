@@ -106,7 +106,7 @@ fn enforce_api_key_scopes(
         )));
     }
 
-    let resource_scopes = resource_scopes_for_requirement(requirement);
+    let resource_scopes = resource_scopes_for_requirement(requirement, required_action);
     if !resource_scopes.is_empty() && !resource_scopes.iter().any(|scope| api_key.has_scope(scope))
     {
         return Err(ApiError::Forbidden(format!(
@@ -178,7 +178,7 @@ fn endpoint_action_override(
             }
         }
         RbacResource::Compliance => {
-            if path_has_suffix(path, "/risk/score") {
+            if path_contains(path, "/risk/incidents/") && path_has_suffix(path, "/risk") {
                 return Some(RbacAction::Read);
             }
             if path_has_suffix(path, "/compliance/reports/generate")
@@ -199,7 +199,7 @@ fn endpoint_action_override(
             }
             if path_has_suffix(path, "/privacy/subject-access/export")
                 || path_has_suffix(path, "/privacy/subject-access/delete")
-                || (!is_read_method(method) && path_has_suffix(path, "/privacy/retention/policies"))
+                || (!is_read_method(method) && path_has_suffix(path, "/privacy/retention"))
             {
                 return Some(RbacAction::Manage);
             }
@@ -211,7 +211,8 @@ fn endpoint_action_override(
             if path_has_suffix(path, "/autonomy/resolve")
                 || path_has_suffix(path, "/guardrails/rollback/register")
                 || path_has_suffix(path, "/guardrails/rollback/derive")
-                || path_has_suffix(path, "/status")
+                || (path_contains(path, "/guardrails/rollback/")
+                    && path_has_suffix(path, "/status"))
                 || path_has_suffix(path, "/guardrails/anomaly/check")
                 || path_has_suffix(path, "/guardrails/automation/pause/resume")
                 || (!is_read_method(method) && path_has_suffix(path, "/autonomy/config"))
@@ -250,13 +251,26 @@ fn path_contains(path: &str, fragment: &str) -> bool {
     path.contains(fragment)
 }
 
-fn resource_scopes_for_requirement(requirement: &PermissionRequirement) -> &'static [&'static str] {
+fn resource_scopes_for_requirement(
+    requirement: &PermissionRequirement,
+    required_action: RbacAction,
+) -> &'static [&'static str] {
     match requirement.resource {
         RbacResource::Incident => &[scopes::INCIDENTS],
         RbacResource::Connector => &[scopes::CONNECTORS],
         RbacResource::Playbook => &[scopes::PLAYBOOKS],
         RbacResource::Settings => &[scopes::SETTINGS, scopes::ADMIN],
         RbacResource::User | RbacResource::Role => &[scopes::ADMIN],
+        RbacResource::AuditLog
+        | RbacResource::Compliance
+        | RbacResource::Privacy
+        | RbacResource::Guardrail => {
+            if matches!(required_action, RbacAction::Read) {
+                &[]
+            } else {
+                &[scopes::ADMIN]
+            }
+        }
         _ => &[],
     }
 }
@@ -342,6 +356,24 @@ mod tests {
     }
 
     #[test]
+    fn test_enforce_api_key_scopes_requires_admin_for_privacy_non_read_actions() {
+        let requirement = PermissionRequirement::new(RbacResource::Privacy, RbacAction::Read);
+        let (without_admin, _) = ApiKey::new(
+            Uuid::new_v4(),
+            "privacy-writer",
+            vec![scopes::WRITE.to_string()],
+        );
+        assert!(enforce_api_key_scopes(&without_admin, &requirement, RbacAction::Manage).is_err());
+
+        let (with_admin, _) = ApiKey::new(
+            Uuid::new_v4(),
+            "privacy-admin",
+            vec![scopes::WRITE.to_string(), scopes::ADMIN.to_string()],
+        );
+        assert!(enforce_api_key_scopes(&with_admin, &requirement, RbacAction::Manage).is_ok());
+    }
+
+    #[test]
     fn test_resolve_required_action_incident_execute_and_approve() {
         let requirement = PermissionRequirement::new(RbacResource::Incident, RbacAction::Read);
 
@@ -373,7 +405,11 @@ mod tests {
             RbacAction::Read
         );
         assert_eq!(
-            resolve_required_action(&compliance_requirement, &Method::POST, "/api/v1/risk/score",),
+            resolve_required_action(
+                &compliance_requirement,
+                &Method::POST,
+                "/api/v1/risk/incidents/550e8400-e29b-41d4-a716-446655440000/risk",
+            ),
             RbacAction::Read
         );
         assert_eq!(
@@ -392,6 +428,8 @@ mod tests {
             PermissionRequirement::new(RbacResource::AuditLog, RbacAction::Read);
         let privacy_requirement =
             PermissionRequirement::new(RbacResource::Privacy, RbacAction::Read);
+        let guardrail_requirement =
+            PermissionRequirement::new(RbacResource::Guardrail, RbacAction::Read);
 
         assert_eq!(
             resolve_required_action(
@@ -416,6 +454,30 @@ mod tests {
                 "/api/v1/privacy/subject-access/export",
             ),
             RbacAction::Manage
+        );
+        assert_eq!(
+            resolve_required_action(
+                &privacy_requirement,
+                &Method::PUT,
+                "/api/v1/privacy/retention",
+            ),
+            RbacAction::Manage
+        );
+        assert_eq!(
+            resolve_required_action(
+                &guardrail_requirement,
+                &Method::POST,
+                "/api/v1/guardrails/rollback/abc/status",
+            ),
+            RbacAction::Manage
+        );
+        assert_eq!(
+            resolve_required_action(
+                &guardrail_requirement,
+                &Method::GET,
+                "/api/v1/guardrails/automation/pause",
+            ),
+            RbacAction::Read
         );
     }
 }

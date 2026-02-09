@@ -703,7 +703,20 @@ fn resolve_relay_state(
 }
 
 fn is_safe_relay_state(path: &str) -> bool {
-    path.starts_with('/') && !path.starts_with("//")
+    if !path.starts_with('/') || path.starts_with("//") {
+        return false;
+    }
+
+    if path.contains('\\') {
+        return false;
+    }
+
+    if path.bytes().any(|byte| byte.is_ascii_control()) {
+        return false;
+    }
+
+    // Defensive: reject scheme-like payloads even if they are prefixed by a slash.
+    !path.to_ascii_lowercase().contains("://")
 }
 
 fn env_required(key: &str) -> Result<String, ApiError> {
@@ -815,6 +828,8 @@ mod tests {
             Some("/dashboard".to_string())
         );
         assert!(resolve_relay_state(Some("https://evil.com".to_string()), None).is_err());
+        assert!(resolve_relay_state(Some("/\\evil.com".to_string()), None).is_err());
+        assert!(resolve_relay_state(Some("/path\nx".to_string()), None).is_err());
         assert!(resolve_relay_state(Some("/a".to_string()), Some("/b".to_string())).is_err());
     }
 }

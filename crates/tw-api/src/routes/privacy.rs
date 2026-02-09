@@ -214,9 +214,12 @@ struct SubjectDeletionPlan {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum SubjectDeletionPlanStatus {
+    #[serde(alias = "queued")]
     Scheduled,
     PendingManualReview,
     Completed,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Serialize)]
@@ -649,7 +652,10 @@ pub(crate) async fn run_retention_cleanup_job_for_tenant(
         let mut request_changed = false;
 
         for plan in &mut plans {
-            if plan.status == SubjectDeletionPlanStatus::Scheduled {
+            if matches!(
+                plan.status,
+                SubjectDeletionPlanStatus::Scheduled | SubjectDeletionPlanStatus::Unknown
+            ) {
                 plan.status = SubjectDeletionPlanStatus::PendingManualReview;
                 if plan.reason.is_none() {
                     plan.reason = Some(format!(
@@ -958,5 +964,49 @@ mod tests {
             .unwrap();
         assert_eq!(records[0].status, SubjectAccessRequestStatus::Completed);
         assert_eq!(records[1].status, SubjectAccessRequestStatus::PendingAction);
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_job_handles_legacy_queued_status() {
+        let state = create_test_state().await;
+        let tenant_id = DEFAULT_TENANT_ID;
+        let settings_repo: Box<dyn SettingsRepository> =
+            create_settings_repository(&state.db, state.encryptor.clone());
+        let legacy_record = SubjectAccessRecord {
+            id: Uuid::new_v4(),
+            request_type: SubjectAccessRequestType::Deletion,
+            subject_identifier: "legacy@example.com".to_string(),
+            requested_by: Uuid::new_v4(),
+            requested_at: Utc::now(),
+            status: SubjectAccessRequestStatus::PendingAction,
+            summary: serde_json::json!([
+                {
+                    "data_type": "ai_prompt",
+                    "strategy": "hard_delete",
+                    "status": "queued",
+                    "reason": null
+                }
+            ]),
+        };
+        save_subject_access_requests(settings_repo.as_ref(), tenant_id, &[legacy_record])
+            .await
+            .unwrap();
+
+        let result = run_retention_cleanup_job_for_tenant(&state, tenant_id)
+            .await
+            .unwrap();
+        assert_eq!(result.dsar_requests_processed, 1);
+        assert_eq!(result.dsar_pending_manual_review, 1);
+        assert_eq!(result.dsar_plans_completed, 0);
+
+        let records = load_subject_access_requests(settings_repo.as_ref(), tenant_id)
+            .await
+            .unwrap();
+        let plans: Vec<SubjectDeletionPlan> =
+            serde_json::from_value(records[0].summary.clone()).unwrap();
+        assert_eq!(
+            plans[0].status,
+            SubjectDeletionPlanStatus::PendingManualReview
+        );
     }
 }

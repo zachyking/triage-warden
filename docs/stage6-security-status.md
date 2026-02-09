@@ -50,6 +50,7 @@ Implemented:
 - API-key scope enforcement in middleware:
   - Scope gating tracks resolved RBAC action (`read` action requires `read`; all stronger actions require `write`).
   - Resource scopes enforced where applicable (`incidents`, `connectors`, `playbooks`, `settings`, `admin`).
+  - Sensitive non-read actions (`audit_log`, `compliance`, `privacy`, `guardrail`) require `admin` API-key scope.
 
 ## AI Privacy (6.3)
 
@@ -68,6 +69,7 @@ Implemented:
 - DSAR scheduler counters are now accurate for both `dsar_plans_completed` and `dsar_pending_manual_review`.
 - DSAR requests are only auto-completed when plan list is non-empty and every plan is `completed`.
 - DSAR deletion request planning deduplicates repeated data types and marks missing-policy data types as `pending_manual_review` with explicit reason.
+- DSAR scheduler supports legacy persisted status values (e.g. `queued`) and normalizes them to manual-review flow instead of failing deserialization.
 - Local/cloud routing decision API for sensitive prompts.
 - Python ReAct routing support with sensitivity-aware provider selection and AI interaction audit hooks.
 
