@@ -212,8 +212,46 @@ jobs:
         run: cargo install cargo-audit
 
       - name: Run audit
-        run: cargo audit
-        continue-on-error: true  # Advisory database may have false positives
+        run: cargo audit --deny warnings
+
+  python-coverage:
+    name: Python Coverage
+    runs-on: ubuntu-latest
+    needs: python-test
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Run Python coverage gate
+        run: |
+          uv run pytest tests/ \
+            --ignore=tests/e2e \
+            --ignore=tests/integration \
+            --cov=tw_ai \
+            --cov-report=xml:coverage/python-coverage.xml \
+            --cov-report=term \
+            --cov-fail-under=78 \
+            -q
+
+      - name: Upload Python coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-coverage-report
+          path: python/coverage/python-coverage.xml
+          retention-days: 7
 
   coverage:
     name: Coverage
@@ -290,6 +328,7 @@ jobs:
     name: Integration Tests
     runs-on: ubuntu-latest
     needs: [test, python-test]
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16-alpine
@@ -357,7 +396,9 @@ jobs:
           TEST_QDRANT_URL: http://localhost:6333
           TEST_REDIS_URL: redis://localhost:6379
           TW_ENV: test
-        run: cargo test --package tw-api --test integration_tests -- --ignored
+        run: |
+          set -o pipefail
+          cargo test --package tw-api --test integration_tests -- --ignored 2>&1 | tee rust-integration.log
 
       - name: Install Python dependencies
         working-directory: python
@@ -369,4 +410,18 @@ jobs:
           TEST_DATABASE_URL: postgres://test:test@localhost:5432/triage_warden_test
           TEST_QDRANT_URL: http://localhost:6333
           TEST_REDIS_URL: redis://localhost:6379
-        run: uv run pytest tests/integration/ -v --tb=short -m integration
+          TW_ENV: test
+        run: |
+          uv run pytest tests/integration/ -v --tb=short -m integration \
+            --maxfail=1 \
+            --junitxml=integration-pytest.xml
+
+      - name: Upload integration test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-artifacts
+          path: |
+            rust-integration.log
+            python/integration-pytest.xml
+          retention-days: 7

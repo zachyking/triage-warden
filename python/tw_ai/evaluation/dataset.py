@@ -37,6 +37,7 @@ class TestCase:
     expected_techniques: list[str] = field(default_factory=list)
     category: str | None = None
     tags: list[str] = field(default_factory=list)
+    __test__ = False  # Prevent pytest from attempting to collect this dataclass as a test.
 
     def __post_init__(self) -> None:
         """Validate test case after initialization."""
