@@ -64,7 +64,9 @@ fn validate_slug(slug: &str) -> Result<(), TenantError> {
     }
 
     // Must start with a letter
-    let first_char = slug.chars().next().unwrap();
+    let first_char = slug.chars().next().ok_or_else(|| {
+        TenantError::InvalidSlug("Slug must be between 3 and 63 characters".to_string())
+    })?;
     if !first_char.is_ascii_lowercase() {
         return Err(TenantError::InvalidSlug(
             "Slug must start with a lowercase letter".to_string(),

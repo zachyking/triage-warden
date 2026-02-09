@@ -169,7 +169,7 @@ pub struct Aes256GcmEncryptor {
 impl Aes256GcmEncryptor {
     /// Creates a new encryptor with the given 32-byte key.
     pub fn new(key: [u8; 32]) -> Self {
-        let cipher = Aes256Gcm::new_from_slice(&key).expect("32-byte key is always valid");
+        let cipher = Aes256Gcm::new(&key.into());
         Self { cipher }
     }
 

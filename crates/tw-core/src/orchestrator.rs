@@ -805,7 +805,14 @@ impl Orchestrator {
             }
         };
 
-        let lease = state.lease.as_mut().unwrap();
+        let Some(lease) = state.lease.as_mut() else {
+            debug!(
+                instance_id = %self.instance_id,
+                resource = %resource,
+                "Lease missing during renewal"
+            );
+            return Ok(false);
+        };
         match elector.renew(lease).await {
             Ok(true) => {
                 debug!(

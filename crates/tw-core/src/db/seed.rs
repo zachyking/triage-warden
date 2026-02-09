@@ -86,7 +86,7 @@ fn generate_secure_password() -> String {
         password.swap(i, j);
     }
 
-    String::from_utf8(password).expect("Generated password should be valid UTF-8")
+    password.into_iter().map(char::from).collect()
 }
 
 #[cfg(test)]

@@ -237,7 +237,11 @@ pub struct EscalationConditionConfig {
 ///
 /// Replaces patterns like `${VAR_NAME}` with the corresponding environment variable value.
 fn substitute_env_vars(input: &str) -> Result<String, ConfigError> {
-    let re = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").expect("Invalid regex for env vars");
+    let env_var_pattern = r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}";
+    let re = Regex::new(env_var_pattern).map_err(|e| ConfigError::InvalidRegex {
+        pattern: env_var_pattern.to_string(),
+        message: e.to_string(),
+    })?;
     let mut result = input.to_string();
     let mut errors = Vec::new();
 

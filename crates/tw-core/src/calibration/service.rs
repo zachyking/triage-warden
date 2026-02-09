@@ -170,11 +170,17 @@ impl IsotonicCalibrator {
 
                 if prev_mean > curr_mean {
                     // Merge the two blocks
-                    let last = blocks.pop().unwrap();
-                    let prev = blocks.last_mut().unwrap();
-                    prev.sum += last.sum;
-                    prev.count += last.count;
-                    prev.end_x = last.end_x;
+                    let Some(last) = blocks.pop() else {
+                        break;
+                    };
+                    if let Some(prev) = blocks.last_mut() {
+                        prev.sum += last.sum;
+                        prev.count += last.count;
+                        prev.end_x = last.end_x;
+                    } else {
+                        blocks.push(last);
+                        break;
+                    }
                 } else {
                     break;
                 }
@@ -187,7 +193,11 @@ impl IsotonicCalibrator {
         for block in blocks {
             let mean = block.mean();
             // Output at start and end of block
-            if result.is_empty() || (result.last().unwrap().0 - block.start_x).abs() > 1e-9 {
+            if result
+                .last()
+                .map(|(x, _)| (x - block.start_x).abs() > 1e-9)
+                .unwrap_or(true)
+            {
                 result.push((block.start_x, mean));
             }
             if (block.end_x - block.start_x).abs() > 1e-9 {
@@ -203,9 +213,10 @@ impl IsotonicCalibrator {
                 result.insert(0, (0.0, first_y.min(0.0_f64.max(first_y - 0.1))));
             }
             // Ensure ends at 1
-            if result.last().unwrap().0 < 1.0 - 1e-9 {
-                let last_y = result.last().unwrap().1;
-                result.push((1.0, last_y.max(1.0_f64.min(last_y + 0.1))));
+            if let Some((last_x, last_y)) = result.last().copied() {
+                if last_x < 1.0 - 1e-9 {
+                    result.push((1.0, last_y.max(1.0_f64.min(last_y + 0.1))));
+                }
             }
         }
 

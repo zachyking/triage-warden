@@ -5,6 +5,7 @@
 
 use regex::Regex;
 use thiserror::Error;
+use tracing::error;
 
 /// Errors that can occur during sanitization.
 #[derive(Error, Debug)]
@@ -75,22 +76,33 @@ impl Sanitizer {
 
     /// Creates a new sanitizer with default patterns.
     pub fn new() -> Self {
-        // Safe to unwrap since these are compile-time validated patterns
-        let pii_patterns: Vec<Regex> = Self::DEFAULT_PII_PATTERNS
-            .iter()
-            .map(|p| Regex::new(p).expect("Invalid default PII pattern"))
-            .collect();
-
-        let secret_patterns: Vec<Regex> = Self::DEFAULT_SECRET_PATTERNS
-            .iter()
-            .map(|p| Regex::new(p).expect("Invalid default secret pattern"))
-            .collect();
+        let pii_patterns = Self::compile_default_patterns(Self::DEFAULT_PII_PATTERNS, "pii");
+        let secret_patterns =
+            Self::compile_default_patterns(Self::DEFAULT_SECRET_PATTERNS, "secret");
 
         Self {
             pii_patterns,
             secret_patterns,
             replacement_text: "[REDACTED]".to_string(),
         }
+    }
+
+    fn compile_default_patterns(patterns: &[&str], category: &str) -> Vec<Regex> {
+        patterns
+            .iter()
+            .filter_map(|pattern| match Regex::new(pattern) {
+                Ok(compiled) => Some(compiled),
+                Err(e) => {
+                    error!(
+                        pattern = %pattern,
+                        error = %e,
+                        category = category,
+                        "failed_to_compile_default_sanitization_pattern"
+                    );
+                    None
+                }
+            })
+            .collect()
     }
 
     /// Creates a sanitizer from custom patterns.

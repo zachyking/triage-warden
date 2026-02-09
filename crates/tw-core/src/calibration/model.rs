@@ -256,8 +256,12 @@ impl CalibrationCurve {
         if clamped <= self.inputs[0] {
             return self.outputs[0];
         }
-        if clamped >= *self.inputs.last().unwrap() {
-            return *self.outputs.last().unwrap();
+        let (Some(last_input), Some(last_output)) = (self.inputs.last(), self.outputs.last())
+        else {
+            return clamped;
+        };
+        if clamped >= *last_input {
+            return *last_output;
         }
 
         // Find the surrounding points and interpolate
