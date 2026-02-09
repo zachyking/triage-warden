@@ -4,12 +4,15 @@ pub mod activity;
 pub mod analytics;
 pub mod api_keys;
 pub mod assets;
+pub mod audit;
 pub mod auth;
 pub mod autonomy;
 pub mod comments;
+pub mod compliance;
 pub mod connectors;
 pub mod features;
 pub mod feedback;
+pub mod guardrails;
 pub mod handoff;
 pub mod health;
 pub mod hunting;
@@ -25,6 +28,7 @@ pub mod notifications;
 pub mod packages;
 pub mod playbooks;
 pub mod policies;
+pub mod privacy;
 pub mod reports;
 pub mod risk;
 pub mod roles;
@@ -74,6 +78,8 @@ fn api_routes(state: AppState) -> Router<AppState> {
             )),
         )
         .nest("/connectors", connectors::routes())
+        .nest("/audit", audit::routes())
+        .nest("/compliance", compliance::routes())
         .nest("/feedback", feedback::routes())
         .nest("/incidents", incidents::routes())
         .nest(
@@ -81,6 +87,7 @@ fn api_routes(state: AppState) -> Router<AppState> {
             feedback::incident_feedback_routes(),
         )
         .nest("/kill-switch", kill_switch::routes())
+        .nest("/guardrails", guardrails::routes())
         .nest(
             "/notifications",
             notifications::routes().route_layer(from_fn_with_state(
@@ -93,6 +100,7 @@ fn api_routes(state: AppState) -> Router<AppState> {
             "/policies",
             policies::routes().route_layer(from_fn_with_state(state, require_analyst_middleware)),
         )
+        .nest("/privacy", privacy::routes())
         .nest("/settings", settings::routes())
         .nest("/training", training::routes())
         .nest("/knowledge", knowledge::routes())

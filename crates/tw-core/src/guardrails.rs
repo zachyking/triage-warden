@@ -3,10 +3,26 @@
 //! This module provides runtime guardrails that limit what automated actions
 //! can do, protecting critical infrastructure and preventing runaway automation.
 
+#[path = "guardrails/anomaly.rs"]
+pub mod anomaly;
+#[path = "guardrails/dryrun.rs"]
+pub mod dryrun;
+#[path = "guardrails/rollback.rs"]
+pub mod rollback;
+#[path = "guardrails/rules.rs"]
+pub mod rules;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use uuid::Uuid;
+
+pub use anomaly::{
+    Anomaly, AnomalyThresholds, AutomationActivity, AutomationAnomalyDetector, AutomationBaseline,
+};
+pub use dryrun::{DryRunExecutor, SimulatedAction, SimulationResult};
+pub use rollback::{ActionRollbackInfo, RollbackRegistry, RollbackStatus};
+pub use rules::{ActionGuardrail, Enforcement, GuardrailException, GuardrailType};
 
 /// Forbidden combination of actions that should never be executed together.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -7,11 +7,13 @@
 
 pub mod analytics;
 pub mod asset_store;
+pub mod audit;
 pub mod auth;
 pub mod autonomy;
 pub mod cache;
 pub mod calibration;
 pub mod collaboration;
+pub mod compliance;
 pub mod connector;
 pub mod crypto;
 pub mod custom_ioc;
@@ -33,6 +35,7 @@ pub mod orchestrator;
 pub mod packages;
 pub mod playbook;
 pub mod policy;
+pub mod privacy;
 pub mod rbac;
 pub mod risk;
 pub mod sandbox_pipeline;
@@ -93,6 +96,19 @@ pub use rbac::{
     SeparationOfDutiesRule, SodEnforcement, SodValidator,
 };
 
+// Immutable audit exports
+pub use audit::{
+    verify_chain as verify_immutable_audit_chain, AuditActor, AuditEventType, AuditOutcome,
+    AuditResource, ChainVerificationError, ImmutableAuditLog,
+};
+
+// Compliance exports
+pub use compliance::{
+    default_controls_for_framework, ChainOfCustodyEntry, ComplianceFramework, ComplianceReport,
+    ComplianceSummary, ControlAssessment, ControlStatus, ControlTemplate,
+    DateRange as ComplianceDateRange, EvidenceItem, EvidencePackage,
+};
+
 // Auth exports
 pub use auth::password::{
     hash_password, validate_password_strength, verify_password, PasswordError,
@@ -114,6 +130,13 @@ pub use validation::{
     validate_email, validate_email_with_options, validate_email_with_options_async,
     EmailValidationError, EmailValidationOptions, HostnameValidationError, ValidatedEmail,
     ValidatedHostname,
+};
+
+// Privacy exports
+pub use privacy::{
+    ClassificationPattern, DataCategory, DataMasker, DataType, DeletionStrategy, MaskMapping,
+    MaskedText, MaskingStrategy, RetentionDecision, RetentionManager, RetentionPolicy,
+    SensitiveDataClassifier, SensitiveDataMatch,
 };
 
 // Cache exports
