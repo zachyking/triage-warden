@@ -154,7 +154,15 @@ fn api_routes(state: AppState) -> Router<AppState> {
                 RbacAction::Read,
             ),
         )
-        .nest("/kill-switch", kill_switch::routes())
+        .nest(
+            "/kill-switch",
+            with_permission(
+                kill_switch::routes(),
+                state.clone(),
+                RbacResource::Guardrail,
+                RbacAction::Read,
+            ),
+        )
         .nest(
             "/guardrails",
             with_permission(
@@ -383,4 +391,33 @@ async fn require_analyst_middleware(
     next: Next,
 ) -> Response {
     next.run(request).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::create_test_state;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn test_kill_switch_status_requires_authentication() {
+        let state = create_test_state().await;
+        let app = create_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/kill-switch")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
 }

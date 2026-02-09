@@ -225,10 +225,47 @@ async fn run_migrations(pool: &SqlitePool) {
         .await
         .expect("Failed to add tenant_id to notification_channels");
 
-    sqlx::query("ALTER TABLE settings ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'")
+    // Recreate settings table with composite key (tenant_id, key) to match runtime schema.
+    sqlx::query(
+        r#"
+        CREATE TABLE settings_new (
+            tenant_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001',
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (tenant_id, key)
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .expect("Failed to create tenant-scoped settings table");
+
+    sqlx::query(
+        r#"
+        INSERT INTO settings_new (tenant_id, key, value, updated_at)
+        SELECT '00000000-0000-0000-0000-000000000001', key, value, updated_at
+        FROM settings
+        "#,
+    )
+    .execute(pool)
+    .await
+    .expect("Failed to migrate settings data to tenant-scoped table");
+
+    sqlx::query("DROP TABLE settings")
         .execute(pool)
         .await
-        .expect("Failed to add tenant_id to settings");
+        .expect("Failed to drop legacy settings table");
+
+    sqlx::query("ALTER TABLE settings_new RENAME TO settings")
+        .execute(pool)
+        .await
+        .expect("Failed to rename tenant-scoped settings table");
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_settings_tenant_id ON settings(tenant_id)")
+        .execute(pool)
+        .await
+        .expect("Failed to index settings tenant_id");
 
     // Auth tables (users, sessions, api_keys)
     sqlx::query(include_str!(

@@ -9,7 +9,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::db::{
     create_audit_repository, create_settings_repository, AuditRepository, DbPool,
@@ -207,8 +207,16 @@ struct SubjectDeletionRequest {
 struct SubjectDeletionPlan {
     data_type: DataType,
     strategy: DeletionStrategy,
-    status: String,
+    status: SubjectDeletionPlanStatus,
     reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum SubjectDeletionPlanStatus {
+    Scheduled,
+    PendingManualReview,
+    Completed,
 }
 
 #[derive(Debug, Serialize)]
@@ -552,16 +560,29 @@ async fn request_subject_deletion(
         create_settings_repository(&state.db, state.encryptor.clone());
     let manager = load_retention_manager(repo.as_ref(), tenant_id).await?;
     let mut plans = Vec::new();
+    let mut seen_data_types = HashSet::new();
     for data_type in request.data_types {
+        if !seen_data_types.insert(data_type) {
+            continue;
+        }
         let Some(policy) = manager.policy_for(data_type) else {
+            plans.push(SubjectDeletionPlan {
+                data_type,
+                strategy: DeletionStrategy::Archive,
+                status: SubjectDeletionPlanStatus::PendingManualReview,
+                reason: Some(
+                    "No retention policy configured for data type; manual DSAR workflow required"
+                        .to_string(),
+                ),
+            });
             continue;
         };
         let (status, reason) = match policy.deletion_strategy {
             DeletionStrategy::HardDelete | DeletionStrategy::Anonymize => {
-                ("scheduled".to_string(), None)
+                (SubjectDeletionPlanStatus::Scheduled, None)
             }
             DeletionStrategy::Archive => (
-                "pending_manual_review".to_string(),
+                SubjectDeletionPlanStatus::PendingManualReview,
                 Some("Archive strategy requires controlled purge workflow".to_string()),
             ),
         };
@@ -628,29 +649,31 @@ pub(crate) async fn run_retention_cleanup_job_for_tenant(
         let mut request_changed = false;
 
         for plan in &mut plans {
-            if plan.status == "scheduled"
-                && matches!(
-                    plan.strategy,
-                    DeletionStrategy::HardDelete | DeletionStrategy::Anonymize
-                )
-            {
-                plan.status = "completed".to_string();
-                plan.reason = Some(format!(
-                    "processed by scheduled cleanup at {}",
-                    now.to_rfc3339()
-                ));
-                dsar_plans_completed += 1;
+            if plan.status == SubjectDeletionPlanStatus::Scheduled {
+                plan.status = SubjectDeletionPlanStatus::PendingManualReview;
+                if plan.reason.is_none() {
+                    plan.reason = Some(format!(
+                        "scheduled cleanup could not auto-execute {} deletion; manual workflow required as of {}",
+                        data_type_label(plan.data_type),
+                        now.to_rfc3339()
+                    ));
+                }
                 request_changed = true;
-            }
-            if plan.status == "pending_manual_review" {
-                dsar_pending_manual_review += 1;
             }
         }
 
-        if plans
+        let completed_for_request = plans
             .iter()
-            .all(|plan| plan.status != "scheduled" && plan.status != "queued")
-        {
+            .filter(|plan| plan.status == SubjectDeletionPlanStatus::Completed)
+            .count();
+        let pending_manual_for_request = plans
+            .iter()
+            .filter(|plan| plan.status == SubjectDeletionPlanStatus::PendingManualReview)
+            .count();
+        dsar_plans_completed += completed_for_request;
+        dsar_pending_manual_review += pending_manual_for_request;
+
+        if !plans.is_empty() && completed_for_request == plans.len() {
             record.status = SubjectAccessRequestStatus::Completed;
             dsar_requests_completed += 1;
             request_changed = true;
@@ -818,5 +841,122 @@ fn parse_category(value: &str) -> Option<DataCategory> {
             custom.trim_start_matches("custom:").to_string(),
         )),
         _ => None,
+    }
+}
+
+fn data_type_label(data_type: DataType) -> &'static str {
+    match data_type {
+        DataType::AiPrompt => "ai_prompt",
+        DataType::AiResponse => "ai_response",
+        DataType::AiFullTranscript => "ai_full_transcript",
+        DataType::AuditEvent => "audit_event",
+        DataType::IncidentExport => "incident_export",
+        DataType::EvidencePackage => "evidence_package",
+        DataType::SessionRecord => "session_record",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::create_test_state;
+
+    fn build_deletion_record(plans: Vec<SubjectDeletionPlan>) -> SubjectAccessRecord {
+        SubjectAccessRecord {
+            id: Uuid::new_v4(),
+            request_type: SubjectAccessRequestType::Deletion,
+            subject_identifier: "user@example.com".to_string(),
+            requested_by: Uuid::new_v4(),
+            requested_at: Utc::now(),
+            status: SubjectAccessRequestStatus::PendingAction,
+            summary: serde_json::to_value(&plans).unwrap(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_job_updates_plan_status_and_metrics() {
+        let state = create_test_state().await;
+        let tenant_id = DEFAULT_TENANT_ID;
+        let settings_repo: Box<dyn SettingsRepository> =
+            create_settings_repository(&state.db, state.encryptor.clone());
+        let record = build_deletion_record(vec![
+            SubjectDeletionPlan {
+                data_type: DataType::AiPrompt,
+                strategy: DeletionStrategy::HardDelete,
+                status: SubjectDeletionPlanStatus::Scheduled,
+                reason: None,
+            },
+            SubjectDeletionPlan {
+                data_type: DataType::EvidencePackage,
+                strategy: DeletionStrategy::Archive,
+                status: SubjectDeletionPlanStatus::PendingManualReview,
+                reason: Some("manual workflow".to_string()),
+            },
+            SubjectDeletionPlan {
+                data_type: DataType::AiResponse,
+                strategy: DeletionStrategy::Anonymize,
+                status: SubjectDeletionPlanStatus::Completed,
+                reason: None,
+            },
+        ]);
+
+        save_subject_access_requests(settings_repo.as_ref(), tenant_id, &[record])
+            .await
+            .unwrap();
+
+        let result = run_retention_cleanup_job_for_tenant(&state, tenant_id)
+            .await
+            .unwrap();
+        assert_eq!(result.dsar_requests_processed, 1);
+        assert_eq!(result.dsar_requests_completed, 0);
+        assert_eq!(result.dsar_plans_completed, 1);
+        assert_eq!(result.dsar_pending_manual_review, 2);
+
+        let records = load_subject_access_requests(settings_repo.as_ref(), tenant_id)
+            .await
+            .unwrap();
+        let plans: Vec<SubjectDeletionPlan> =
+            serde_json::from_value(records[0].summary.clone()).unwrap();
+        assert_eq!(
+            plans[0].status,
+            SubjectDeletionPlanStatus::PendingManualReview
+        );
+        assert!(plans[0].reason.as_ref().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_job_completes_only_non_empty_completed_requests() {
+        let state = create_test_state().await;
+        let tenant_id = DEFAULT_TENANT_ID;
+        let settings_repo: Box<dyn SettingsRepository> =
+            create_settings_repository(&state.db, state.encryptor.clone());
+        let completed_record = build_deletion_record(vec![SubjectDeletionPlan {
+            data_type: DataType::SessionRecord,
+            strategy: DeletionStrategy::HardDelete,
+            status: SubjectDeletionPlanStatus::Completed,
+            reason: None,
+        }]);
+        let empty_record = build_deletion_record(vec![]);
+
+        save_subject_access_requests(
+            settings_repo.as_ref(),
+            tenant_id,
+            &[completed_record.clone(), empty_record.clone()],
+        )
+        .await
+        .unwrap();
+
+        let result = run_retention_cleanup_job_for_tenant(&state, tenant_id)
+            .await
+            .unwrap();
+        assert_eq!(result.dsar_requests_processed, 2);
+        assert_eq!(result.dsar_requests_completed, 1);
+        assert_eq!(result.dsar_plans_completed, 1);
+
+        let records = load_subject_access_requests(settings_repo.as_ref(), tenant_id)
+            .await
+            .unwrap();
+        assert_eq!(records[0].status, SubjectAccessRequestStatus::Completed);
+        assert_eq!(records[1].status, SubjectAccessRequestStatus::PendingAction);
     }
 }

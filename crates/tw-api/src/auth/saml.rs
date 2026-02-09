@@ -181,8 +181,8 @@ async fn acs(
     let xml = String::from_utf8(xml_bytes)
         .map_err(|e| ApiError::Unauthorized(format!("invalid SAML XML encoding: {e}")))?;
 
-    verify_saml_xmldsig(&xml)?;
-    let parsed = parse_saml_assertion(&xml, &cfg.attribute_mapping)?;
+    let verified_xml = verify_saml_xmldsig(&xml)?;
+    let parsed = parse_saml_assertion(&verified_xml, &cfg.attribute_mapping)?;
     validate_assertion(&parsed, &cfg, expected_request_id.as_deref())?;
 
     let claims = SsoClaims {
@@ -347,7 +347,8 @@ fn parse_saml_assertion(
         .ok_or_else(|| ApiError::Unauthorized("missing SAML audience".to_string()))?;
     let destination = extract_attribute_value(xml, "Response", "Destination")
         .or_else(|| extract_attribute_value(xml, "SubjectConfirmationData", "Recipient"));
-    let in_response_to = extract_attribute_value(xml, "Response", "InResponseTo");
+    let in_response_to = extract_attribute_value(xml, "Response", "InResponseTo")
+        .or_else(|| extract_attribute_value(xml, "SubjectConfirmationData", "InResponseTo"));
 
     let attrs = extract_attributes(xml);
     let email = attrs
@@ -536,15 +537,30 @@ fn validate_assertion(
     Ok(())
 }
 
-fn verify_saml_xmldsig(xml: &str) -> Result<(), ApiError> {
+fn verify_saml_xmldsig(xml: &str) -> Result<String, ApiError> {
     match decode_and_verify_signed_document(xml)
         .map_err(|e| ApiError::Unauthorized(format!("SAML XMLDSIG verification failed: {e}")))?
     {
-        XmlSigOutput::Verified { .. } => Ok(()),
+        XmlSigOutput::Verified { references, .. } => select_signed_reference(references)
+            .ok_or_else(|| ApiError::Unauthorized("missing signed SAML reference".to_string())),
         XmlSigOutput::Unsigned(_) => Err(ApiError::Unauthorized(
             "Unsigned SAML assertion rejected".to_string(),
         )),
     }
+}
+
+fn select_signed_reference(references: Vec<String>) -> Option<String> {
+    let mut fallback = None;
+    for reference in references {
+        let normalized = reference.to_ascii_lowercase();
+        if normalized.contains("<assertion") || normalized.contains(":assertion") {
+            return Some(reference);
+        }
+        if fallback.is_none() {
+            fallback = Some(reference);
+        }
+    }
+    fallback
 }
 
 fn parse_saml_time(value: &str) -> Result<DateTime<Utc>, ApiError> {
@@ -554,7 +570,8 @@ fn parse_saml_time(value: &str) -> Result<DateTime<Utc>, ApiError> {
 }
 
 fn extract_tag_text(xml: &str, tag: &str) -> Option<String> {
-    let pattern = format!(r"(?s)<(?:\w+:)?{tag}\b[^>]*>(.*?)</(?:\w+:)?{tag}>");
+    let escaped_tag = regex::escape(tag);
+    let pattern = format!(r"(?s)<(?:\w+:)?{escaped_tag}\b[^>]*>(.*?)</(?:\w+:)?{escaped_tag}>");
     let re = Regex::new(&pattern).ok()?;
     re.captures(xml)
         .and_then(|caps| caps.get(1))
@@ -562,62 +579,56 @@ fn extract_tag_text(xml: &str, tag: &str) -> Option<String> {
 }
 
 fn extract_attribute_value(xml: &str, tag: &str, attribute: &str) -> Option<String> {
-    let tag_pos = xml
-        .find(&format!("<{tag}"))
-        .or_else(|| xml.find(&format!(":{tag}")))?;
-    let tag_end = xml[tag_pos..].find('>')? + tag_pos;
-    let tag_content = &xml[tag_pos..tag_end];
-    let needle = format!(r#"{attribute}=""#);
-    let start = tag_content.find(&needle)? + needle.len();
-    let value_start = tag_pos + start;
-    let rest = &xml[value_start..];
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
+    let escaped_tag = regex::escape(tag);
+    let escaped_attr = regex::escape(attribute);
+    let pattern = format!(r#"(?s)<(?:\w+:)?{escaped_tag}\b[^>]*\b{escaped_attr}="([^"]+)"[^>]*>"#);
+    let re = Regex::new(&pattern).ok()?;
+    re.captures(xml)
+        .and_then(|caps| caps.get(1))
+        .map(|m| m.as_str().to_string())
 }
 
 fn extract_attributes(xml: &str) -> HashMap<String, Vec<String>> {
     let mut map = HashMap::new();
-    let mut cursor = xml;
-    while let Some(attr_start) = cursor.find("<Attribute ") {
-        let after_start = &cursor[attr_start..];
-        let name = extract_named_value(after_start, "Name");
-        let Some(name) = name else {
-            cursor = &after_start["<Attribute ".len()..];
+    let attr_re = match Regex::new(
+        r#"(?s)<(?:\w+:)?Attribute\b[^>]*\bName="([^"]+)"[^>]*>(.*?)</(?:\w+:)?Attribute>"#,
+    ) {
+        Ok(re) => re,
+        Err(_) => return map,
+    };
+    let value_re = match Regex::new(
+        r#"(?s)<(?:\w+:)?AttributeValue\b[^>]*>(.*?)</(?:\w+:)?AttributeValue>"#,
+    ) {
+        Ok(re) => re,
+        Err(_) => return map,
+    };
+
+    for attr_caps in attr_re.captures_iter(xml) {
+        let Some(name_match) = attr_caps.get(1) else {
             continue;
         };
-        let close = after_start
-            .find("</Attribute>")
-            .unwrap_or(after_start.len());
-        let body = &after_start[..close];
+        let Some(body_match) = attr_caps.get(2) else {
+            continue;
+        };
+
         let mut values = Vec::new();
-        let mut body_cursor = body;
-        while let Some(val_start) = body_cursor.find("<AttributeValue") {
-            let val_rest = &body_cursor[val_start..];
-            if let Some(gt) = val_rest.find('>') {
-                let val_content = &val_rest[gt + 1..];
-                if let Some(end) = val_content.find("</AttributeValue>") {
-                    let value = val_content[..end].trim();
-                    if !value.is_empty() {
-                        values.push(value.to_string());
-                    }
+        for value_caps in value_re.captures_iter(body_match.as_str()) {
+            if let Some(value_match) = value_caps.get(1) {
+                let value = value_match.as_str().trim();
+                if !value.is_empty() {
+                    values.push(value.to_string());
                 }
             }
-            body_cursor = &val_rest["<AttributeValue".len()..];
         }
-        if !values.is_empty() {
-            map.insert(name, values);
-        }
-        cursor = &after_start["<Attribute ".len()..];
-    }
-    map
-}
 
-fn extract_named_value(xml: &str, name: &str) -> Option<String> {
-    let needle = format!(r#"{name}=""#);
-    let start = xml.find(&needle)? + needle.len();
-    let rest = &xml[start..];
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
+        if !values.is_empty() {
+            map.entry(name_match.as_str().to_string())
+                .or_insert_with(Vec::new)
+                .extend(values);
+        }
+    }
+
+    map
 }
 
 fn normalize_cert(cert: &str) -> String {
@@ -735,6 +746,21 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_attributes_namespaced() {
+        let xml = r#"
+<saml:Attribute Name="groups">
+  <saml:AttributeValue>soc-admin</saml:AttributeValue>
+  <saml:AttributeValue>ir-team</saml:AttributeValue>
+</saml:Attribute>
+"#;
+        let attrs = extract_attributes(xml);
+        assert_eq!(
+            attrs.get("groups"),
+            Some(&vec!["soc-admin".to_string(), "ir-team".to_string()])
+        );
+    }
+
+    #[test]
     fn test_normalize_cert() {
         let cert = "-----BEGIN CERTIFICATE-----\nABC\nDEF\n-----END CERTIFICATE-----";
         assert_eq!(normalize_cert(cert), "ABCDEF");
@@ -763,6 +789,19 @@ mod tests {
         assert!(!is_allowed_digest_method(
             "http://www.w3.org/2000/09/xmldsig#sha1"
         ));
+    }
+
+    #[test]
+    fn test_select_signed_reference_prefers_assertion() {
+        let references = vec![
+            "<Response><Issuer>idp</Issuer></Response>".to_string(),
+            "<Assertion><NameID>user@example.com</NameID></Assertion>".to_string(),
+        ];
+        let selected = select_signed_reference(references);
+        assert_eq!(
+            selected,
+            Some("<Assertion><NameID>user@example.com</NameID></Assertion>".to_string())
+        );
     }
 
     #[test]

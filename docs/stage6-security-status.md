@@ -18,6 +18,7 @@ Implemented:
 Implemented:
 - SP metadata/login/ACS/SLO endpoints (`/auth/saml/*`).
 - Cryptographic XMLDSIG signature verification integrated in ACS (canonicalization + digest/signature verification).
+- ACS claim extraction now consumes signed XML reference content returned by XMLDSIG verification (not raw response XML).
 - Assertion validation for audience, issuer (optional configured), validity window, and certificate pinning.
 - Request/response correlation via `InResponseTo` against stored AuthnRequest ID.
 - Destination/recipient validation against configured ACS URL.
@@ -32,16 +33,23 @@ Implemented:
 - SoD rules + enforcement/warn/audit behavior on assignment.
 - Access review campaign model and API workflow.
 - Reminder and attestation decision recording with optional role revocation application.
-- Route-level RBAC middleware enforced across API route groups (except intentionally public auth/webhook/health/metrics routes), including:
+- RBAC middleware enforced across API route groups (except intentionally public auth/webhook/health/metrics routes), including:
   - `/api(/v1)/roles` -> `role:manage`
   - `/api(/v1)/audit` -> `audit_log:read`
   - `/api(/v1)/compliance` -> `compliance:read`
   - `/api(/v1)/privacy` -> `privacy:read`
   - `/api(/v1)/guardrails` -> `guardrail:read`
+  - `/api(/v1)/kill-switch` -> `guardrail:read` (activate/deactivate still enforce `guardrail:manage` in handler)
   - `/api(/v1)/connectors` -> `connector:read`
   - `/api(/v1)/settings` -> `settings:read`
   - `/api(/v1)/api-keys` -> `api_key:manage`
   - Incident-adjacent groups (`feedback`, `comments`, `activity`, `handoffs`, `assets`, `identities`, `iocs`, `lessons`) -> `incident:read`
+- Endpoint-level action resolution for protected routes:
+  - Default behavior for read-protected groups: `GET/HEAD/OPTIONS -> read`, mutating methods -> `update`.
+  - Explicit endpoint overrides for `execute`/`approve`/`export`/`manage` where applicable (e.g. incident action execution/approval, immutable audit export/anchor/archive, DSAR export/delete).
+- API-key scope enforcement in middleware:
+  - Scope gating tracks resolved RBAC action (`read` action requires `read`; all stronger actions require `write`).
+  - Resource scopes enforced where applicable (`incidents`, `connectors`, `playbooks`, `settings`, `admin`).
 
 ## AI Privacy (6.3)
 
@@ -55,6 +63,11 @@ Implemented:
   - `POST /api(/v1)/privacy/subject-access/export`
   - `POST /api(/v1)/privacy/subject-access/delete`
 - Scheduled retention cleanup executor with DSAR plan progression + audit-retention action application.
+- DSAR plans that cannot be auto-executed by backend handlers are retained as `pending_manual_review` (not auto-marked `completed`).
+- DSAR deletion plan statuses are strongly typed (`scheduled`, `pending_manual_review`, `completed`) and persisted as stable enums.
+- DSAR scheduler counters are now accurate for both `dsar_plans_completed` and `dsar_pending_manual_review`.
+- DSAR requests are only auto-completed when plan list is non-empty and every plan is `completed`.
+- DSAR deletion request planning deduplicates repeated data types and marks missing-policy data types as `pending_manual_review` with explicit reason.
 - Local/cloud routing decision API for sensitive prompts.
 - Python ReAct routing support with sensitivity-aware provider selection and AI interaction audit hooks.
 
@@ -79,6 +92,7 @@ Implemented:
   - `POST /api(/v1)/audit/immutable/verify/job`
   - `GET /api(/v1)/audit/immutable/verify/alerts`
 - Scheduled immutable verification orchestration with tenant-scoped persisted scheduler status.
+- Scheduled Stage 6 jobs use PostgreSQL advisory-lock coordination to avoid duplicate execution across API instances.
 - Immutable archive snapshots with index and latest retrieval:
   - `POST /api(/v1)/audit/immutable/archive`
   - `GET /api(/v1)/audit/immutable/archive/index`

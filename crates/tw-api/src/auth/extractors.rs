@@ -376,6 +376,10 @@ pub mod scopes {
     pub const CONNECTORS: &str = "connectors";
     /// Scope for admin operations (user management, settings).
     pub const ADMIN: &str = "admin";
+    /// Scope for playbook operations.
+    pub const PLAYBOOKS: &str = "playbooks";
+    /// Scope for settings operations.
+    pub const SETTINGS: &str = "settings";
     /// Scope for read-only operations.
     pub const READ: &str = "read";
     /// Scope for write operations.

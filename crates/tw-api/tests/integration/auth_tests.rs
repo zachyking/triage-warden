@@ -202,17 +202,15 @@ async fn test_delete_playbook_requires_auth() {
 // Kill Switch Endpoint Auth Tests
 // ============================================================
 
-// Note: GET /kill-switch (status) is intentionally public for monitoring
-// Only activation/deactivation require admin auth
+// Kill switch status is protected by RBAC (guardrail:read) and requires authentication.
 #[tokio::test]
-async fn test_kill_switch_status_is_public() {
+async fn test_kill_switch_status_requires_auth() {
     let (app, _state) = create_test_router().await;
 
     let request = unauthenticated_request(Method::GET, "/api/v1/kill-switch");
     let response = app.oneshot(request).await.unwrap();
 
-    // Kill switch status is publicly accessible for health monitoring
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
