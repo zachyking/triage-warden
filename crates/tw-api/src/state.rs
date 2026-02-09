@@ -4,7 +4,7 @@ use metrics_exporter_prometheus::PrometheusHandle;
 use std::sync::Arc;
 use tracing::info;
 use tw_core::db::DbPool;
-use tw_core::{create_encryptor_or_panic, CredentialEncryptor, EventBus};
+use tw_core::{create_encryptor, CredentialEncryptor, CryptoError, EventBus};
 use tw_core::{
     AssetStore, IdentityStore, InMemoryAssetStore, InMemoryIdentityStore,
     InMemoryRelationshipStore, RelationshipStore,
@@ -60,20 +60,33 @@ impl AppState {
     ///
     /// For more control over initialization, use [`AppStateBuilder`] instead.
     pub fn new(db: DbPool, event_bus: EventBus, feature_flags: FeatureFlags) -> Self {
+        Self::try_new(db, event_bus, feature_flags)
+            .unwrap_or_else(|err| panic!("Failed to initialize AppState: {}", err))
+    }
+
+    /// Creates a new application state with minimal configuration.
+    ///
+    /// This is a fallible variant of [`AppState::new`] that propagates
+    /// encryption initialization failures instead of panicking.
+    pub fn try_new(
+        db: DbPool,
+        event_bus: EventBus,
+        feature_flags: FeatureFlags,
+    ) -> Result<Self, CryptoError> {
         let policy_engine = PolicyEngine::default();
         info!(
             rules_count = policy_engine.rules().len(),
             "Policy engine initialized with default rules"
         );
 
-        Self {
+        Ok(Self {
             db: Arc::new(db),
             event_bus: Arc::new(event_bus),
             webhook_secrets: Arc::new(WebhookSecrets::default()),
             policy_engine: Arc::new(policy_engine),
             prometheus_handle: None,
             kill_switch: Arc::new(KillSwitch::new()),
-            encryptor: create_encryptor_or_panic(),
+            encryptor: create_encryptor()?,
             login_rate_limiter: LoginRateLimiter::default(),
             api_rate_limiter: ApiRateLimiter::default(),
             webhook_rate_limiter: WebhookRateLimiter::default(),
@@ -85,7 +98,7 @@ impl AppState {
             asset_store: Arc::new(InMemoryAssetStore::new()),
             identity_store: Arc::new(InMemoryIdentityStore::new()),
             relationship_store: Arc::new(InMemoryRelationshipStore::new()),
-        }
+        })
     }
 
     /// Creates a new builder for constructing AppState with fine-grained control.
@@ -306,13 +319,22 @@ impl AppStateBuilder {
 
     /// Builds the AppState with all configured components.
     ///
+    /// Panics when encryption initialization fails.
+    /// Use [`AppStateBuilder::try_build`] for a fallible variant.
+    pub fn build(self) -> AppState {
+        self.try_build()
+            .unwrap_or_else(|err| panic!("Failed to initialize AppState: {}", err))
+    }
+
+    /// Builds the AppState with all configured components.
+    ///
     /// Components not explicitly set will use their defaults:
     /// - `policy_engine`: Default policy engine with built-in rules
     /// - `kill_switch`: New inactive kill switch
-    /// - `encryptor`: Environment-based encryptor (panics if encryption key not set in production)
+    /// - `encryptor`: Environment-based encryptor (returns error in production without a valid key)
     /// - Rate limiters: Default configuration
     /// - Distributed components (message_queue, cache, leader_elector): None (disabled)
-    pub fn build(self) -> AppState {
+    pub fn try_build(self) -> Result<AppState, CryptoError> {
         let policy_engine = self.policy_engine.unwrap_or_default();
         info!(
             rules_count = policy_engine.rules().len(),
@@ -339,14 +361,17 @@ impl AppStateBuilder {
             info!("Running with partial distributed features");
         }
 
-        AppState {
+        Ok(AppState {
             db: Arc::new(self.db),
             event_bus: Arc::new(self.event_bus),
             webhook_secrets: Arc::new(self.webhook_secrets),
             policy_engine: Arc::new(policy_engine),
             prometheus_handle: self.prometheus_handle.map(Arc::new),
             kill_switch: Arc::new(self.kill_switch.unwrap_or_default()),
-            encryptor: self.encryptor.unwrap_or_else(create_encryptor_or_panic),
+            encryptor: match self.encryptor {
+                Some(encryptor) => encryptor,
+                None => create_encryptor()?,
+            },
             login_rate_limiter: self.login_rate_limiter.unwrap_or_default(),
             api_rate_limiter: self.api_rate_limiter.unwrap_or_default(),
             webhook_rate_limiter: self.webhook_rate_limiter.unwrap_or_default(),
@@ -364,7 +389,7 @@ impl AppStateBuilder {
             relationship_store: self
                 .relationship_store
                 .unwrap_or_else(|| Arc::new(InMemoryRelationshipStore::new())),
-        }
+        })
     }
 }
 

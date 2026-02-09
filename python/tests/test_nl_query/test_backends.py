@@ -171,16 +171,18 @@ class TestSQLBackend:
         with pytest.raises(ValueError, match="Unsupported statistics field"):
             sql.generate(translated)
 
-    def test_table_name_sanitization(self, translator: NLQueryTranslator):
+    def test_table_name_validation_rejects_invalid_identifier(self):
+        with pytest.raises(ValueError, match="incidents_table must contain only"):
+            SQLBackend(incidents_table="incidents; DROP TABLE users --")
+
+    def test_table_name_validation_accepts_safe_custom_names(self, translator: NLQueryTranslator):
         sql = SQLBackend(
-            incidents_table="incidents; DROP TABLE users --",
-            logs_table="events; DELETE FROM events",
-            ioc_table="indicators; TRUNCATE indicators",
+            incidents_table="security_incidents_2026",
+            logs_table="security_events",
+            ioc_table="threat_indicators",
         )
 
         translated = translator.translate("show me critical incidents")
         result = sql.generate(translated)
 
-        assert ";" not in result.query_string
-        assert "--" not in result.query_string
-        assert "DROP TABLE" not in result.query_string
+        assert "security_incidents_2026" in result.query_string

@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use tw_api::{ApiServer, ApiServerConfig, AppState};
 use tw_core::db::{create_pool, run_migrations, seed::ensure_admin_user};
-use tw_core::{EventBus, FeatureFlagStore, FeatureFlags, InMemoryFeatureFlagStore};
+use tw_core::{
+    is_production_environment, EventBus, FeatureFlagStore, FeatureFlags, InMemoryFeatureFlagStore,
+};
 
 use crate::config::AppConfig;
 
@@ -33,7 +35,7 @@ impl Default for ServeConfig {
             port: 8080,
             host: "0.0.0.0".to_string(),
             database_url: "sqlite://triage-warden.db?mode=rwc".to_string(),
-            enable_swagger: true,
+            enable_swagger: !is_production_environment(),
             timeout_secs: 30,
         }
     }
@@ -90,7 +92,8 @@ pub async fn run_server(config: ServeConfig, _app_config: AppConfig) -> Result<(
     // - message_queue: Redis Streams or similar
     // - cache: Redis cache
     // - leader_elector: PostgreSQL or Redis-based leader election
-    let state = AppState::new(db_pool, event_bus, feature_flags);
+    let state = AppState::try_new(db_pool, event_bus, feature_flags)
+        .context("Failed to initialize application state (encryption setup may be invalid)")?;
 
     // Build server config
     let bind_address: SocketAddr = format!("{}:{}", config.host, config.port)
@@ -103,9 +106,8 @@ pub async fn run_server(config: ServeConfig, _app_config: AppConfig) -> Result<(
         enable_swagger: config.enable_swagger,
         shutdown_timeout: Duration::from_secs(30),
         session_cookie_name: "tw_session".to_string(),
-        session_expiry_seconds: 86400,    // 24 hours
-        session_secure: false,            // Allow HTTP for development
-        cors_allowed_origins: Vec::new(), // Use default CORS behavior
+        session_expiry_seconds: 86400, // 24 hours
+        ..ApiServerConfig::default()
     };
 
     // Print startup info

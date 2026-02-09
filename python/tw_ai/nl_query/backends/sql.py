@@ -30,6 +30,7 @@ _ALLOWED_STATISTICS_FIELDS = frozenset(
         "verdict",
     }
 )
+_TABLE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class SQLBackend(QueryBackend):
@@ -52,9 +53,9 @@ class SQLBackend(QueryBackend):
             logs_table: Name of the events/logs table.
             ioc_table: Name of the IOC/indicators table.
         """
-        self._incidents_table = _sanitize_table_name(incidents_table, fallback="incidents")
-        self._logs_table = _sanitize_table_name(logs_table, fallback="events")
-        self._ioc_table = _sanitize_table_name(ioc_table, fallback="indicators")
+        self._incidents_table = _validate_table_name(incidents_table, field="incidents_table")
+        self._logs_table = _validate_table_name(logs_table, field="logs_table")
+        self._ioc_table = _validate_table_name(ioc_table, field="ioc_table")
 
     @property
     def backend_name(self) -> str:
@@ -114,9 +115,8 @@ class SQLBackend(QueryBackend):
             param_idx += 1
 
         where = " AND ".join(conditions) if conditions else "1=1"
-        # Dynamic SQL structure is built from trusted identifiers plus bound params.
         sql = (
-            f"SELECT * FROM {self._incidents_table}"
+            f"SELECT * FROM {self._incidents_table}"  # nosec B608
             f" WHERE {where}"
             f" ORDER BY created_at DESC"
             f" LIMIT :limit"
@@ -167,12 +167,7 @@ class SQLBackend(QueryBackend):
             param_idx += 1
 
         where = " AND ".join(conditions) if conditions else "1=1"
-        sql = (
-            f"SELECT * FROM {self._logs_table}"
-            f" WHERE {where}"
-            f" ORDER BY timestamp DESC"
-            f" LIMIT :limit"
-        )
+        sql = f"SELECT * FROM {self._logs_table} WHERE {where} ORDER BY timestamp DESC LIMIT :limit"  # nosec B608
         params["limit"] = q.limit
 
         return QueryResult(
@@ -194,7 +189,7 @@ class SQLBackend(QueryBackend):
             params["type"] = q.ioc_type
 
         where = " AND ".join(conditions)
-        sql = f"SELECT * FROM {self._ioc_table} WHERE {where}"
+        sql = f"SELECT * FROM {self._ioc_table} WHERE {where}"  # nosec B608
 
         return QueryResult(
             query_string=sql,
@@ -233,7 +228,7 @@ class SQLBackend(QueryBackend):
             param_idx += 1
 
         where = " AND ".join(conditions) if conditions else "1=1"
-        sql = f"SELECT * FROM {self._logs_table}" f" WHERE {where}" f" ORDER BY timestamp ASC"
+        sql = f"SELECT * FROM {self._logs_table} WHERE {where} ORDER BY timestamp ASC"  # nosec B608
 
         return QueryResult(
             query_string=sql,
@@ -269,7 +264,7 @@ class SQLBackend(QueryBackend):
         if q.metric == "count" and q.group_by:
             safe_group = _validate_statistics_field(q.group_by)
             sql = (
-                f"SELECT {safe_group}, COUNT(*) as count"
+                f"SELECT {safe_group}, COUNT(*) as count"  # nosec B608
                 f" FROM {self._incidents_table}"
                 f" WHERE {where}"
                 f" GROUP BY {safe_group}"
@@ -278,7 +273,7 @@ class SQLBackend(QueryBackend):
         elif q.metric == "top" and q.group_by:
             safe_group = _validate_statistics_field(q.group_by)
             sql = (
-                f"SELECT {safe_group}, COUNT(*) as count"
+                f"SELECT {safe_group}, COUNT(*) as count"  # nosec B608
                 f" FROM {self._incidents_table}"
                 f" WHERE {where}"
                 f" GROUP BY {safe_group}"
@@ -287,14 +282,16 @@ class SQLBackend(QueryBackend):
             )
         elif q.metric == "trend":
             sql = (
-                f"SELECT DATE(created_at) as date, COUNT(*) as count"
+                f"SELECT DATE(created_at) as date, COUNT(*) as count"  # nosec B608
                 f" FROM {self._incidents_table}"
                 f" WHERE {where}"
                 f" GROUP BY DATE(created_at)"
                 f" ORDER BY date ASC"
             )
         else:
-            sql = f"SELECT COUNT(*) as count" f" FROM {self._incidents_table}" f" WHERE {where}"
+            sql = (
+                f"SELECT COUNT(*) as count FROM {self._incidents_table} WHERE {where}"  # nosec B608
+            )
 
         return QueryResult(
             query_string=sql,
@@ -322,7 +319,7 @@ class SQLBackend(QueryBackend):
 
         where = " AND ".join(conditions) if conditions else "1=1"
         sql = (
-            f"SELECT * FROM {self._incidents_table}"
+            f"SELECT * FROM {self._incidents_table}"  # nosec B608
             f" WHERE {where}"
             f" ORDER BY created_at DESC"
             f" LIMIT 20"
@@ -354,12 +351,22 @@ def _validate_statistics_field(name: str) -> str:
     return sanitized
 
 
-def _sanitize_table_name(name: str, fallback: str) -> str:
-    """Sanitize table name identifiers used in SQL query templates."""
-    sanitized = _sanitize_column_name(name)
-    if not sanitized:
-        return fallback
-    return sanitized
+def _validate_table_name(name: str, *, field: str) -> str:
+    """Validate SQL table identifiers used in query templates."""
+    if not isinstance(name, str):
+        raise ValueError(f"{field} must be a string")
+
+    normalized = name.strip()
+    if not normalized:
+        raise ValueError(f"{field} must be non-empty")
+
+    if not _TABLE_NAME_RE.fullmatch(normalized):
+        raise ValueError(
+            f"{field} must contain only letters, numbers, and underscores, "
+            f"and cannot start with a number"
+        )
+
+    return normalized
 
 
 __all__ = ["SQLBackend"]

@@ -3,10 +3,14 @@
 use axum::{extract::State, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use tracing::warn;
 
 use crate::auth::RequireAnalyst;
 use crate::error::ApiError;
 use crate::state::AppState;
+
+const MAX_NL_QUERY_LENGTH: usize = 5_000;
+const MAX_BACKEND_NAME_LENGTH: usize = 64;
 
 /// Creates NL query routes.
 pub fn routes() -> Router<AppState> {
@@ -39,6 +43,16 @@ fn normalize_backend(backend: &str) -> String {
     }
 }
 
+fn is_valid_backend_identifier(backend: &str) -> bool {
+    if backend.is_empty() || backend.len() > MAX_BACKEND_NAME_LENGTH {
+        return false;
+    }
+
+    backend
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct NLQueryResponse {
     pub query_string: String,
@@ -64,6 +78,19 @@ async fn translate_query(
             "NL query cannot be empty.".to_string(),
         ));
     }
+    if query.len() > MAX_NL_QUERY_LENGTH {
+        return Err(ApiError::BadRequest(format!(
+            "NL query is too long (max {} characters).",
+            MAX_NL_QUERY_LENGTH
+        )));
+    }
+
+    let backend = normalize_backend(&request.backend);
+    if !is_valid_backend_identifier(&backend) {
+        return Err(ApiError::BadRequest(
+            "Invalid backend name. Use letters, numbers, '-' or '_'.".to_string(),
+        ));
+    }
 
     let nl_url = state.nl_query_url.as_deref().ok_or_else(|| {
         ApiError::BadRequest(
@@ -74,31 +101,36 @@ async fn translate_query(
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| ApiError::Internal(format!("Failed to build NL query client: {}", e)))?;
     let response = client
         .post(format!("{}/api/nl/query", nl_url.trim_end_matches('/')))
         .json(&serde_json::json!({
             "query": query,
-            "backend": normalize_backend(&request.backend),
+            "backend": backend,
             "context": request.context,
         }))
         .send()
         .await
-        .map_err(|e| ApiError::Internal(format!("NL query service error: {}", e)))?;
+        .map_err(|e| {
+            warn!(error = %e, "nl_query_service_request_failed");
+            ApiError::Internal("NL query service is unavailable.".to_string())
+        })?;
 
     if !response.status().is_success() {
         let status = response.status();
+        warn!(status = %status, "nl_query_service_non_success_status");
         return Err(ApiError::Internal(format!(
             "NL query service returned {}",
             status
         )));
     }
 
-    let nl_response: NLQueryResponse = response
-        .json()
-        .await
-        .map_err(|e| ApiError::Internal(format!("Failed to parse NL response: {}", e)))?;
+    let nl_response: NLQueryResponse = response.json().await.map_err(|e| {
+        warn!(error = %e, "nl_query_service_invalid_response");
+        ApiError::Internal("Failed to parse NL query service response.".to_string())
+    })?;
 
     Ok(Json(nl_response))
 }
@@ -121,6 +153,15 @@ mod tests {
         assert_eq!(normalize_backend(""), "splunk");
         assert_eq!(normalize_backend("   "), "splunk");
         assert_eq!(normalize_backend("elasticsearch"), "elasticsearch");
+    }
+
+    #[test]
+    fn test_backend_identifier_validation() {
+        assert!(is_valid_backend_identifier("splunk"));
+        assert!(is_valid_backend_identifier("elastic-search_2"));
+        assert!(!is_valid_backend_identifier(""));
+        assert!(!is_valid_backend_identifier("backend with spaces"));
+        assert!(!is_valid_backend_identifier("backend;drop table"));
     }
 
     #[test]

@@ -1066,6 +1066,8 @@ struct NlQueryServiceResponse {
     metadata: serde_json::Value,
 }
 
+const MAX_WEB_NL_QUERY_LENGTH: usize = 5_000;
+
 /// Handle NL query from chat sidebar; returns a chat message partial.
 async fn web_nl_query(
     State(state): State<AppState>,
@@ -1077,6 +1079,17 @@ async fn web_nl_query(
         let template = ChatMessageTemplate {
             role: "assistant".to_string(),
             content: "Please enter a query first. For example: \"show critical incidents from the last 24 hours\".".to_string(),
+            suggestions: default_nl_suggestions(),
+        };
+        return Ok(HtmlTemplate(template));
+    }
+    if query.len() > MAX_WEB_NL_QUERY_LENGTH {
+        let template = ChatMessageTemplate {
+            role: "assistant".to_string(),
+            content: format!(
+                "That query is too long. Please keep it under {} characters.",
+                MAX_WEB_NL_QUERY_LENGTH
+            ),
             suggestions: default_nl_suggestions(),
         };
         return Ok(HtmlTemplate(template));
@@ -1128,8 +1141,12 @@ async fn run_nl_query(state: &AppState, query: &str) -> Result<NlQueryServiceRes
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|e| format!("failed to build NL client: {}", e))?;
+        .map_err(|e| {
+            tracing::warn!(error = %e, "web_nl_query_client_build_failed");
+            "service unavailable".to_string()
+        })?;
     let response = client
         .post(format!("{}/api/nl/query", nl_url.trim_end_matches('/')))
         .json(&serde_json::json!({
@@ -1139,16 +1156,26 @@ async fn run_nl_query(state: &AppState, query: &str) -> Result<NlQueryServiceRes
         }))
         .send()
         .await
-        .map_err(|e| format!("request failed: {}", e))?;
+        .map_err(|e| {
+            tracing::warn!(error = %e, "web_nl_query_request_failed");
+            "service unavailable".to_string()
+        })?;
 
     if !response.status().is_success() {
-        return Err(format!("service returned {}", response.status()));
+        tracing::warn!(
+            status = %response.status(),
+            "web_nl_query_service_non_success_status"
+        );
+        return Err("service unavailable".to_string());
     }
 
     response
         .json::<NlQueryServiceResponse>()
         .await
-        .map_err(|e| format!("invalid response: {}", e))
+        .map_err(|e| {
+            tracing::warn!(error = %e, "web_nl_query_invalid_response");
+            "service returned invalid response".to_string()
+        })
 }
 
 fn extract_follow_up_suggestions(metadata: &serde_json::Value) -> Vec<String> {
