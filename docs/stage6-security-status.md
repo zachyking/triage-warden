@@ -94,7 +94,7 @@ Implemented:
 ## Remaining Work (Stage 6 scope)
 
 Items that still require broader product/system work beyond current API/core implementation:
-- External immutable audit archival targets (S3/Azure Blob) and automated integrity-alert jobs.
+- External immutable audit archival targets (S3/Azure Blob) and scheduled verify-job orchestration.
 - End-to-end UI for roles/access-review/privacy/guardrails/compliance dashboards.
 - Full endpoint-by-endpoint RBAC annotations across all routes.
 - Full cryptographic SAML XML signature verification (XMLDSIG canonicalization/verification library integration).
