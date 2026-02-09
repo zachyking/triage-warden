@@ -66,18 +66,20 @@ pub fn sample_raw_alert_at(id: &str, severity: &str, timestamp: DateTime<Utc>) -
 
 /// Asserts that a connector health check returns healthy.
 pub fn assert_healthy(result: &ConnectorResult<ConnectorHealth>) {
-    match result {
-        Ok(ConnectorHealth::Healthy) => {}
-        other => panic!("Expected Healthy, got {:?}", other),
-    }
+    assert!(
+        matches!(result, Ok(ConnectorHealth::Healthy)),
+        "Expected Healthy, got {:?}",
+        result
+    );
 }
 
 /// Asserts that a connector health check returns unhealthy.
 pub fn assert_unhealthy(result: &ConnectorResult<ConnectorHealth>) {
-    match result {
-        Ok(ConnectorHealth::Unhealthy(_)) => {}
-        other => panic!("Expected Unhealthy, got {:?}", other),
-    }
+    assert!(
+        matches!(result, Ok(ConnectorHealth::Unhealthy(_))),
+        "Expected Unhealthy, got {:?}",
+        result
+    );
 }
 
 #[cfg(test)]

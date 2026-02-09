@@ -56,7 +56,7 @@ impl MockAsmProvider {
 
     /// Sets whether the mock reports as healthy.
     pub fn set_healthy(&self, healthy: bool) {
-        *self.healthy.lock().unwrap() = healthy;
+        *self.healthy.lock().unwrap_or_else(|e| e.into_inner()) = healthy;
     }
 
     /// Creates a sample open port exposure for testing.
@@ -120,7 +120,7 @@ impl Connector for MockAsmProvider {
     }
 
     async fn health_check(&self) -> ConnectorResult<ConnectorHealth> {
-        if *self.healthy.lock().unwrap() {
+        if *self.healthy.lock().unwrap_or_else(|e| e.into_inner()) {
             Ok(ConnectorHealth::Healthy)
         } else {
             Ok(ConnectorHealth::Unhealthy("Mock unhealthy".to_string()))
@@ -128,19 +128,19 @@ impl Connector for MockAsmProvider {
     }
 
     async fn test_connection(&self) -> ConnectorResult<bool> {
-        Ok(*self.healthy.lock().unwrap())
+        Ok(*self.healthy.lock().unwrap_or_else(|e| e.into_inner()))
     }
 }
 
 #[async_trait]
 impl AttackSurfaceMonitor for MockAsmProvider {
     async fn get_exposures(&self, domain: &str) -> ConnectorResult<Vec<ExternalExposure>> {
-        let exposures = self.exposures.lock().unwrap();
+        let exposures = self.exposures.lock().unwrap_or_else(|e| e.into_inner());
         Ok(exposures.get(domain).cloned().unwrap_or_default())
     }
 
     async fn get_asset_exposure(&self, asset_id: &str) -> ConnectorResult<Vec<ExternalExposure>> {
-        let exposures = self.exposures.lock().unwrap();
+        let exposures = self.exposures.lock().unwrap_or_else(|e| e.into_inner());
         let mut result = Vec::new();
         for exps in exposures.values() {
             for exp in exps {
@@ -153,7 +153,7 @@ impl AttackSurfaceMonitor for MockAsmProvider {
     }
 
     async fn get_risk_score(&self, domain: &str) -> ConnectorResult<Option<f32>> {
-        let scores = self.risk_scores.lock().unwrap();
+        let scores = self.risk_scores.lock().unwrap_or_else(|e| e.into_inner());
         Ok(scores.get(domain).copied())
     }
 }

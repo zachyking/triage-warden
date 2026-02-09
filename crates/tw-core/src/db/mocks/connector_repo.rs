@@ -280,7 +280,10 @@ impl ConnectorRepository for MockConnectorRepository {
         }
 
         // Now perform the update
-        let (_, connector) = connectors.get_mut(&id).unwrap();
+        let (_, connector) = connectors.get_mut(&id).ok_or_else(|| DbError::NotFound {
+            entity: "Connector".to_string(),
+            id: id.to_string(),
+        })?;
 
         if let Some(name) = &update.name {
             connector.name = name.clone();
@@ -332,7 +335,10 @@ impl ConnectorRepository for MockConnectorRepository {
         }
 
         // Now perform the update
-        let (_, connector) = connectors.get_mut(&id).unwrap();
+        let (_, connector) = connectors.get_mut(&id).ok_or_else(|| DbError::NotFound {
+            entity: "Connector".to_string(),
+            id: id.to_string(),
+        })?;
 
         if let Some(name) = &update.name {
             connector.name = name.clone();
@@ -410,7 +416,10 @@ impl ConnectorRepository for MockConnectorRepository {
             });
         }
 
-        let (_, connector) = connectors.get_mut(&id).unwrap();
+        let (_, connector) = connectors.get_mut(&id).ok_or_else(|| DbError::NotFound {
+            entity: "Connector".to_string(),
+            id: id.to_string(),
+        })?;
         connector.status = status;
         connector.updated_at = Utc::now();
         Ok(connector.clone())
@@ -449,7 +458,10 @@ impl ConnectorRepository for MockConnectorRepository {
             });
         }
 
-        let (_, connector) = connectors.get_mut(&id).unwrap();
+        let (_, connector) = connectors.get_mut(&id).ok_or_else(|| DbError::NotFound {
+            entity: "Connector".to_string(),
+            id: id.to_string(),
+        })?;
         connector.last_health_check = Some(Utc::now());
         connector.updated_at = Utc::now();
         Ok(connector.clone())

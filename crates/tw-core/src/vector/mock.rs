@@ -5,7 +5,7 @@
 
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use super::{
     CollectionConfig, CollectionInfo, DistanceMetric, SearchFilter, SearchResult, VectorMetadata,
@@ -45,14 +45,30 @@ impl MockVectorStore {
         }
     }
 
+    fn read_collections(&self) -> RwLockReadGuard<'_, HashMap<String, CollectionData>> {
+        self.collections.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn write_collections(&self) -> RwLockWriteGuard<'_, HashMap<String, CollectionData>> {
+        self.collections.write().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn read_health(&self) -> RwLockReadGuard<'_, bool> {
+        self.healthy.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn write_health(&self) -> RwLockWriteGuard<'_, bool> {
+        self.healthy.write().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Set the health status for testing health check behavior.
     pub fn set_healthy(&self, healthy: bool) {
-        *self.healthy.write().unwrap() = healthy;
+        *self.write_health() = healthy;
     }
 
     /// Get the number of collections.
     pub fn collection_count(&self) -> usize {
-        self.collections.read().unwrap().len()
+        self.read_collections().len()
     }
 
     /// Calculate cosine similarity between two vectors.
@@ -115,7 +131,7 @@ impl VectorStore for MockVectorStore {
         name: &str,
         config: CollectionConfig,
     ) -> VectorStoreResult<()> {
-        let mut collections = self.collections.write().unwrap();
+        let mut collections = self.write_collections();
 
         if collections.contains_key(name) {
             return Err(VectorStoreError::CollectionExists(name.to_string()));
@@ -133,7 +149,7 @@ impl VectorStore for MockVectorStore {
     }
 
     async fn delete_collection(&self, name: &str) -> VectorStoreResult<()> {
-        let mut collections = self.collections.write().unwrap();
+        let mut collections = self.write_collections();
 
         if collections.remove(name).is_none() {
             return Err(VectorStoreError::CollectionNotFound(name.to_string()));
@@ -143,7 +159,7 @@ impl VectorStore for MockVectorStore {
     }
 
     async fn collection_info(&self, name: &str) -> VectorStoreResult<CollectionInfo> {
-        let collections = self.collections.read().unwrap();
+        let collections = self.read_collections();
 
         let data = collections
             .get(name)
@@ -159,7 +175,7 @@ impl VectorStore for MockVectorStore {
     }
 
     async fn collection_exists(&self, name: &str) -> VectorStoreResult<bool> {
-        Ok(self.collections.read().unwrap().contains_key(name))
+        Ok(self.read_collections().contains_key(name))
     }
 
     async fn upsert(
@@ -169,7 +185,7 @@ impl VectorStore for MockVectorStore {
         embedding: &[f32],
         metadata: VectorMetadata,
     ) -> VectorStoreResult<()> {
-        let mut collections = self.collections.write().unwrap();
+        let mut collections = self.write_collections();
 
         let data = collections
             .get_mut(collection)
@@ -200,7 +216,7 @@ impl VectorStore for MockVectorStore {
         collection: &str,
         records: Vec<VectorRecord>,
     ) -> VectorStoreResult<()> {
-        let mut collections = self.collections.write().unwrap();
+        let mut collections = self.write_collections();
 
         let data = collections
             .get_mut(collection)
@@ -240,7 +256,7 @@ impl VectorStore for MockVectorStore {
         top_k: usize,
         filter: Option<SearchFilter>,
     ) -> VectorStoreResult<Vec<SearchResult>> {
-        let collections = self.collections.read().unwrap();
+        let collections = self.read_collections();
 
         let data = collections
             .get(collection)
@@ -278,7 +294,7 @@ impl VectorStore for MockVectorStore {
     }
 
     async fn delete(&self, collection: &str, id: &str) -> VectorStoreResult<()> {
-        let mut collections = self.collections.write().unwrap();
+        let mut collections = self.write_collections();
 
         let data = collections
             .get_mut(collection)
@@ -291,7 +307,7 @@ impl VectorStore for MockVectorStore {
     }
 
     async fn delete_batch(&self, collection: &str, ids: &[&str]) -> VectorStoreResult<()> {
-        let mut collections = self.collections.write().unwrap();
+        let mut collections = self.write_collections();
 
         let data = collections
             .get_mut(collection)
@@ -305,7 +321,7 @@ impl VectorStore for MockVectorStore {
     }
 
     async fn get(&self, collection: &str, id: &str) -> VectorStoreResult<Option<VectorRecord>> {
-        let collections = self.collections.read().unwrap();
+        let collections = self.read_collections();
 
         let data = collections
             .get(collection)
@@ -315,7 +331,7 @@ impl VectorStore for MockVectorStore {
     }
 
     async fn health_check(&self) -> bool {
-        *self.healthy.read().unwrap()
+        *self.read_health()
     }
 }
 

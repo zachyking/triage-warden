@@ -161,7 +161,10 @@ impl UserRepository for MockUserRepository {
         }
 
         // Now perform the update
-        let user = users.get_mut(&id).unwrap();
+        let user = users.get_mut(&id).ok_or_else(|| DbError::NotFound {
+            entity: "User".to_string(),
+            id: id.to_string(),
+        })?;
 
         if let Some(email) = &update.email {
             user.email = email.clone();
@@ -306,7 +309,10 @@ impl UserRepository for MockUserRepository {
         }
 
         // Now perform the update
-        let user = users.get_mut(&id).unwrap();
+        let user = users.get_mut(&id).ok_or_else(|| DbError::NotFound {
+            entity: "User".to_string(),
+            id: id.to_string(),
+        })?;
 
         if let Some(email) = &update.email {
             user.email = email.clone();

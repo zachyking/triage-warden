@@ -40,12 +40,12 @@ impl MockTenantRepository {
 
     /// Creates a mock repository with a default tenant already inserted.
     pub fn with_default_tenant() -> Self {
-        let default_tenant = Tenant::with_id(
-            Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap(),
-            "default",
-            "Default Organization",
-        )
-        .expect("Default tenant should be valid");
+        let default_tenant_id = Uuid::from_u128(1);
+        let Ok(default_tenant) =
+            Tenant::with_id(default_tenant_id, "default", "Default Organization")
+        else {
+            return Self::new();
+        };
         Self::with_tenants(vec![default_tenant])
     }
 
