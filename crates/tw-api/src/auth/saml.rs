@@ -21,6 +21,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use regex::Regex;
+use rust_xmlsec::{decode_and_verify_signed_document, Output as XmlSigOutput};
 use serde::Deserialize;
 use std::collections::HashMap;
 use subtle::ConstantTimeEq;
@@ -180,6 +181,7 @@ async fn acs(
     let xml = String::from_utf8(xml_bytes)
         .map_err(|e| ApiError::Unauthorized(format!("invalid SAML XML encoding: {e}")))?;
 
+    verify_saml_xmldsig(&xml)?;
     let parsed = parse_saml_assertion(&xml, &cfg.attribute_mapping)?;
     validate_assertion(&parsed, &cfg, expected_request_id.as_deref())?;
 
@@ -532,6 +534,17 @@ fn validate_assertion(
     }
 
     Ok(())
+}
+
+fn verify_saml_xmldsig(xml: &str) -> Result<(), ApiError> {
+    match decode_and_verify_signed_document(xml)
+        .map_err(|e| ApiError::Unauthorized(format!("SAML XMLDSIG verification failed: {e}")))?
+    {
+        XmlSigOutput::Verified { .. } => Ok(()),
+        XmlSigOutput::Unsigned(_) => Err(ApiError::Unauthorized(
+            "Unsigned SAML assertion rejected".to_string(),
+        )),
+    }
 }
 
 fn parse_saml_time(value: &str) -> Result<DateTime<Utc>, ApiError> {

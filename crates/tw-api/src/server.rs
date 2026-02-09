@@ -335,12 +335,19 @@ impl ApiServer {
 
         // Use into_make_service_with_connect_info to provide client IP addresses
         // to handlers via the ConnectInfo extractor
-        axum::serve(
+        let stage6_job_handles = crate::jobs::spawn_stage6_scheduler(self.state.clone());
+        let serve_result = axum::serve(
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
         )
         .with_graceful_shutdown(shutdown_signal())
-        .await?;
+        .await;
+
+        for handle in stage6_job_handles {
+            handle.abort();
+        }
+
+        serve_result?;
 
         info!("API server shut down gracefully");
         Ok(())
@@ -360,12 +367,19 @@ impl ApiServer {
 
         // Use into_make_service_with_connect_info to provide client IP addresses
         // to handlers via the ConnectInfo extractor
-        axum::serve(
+        let stage6_job_handles = crate::jobs::spawn_stage6_scheduler(self.state.clone());
+        let serve_result = axum::serve(
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
         )
         .with_graceful_shutdown(shutdown)
-        .await?;
+        .await;
+
+        for handle in stage6_job_handles {
+            handle.abort();
+        }
+
+        serve_result?;
 
         info!("API server shut down gracefully");
         Ok(())

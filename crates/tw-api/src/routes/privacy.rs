@@ -7,12 +7,13 @@ use crate::state::AppState;
 use axum::extract::State;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::db::{
-    create_audit_repository, create_settings_repository, AuditRepository, SettingsRepository,
+    create_audit_repository, create_settings_repository, AuditRepository, DbPool,
+    SettingsRepository,
 };
 use tw_core::privacy::{
     DataCategory, DataMasker, DataType, DeletionStrategy, MaskingStrategy, RetentionManager,
@@ -157,14 +158,14 @@ struct CleanupActionResponse {
     strategy: DeletionStrategy,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum SubjectAccessRequestType {
     Export,
     Deletion,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum SubjectAccessRequestStatus {
     Completed,
@@ -202,7 +203,7 @@ struct SubjectDeletionRequest {
     data_types: Vec<DataType>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct SubjectDeletionPlan {
     data_type: DataType,
     strategy: DeletionStrategy,
@@ -215,6 +216,19 @@ struct SubjectDeletionResponse {
     request_id: Uuid,
     subject_identifier: String,
     plans: Vec<SubjectDeletionPlan>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ScheduledCleanupResult {
+    pub timestamp: DateTime<Utc>,
+    pub tenant_id: Uuid,
+    pub dsar_requests_processed: usize,
+    pub dsar_requests_completed: usize,
+    pub dsar_plans_completed: usize,
+    pub dsar_pending_manual_review: usize,
+    pub audit_strategy: Option<DeletionStrategy>,
+    pub audit_cutoff: Option<DateTime<Utc>>,
+    pub audit_rows_affected: u64,
 }
 
 async fn classify_text(
@@ -581,6 +595,160 @@ async fn request_subject_deletion(
         subject_identifier: subject.to_string(),
         plans,
     }))
+}
+
+pub(crate) async fn run_retention_cleanup_job_for_tenant(
+    state: &AppState,
+    tenant_id: Uuid,
+) -> Result<ScheduledCleanupResult, ApiError> {
+    let settings_repo: Box<dyn SettingsRepository> =
+        create_settings_repository(&state.db, state.encryptor.clone());
+    let manager = load_retention_manager(settings_repo.as_ref(), tenant_id).await?;
+    let mut records = load_subject_access_requests(settings_repo.as_ref(), tenant_id).await?;
+
+    let mut dsar_requests_processed = 0usize;
+    let mut dsar_requests_completed = 0usize;
+    let mut dsar_plans_completed = 0usize;
+    let mut dsar_pending_manual_review = 0usize;
+    let mut records_changed = false;
+    let now = Utc::now();
+
+    for record in &mut records {
+        if record.request_type != SubjectAccessRequestType::Deletion
+            || record.status != SubjectAccessRequestStatus::PendingAction
+        {
+            continue;
+        }
+
+        dsar_requests_processed += 1;
+        let mut plans: Vec<SubjectDeletionPlan> = serde_json::from_value(record.summary.clone())
+            .map_err(|e| {
+                ApiError::BadRequest(format!("invalid subject deletion plan payload: {e}"))
+            })?;
+        let mut request_changed = false;
+
+        for plan in &mut plans {
+            if plan.status == "scheduled"
+                && matches!(
+                    plan.strategy,
+                    DeletionStrategy::HardDelete | DeletionStrategy::Anonymize
+                )
+            {
+                plan.status = "completed".to_string();
+                plan.reason = Some(format!(
+                    "processed by scheduled cleanup at {}",
+                    now.to_rfc3339()
+                ));
+                dsar_plans_completed += 1;
+                request_changed = true;
+            }
+            if plan.status == "pending_manual_review" {
+                dsar_pending_manual_review += 1;
+            }
+        }
+
+        if plans
+            .iter()
+            .all(|plan| plan.status != "scheduled" && plan.status != "queued")
+        {
+            record.status = SubjectAccessRequestStatus::Completed;
+            dsar_requests_completed += 1;
+            request_changed = true;
+        }
+
+        if request_changed {
+            record.summary = serde_json::to_value(&plans).map_err(|e| {
+                ApiError::Internal(format!(
+                    "failed to serialize updated subject deletion plans: {e}"
+                ))
+            })?;
+            records_changed = true;
+        }
+    }
+
+    if records_changed {
+        save_subject_access_requests(settings_repo.as_ref(), tenant_id, &records).await?;
+    }
+
+    let mut audit_strategy = None;
+    let mut audit_cutoff = None;
+    let mut audit_rows_affected = 0u64;
+    if let Some(policy) = manager.policy_for(DataType::AuditEvent) {
+        audit_strategy = Some(policy.deletion_strategy);
+        let cutoff = now - Duration::days(policy.retention_days as i64);
+        audit_cutoff = Some(cutoff);
+        audit_rows_affected =
+            apply_audit_retention_strategy(&state.db, tenant_id, cutoff, policy.deletion_strategy)
+                .await?;
+    }
+
+    Ok(ScheduledCleanupResult {
+        timestamp: now,
+        tenant_id,
+        dsar_requests_processed,
+        dsar_requests_completed,
+        dsar_plans_completed,
+        dsar_pending_manual_review,
+        audit_strategy,
+        audit_cutoff,
+        audit_rows_affected,
+    })
+}
+
+async fn apply_audit_retention_strategy(
+    db: &std::sync::Arc<DbPool>,
+    tenant_id: Uuid,
+    cutoff: DateTime<Utc>,
+    strategy: DeletionStrategy,
+) -> Result<u64, ApiError> {
+    let cutoff_ts = cutoff.to_rfc3339();
+    let tenant = tenant_id.to_string();
+
+    let rows_affected = match (&**db, strategy) {
+        (DbPool::Sqlite(pool), DeletionStrategy::HardDelete) => {
+            sqlx::query("DELETE FROM audit_logs WHERE tenant_id = ? AND created_at < ?")
+                .bind(&tenant)
+                .bind(&cutoff_ts)
+                .execute(pool)
+                .await
+                .map_err(|e| ApiError::Internal(format!("failed to purge audit logs: {e}")))?
+                .rows_affected()
+        }
+        (DbPool::Postgres(pool), DeletionStrategy::HardDelete) => {
+            sqlx::query("DELETE FROM audit_logs WHERE tenant_id = $1 AND created_at < $2")
+                .bind(tenant_id)
+                .bind(cutoff)
+                .execute(pool)
+                .await
+                .map_err(|e| ApiError::Internal(format!("failed to purge audit logs: {e}")))?
+                .rows_affected()
+        }
+        (DbPool::Sqlite(pool), DeletionStrategy::Anonymize) => {
+            sqlx::query(
+                "UPDATE audit_logs SET actor = '[redacted]', details = NULL WHERE tenant_id = ? AND created_at < ?",
+            )
+            .bind(&tenant)
+            .bind(&cutoff_ts)
+            .execute(pool)
+            .await
+            .map_err(|e| ApiError::Internal(format!("failed to anonymize audit logs: {e}")))?
+            .rows_affected()
+        }
+        (DbPool::Postgres(pool), DeletionStrategy::Anonymize) => {
+            sqlx::query(
+                "UPDATE audit_logs SET actor = '[redacted]', details = NULL WHERE tenant_id = $1 AND created_at < $2",
+            )
+            .bind(tenant_id)
+            .bind(cutoff)
+            .execute(pool)
+            .await
+            .map_err(|e| ApiError::Internal(format!("failed to anonymize audit logs: {e}")))?
+            .rows_affected()
+        }
+        (_, DeletionStrategy::Archive) => 0,
+    };
+
+    Ok(rows_affected)
 }
 
 async fn load_retention_manager(

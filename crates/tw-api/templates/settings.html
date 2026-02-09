@@ -27,6 +27,11 @@
     {% endif %}
     Safety
   </a>
+  <a href="/settings?tab=sso" class="tab{% if tab == "sso" %} active{% endif %}">SSO</a>
+  <a href="/settings?tab=rbac" class="tab{% if tab == "rbac" %} active{% endif %}">RBAC</a>
+  <a href="/settings?tab=privacy" class="tab{% if tab == "privacy" %} active{% endif %}">Privacy</a>
+  <a href="/settings?tab=guardrails" class="tab{% if tab == "guardrails" %} active{% endif %}">Guardrails</a>
+  <a href="/settings?tab=compliance" class="tab{% if tab == "compliance" %} active{% endif %}">Compliance</a>
 </div>
 
 {% if tab == "general" %}
@@ -704,6 +709,248 @@ function updateModelOptions() {
       <span class="text-critical">POST</span> /api/kill-switch/activate<br><br>
       <span class="text-muted"># Deactivate kill switch</span><br>
       <span class="text-success">POST</span> /api/kill-switch/deactivate
+    </div>
+  </div>
+</div>
+{% else if tab == "sso" %}
+<div class="grid grid-2 gap-4">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">OIDC</h3>
+    </div>
+    <div class="card-body">
+      <p class="text-sm mb-3">
+        <span class="badge badge-{% if sso.oidc_enabled %}success{% else %}info{% endif %}">
+          {% if sso.oidc_enabled %}Configured{% else %}Not Configured{% endif %}
+        </span>
+      </p>
+      <p class="text-sm text-muted mb-2">
+        Issuer:
+        {% if let Some(issuer) = sso.oidc_issuer %}
+          <code class="bg-surface px-1 rounded">{{ issuer }}</code>
+        {% else %}
+          not set
+        {% endif %}
+      </p>
+      <p class="text-sm text-muted mb-2">
+        Client ID: {% if sso.oidc_client_id_set %}set{% else %}not set{% endif %}
+      </p>
+      <p class="text-sm text-muted">
+        JWKS URI:
+        {% if let Some(uri) = sso.oidc_jwks_uri %}
+          <code class="bg-surface px-1 rounded">{{ uri }}</code>
+        {% else %}
+          discovery default
+        {% endif %}
+      </p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">SAML</h3>
+    </div>
+    <div class="card-body">
+      <p class="text-sm mb-3">
+        <span class="badge badge-{% if sso.saml_enabled %}success{% else %}info{% endif %}">
+          {% if sso.saml_enabled %}Configured{% else %}Not Configured{% endif %}
+        </span>
+      </p>
+      <p class="text-sm text-muted mb-2">
+        Provider:
+        {% if let Some(provider) = sso.saml_provider %}
+          {{ provider }}
+        {% else %}
+          default
+        {% endif %}
+      </p>
+      <p class="text-sm text-muted mb-2">
+        Entity ID:
+        {% if let Some(entity_id) = sso.saml_entity_id %}
+          <code class="bg-surface px-1 rounded">{{ entity_id }}</code>
+        {% else %}
+          not set
+        {% endif %}
+      </p>
+      <p class="text-sm text-muted mb-2">
+        ACS URL:
+        {% if let Some(acs_url) = sso.saml_acs_url %}
+          <code class="bg-surface px-1 rounded">{{ acs_url }}</code>
+        {% else %}
+          not set
+        {% endif %}
+      </p>
+      <p class="text-sm text-muted mb-2">
+        Expected Issuer:
+        {% if let Some(issuer) = sso.saml_expected_issuer %}
+          <code class="bg-surface px-1 rounded">{{ issuer }}</code>
+        {% else %}
+          optional (not set)
+        {% endif %}
+      </p>
+      <p class="text-sm text-muted mb-2">
+        Certificate: {% if sso.saml_cert_configured %}configured{% else %}missing{% endif %}
+      </p>
+      <p class="text-sm text-muted mb-2">
+        Private Key: {% if sso.saml_private_key_configured %}configured{% else %}not configured{% endif %}
+      </p>
+      <p class="text-sm text-muted">
+        Enforce MFA: {% if sso.saml_require_mfa %}enabled{% else %}disabled{% endif %}
+      </p>
+    </div>
+  </div>
+</div>
+
+<div class="card mt-4">
+  <div class="card-header">
+    <h3 class="card-title">Authentication Endpoints</h3>
+  </div>
+  <div class="card-body text-sm text-muted">
+    <p><code>/auth/oidc/login</code>, <code>/auth/oidc/callback</code>, <code>/auth/oidc/logout</code>, <code>/auth/oidc/refresh</code></p>
+    <p><code>/auth/saml/metadata</code>, <code>/auth/saml/login</code>, <code>/auth/saml/acs</code>, <code>/auth/saml/slo</code></p>
+  </div>
+</div>
+
+{% else if tab == "rbac" %}
+<div class="grid grid-3 gap-4 mb-4">
+  <div class="card"><div class="card-body"><div class="text-sm text-muted">Roles</div><div class="text-2xl font-semibold">{{ rbac.roles_count }}</div></div></div>
+  <div class="card"><div class="card-body"><div class="text-sm text-muted">Custom Roles</div><div class="text-2xl font-semibold">{{ rbac.custom_roles_count }}</div></div></div>
+  <div class="card"><div class="card-body"><div class="text-sm text-muted">Assignments</div><div class="text-2xl font-semibold">{{ rbac.assignments_count }}</div></div></div>
+</div>
+
+<div class="grid grid-3 gap-4 mb-4">
+  <div class="card"><div class="card-body"><div class="text-sm text-muted">Access Reviews</div><div class="text-2xl font-semibold">{{ rbac.access_reviews_total }}</div></div></div>
+  <div class="card"><div class="card-body"><div class="text-sm text-muted">Active Reviews</div><div class="text-2xl font-semibold">{{ rbac.access_reviews_active }}</div></div></div>
+  <div class="card"><div class="card-body"><div class="text-sm text-muted">Overdue Reviews</div><div class="text-2xl font-semibold">{% if rbac.access_reviews_overdue > 0 %}<span class="text-critical">{{ rbac.access_reviews_overdue }}</span>{% else %}0{% endif %}</div></div></div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">Role Management</h3>
+  </div>
+  <div class="card-body">
+    <p class="text-sm text-muted mb-4">
+      Use the RBAC API to manage roles, assignments, and access review campaigns.
+    </p>
+    <div class="bg-surface p-4 rounded font-mono text-sm">
+      <div><span class="text-primary">GET</span> /api/roles</div>
+      <div><span class="text-primary">POST</span> /api/roles</div>
+      <div><span class="text-primary">GET</span> /api/roles/access-reviews</div>
+      <div><span class="text-primary">POST</span> /api/roles/access-reviews</div>
+    </div>
+  </div>
+</div>
+
+{% else if tab == "privacy" %}
+<div class="grid grid-3 gap-4 mb-4">
+  <div class="card"><div class="card-body"><div class="text-sm text-muted">Retention Policies</div><div class="text-2xl font-semibold">{{ privacy.retention_policy_count }}</div></div></div>
+  <div class="card"><div class="card-body"><div class="text-sm text-muted">Subject Access Requests</div><div class="text-2xl font-semibold">{{ privacy.subject_access_total }}</div></div></div>
+  <div class="card"><div class="card-body"><div class="text-sm text-muted">Pending Deletions</div><div class="text-2xl font-semibold">{% if privacy.subject_access_pending > 0 %}<span class="text-warning">{{ privacy.subject_access_pending }}</span>{% else %}0{% endif %}</div></div></div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">Cleanup Scheduler</h3>
+  </div>
+  <div class="card-body">
+    <p class="text-sm text-muted mb-3">
+      Automated retention cleanup runs in the background and persists scheduler status per tenant.
+    </p>
+    <p class="text-sm">
+      Last cleanup run:
+      {% if let Some(last_cleanup_job) = privacy.last_cleanup_job %}
+        <span class="font-semibold">{{ last_cleanup_job }}</span>
+      {% else %}
+        <span class="text-muted">not run yet</span>
+      {% endif %}
+    </p>
+    <div class="bg-surface p-4 rounded font-mono text-sm mt-4">
+      <div><span class="text-primary">GET</span> /api/privacy/retention</div>
+      <div><span class="text-primary">POST</span> /api/privacy/retention/cleanup/plan</div>
+      <div><span class="text-primary">GET</span> /api/privacy/subject-access/requests</div>
+    </div>
+  </div>
+</div>
+
+{% else if tab == "guardrails" %}
+<div class="grid grid-3 gap-4 mb-4">
+  <div class="card"><div class="card-body"><div class="text-sm text-muted">Rollback Entries</div><div class="text-2xl font-semibold">{{ guardrails.rollback_entries }}</div></div></div>
+  <div class="card"><div class="card-body"><div class="text-sm text-muted">Automation Pause</div><div class="text-2xl font-semibold">{% if guardrails.automation_paused %}<span class="text-critical">Paused</span>{% else %}<span class="text-success">Active</span>{% endif %}</div></div></div>
+  <div class="card"><div class="card-body"><div class="text-sm text-muted">Kill Switch</div><div class="text-2xl font-semibold">{% if kill_switch.active %}<span class="text-critical">Active</span>{% else %}<span class="text-success">Normal</span>{% endif %}</div></div></div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">Guardrail Controls</h3>
+  </div>
+  <div class="card-body">
+    {% if let Some(reason) = guardrails.automation_pause_reason %}
+    <div class="bg-warning/10 border border-warning rounded p-3 mb-4 text-sm">
+      Automation pause reason: {{ reason }}
+    </div>
+    {% endif %}
+    <div class="bg-surface p-4 rounded font-mono text-sm">
+      <div><span class="text-primary">POST</span> /api/guardrails/simulate</div>
+      <div><span class="text-primary">POST</span> /api/guardrails/rollback/derive</div>
+      <div><span class="text-primary">GET</span> /api/guardrails/automation/pause</div>
+      <div><span class="text-primary">POST</span> /api/guardrails/automation/pause/resume</div>
+    </div>
+  </div>
+</div>
+
+{% else if tab == "compliance" %}
+<div class="grid grid-3 gap-4 mb-4">
+  <div class="card"><div class="card-body"><div class="text-sm text-muted">Reports</div><div class="text-2xl font-semibold">{{ compliance.reports_count }}</div></div></div>
+  <div class="card"><div class="card-body"><div class="text-sm text-muted">Evidence Packages</div><div class="text-2xl font-semibold">{{ compliance.evidence_packages_count }}</div></div></div>
+  <div class="card"><div class="card-body"><div class="text-sm text-muted">Integrity Alerts</div><div class="text-2xl font-semibold">{% if compliance.immutable_alerts_count > 0 %}<span class="text-critical">{{ compliance.immutable_alerts_count }}</span>{% else %}0{% endif %}</div></div></div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header">
+    <h3 class="card-title">Immutable Audit Status</h3>
+  </div>
+  <div class="card-body">
+    <p class="text-sm mb-2">
+      Last verify run:
+      {% if let Some(last_verify_timestamp) = compliance.last_verify_timestamp %}
+        <span class="font-semibold">{{ last_verify_timestamp }}</span>
+      {% else %}
+        <span class="text-muted">not run yet</span>
+      {% endif %}
+    </p>
+    <p class="text-sm mb-3">
+      Last verify result:
+      {% if let Some(last_verify_valid) = compliance.last_verify_valid %}
+        {% if last_verify_valid %}
+          <span class="text-success font-semibold">valid</span>
+        {% else %}
+          <span class="text-critical font-semibold">invalid</span>
+        {% endif %}
+      {% else %}
+        <span class="text-muted">unknown</span>
+      {% endif %}
+    </p>
+    <p class="text-sm">
+      Latest archive location:
+      {% if let Some(location) = compliance.latest_archive_location %}
+        <code class="bg-surface px-1 rounded">{{ location }}</code>
+      {% else %}
+        <span class="text-muted">internal store only</span>
+      {% endif %}
+    </p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">Compliance APIs</h3>
+  </div>
+  <div class="card-body">
+    <div class="bg-surface p-4 rounded font-mono text-sm">
+      <div><span class="text-primary">GET</span> /api/compliance/reports</div>
+      <div><span class="text-primary">POST</span> /api/compliance/reports/generate</div>
+      <div><span class="text-primary">POST</span> /api/audit/immutable/archive</div>
+      <div><span class="text-primary">POST</span> /api/audit/immutable/verify/job</div>
     </div>
   </div>
 </div>

@@ -11,7 +11,7 @@ use axum::{
     routing::get,
     Form, Router,
 };
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -21,13 +21,15 @@ use tw_core::db::{
     create_api_key_repository, create_audit_repository, create_comment_repository,
     create_connector_repository, create_incident_repository, create_knowledge_repository,
     create_lesson_repository, create_notification_repository, create_playbook_repository,
-    create_policy_repository, create_settings_repository, create_user_repository, GeneralSettings,
-    IncidentFilter, IncidentRepository, LlmSettings, Pagination, PlaybookFilter, PolicyRepository,
-    RateLimits,
+    create_policy_repository, create_rbac_repository, create_settings_repository,
+    create_user_repository, GeneralSettings, IncidentFilter, IncidentRepository, LlmSettings,
+    Pagination, PlaybookFilter, PolicyRepository, RateLimits,
 };
 use tw_core::incident::{ApprovalStatus, IncidentStatus, Severity};
 use tw_core::knowledge::{KnowledgeFilter, KnowledgeType};
 use tw_core::lesson::LessonFilter;
+use tw_core::privacy::RetentionManager;
+use tw_core::rbac::{AccessReview, ReviewStatus};
 use tw_core::{CommentType, IncidentComment, UserFilter};
 
 use crate::auth::AuthenticatedUser;
@@ -527,6 +529,47 @@ struct SettingsQuery {
     tab: String,
 }
 
+const ACCESS_REVIEWS_SETTINGS_KEY: &str = "rbac_access_reviews";
+const RETENTION_SETTINGS_KEY: &str = "privacy_retention_policies";
+const SUBJECT_ACCESS_REQUESTS_KEY: &str = "privacy_subject_access_requests";
+const PRIVACY_CLEANUP_SCHEDULER_LAST_KEY: &str = "privacy_cleanup_scheduler_last";
+const GUARDRAIL_ROLLBACKS_KEY: &str = "guardrail_rollback_registry";
+const GUARDRAIL_AUTOPAUSE_KEY: &str = "guardrail_automation_pause_state";
+const COMPLIANCE_REPORT_INDEX_KEY: &str = "compliance_report_index";
+const EVIDENCE_PACKAGE_INDEX_KEY: &str = "compliance_evidence_package_index";
+const IMMUTABLE_VERIFY_ALERTS_KEY: &str = "immutable_audit_verify_alerts";
+const IMMUTABLE_VERIFY_LAST_KEY: &str = "immutable_audit_verify_last";
+const IMMUTABLE_VERIFY_SCHEDULER_LAST_KEY: &str = "immutable_audit_verify_scheduler_last";
+const IMMUTABLE_ARCHIVE_INDEX_KEY: &str = "immutable_audit_archive_index";
+
+#[derive(Debug, Deserialize)]
+struct SubjectAccessRecordSummary {
+    status: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CleanupSchedulerSummary {
+    timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PauseStateSummary {
+    paused: bool,
+    reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct VerifySummary {
+    timestamp: DateTime<Utc>,
+    valid: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ArchiveIndexSummary {
+    archived_at: DateTime<Utc>,
+    external_archive_path: Option<String>,
+}
+
 fn default_tab() -> String {
     "general".to_string()
 }
@@ -676,6 +719,246 @@ async fn settings(
         activated_by: ks_status.activated_by,
     };
 
+    // Stage 6: SSO settings summary
+    let oidc_issuer = std::env::var("TW_OIDC_ISSUER")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let oidc_client_id = std::env::var("TW_OIDC_CLIENT_ID")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let oidc_jwks_uri = std::env::var("TW_OIDC_JWKS_URI")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let saml_entity_id = std::env::var("TW_SAML_ENTITY_ID")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let saml_acs_url = std::env::var("TW_SAML_ACS_URL")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let saml_idp_sso_url = std::env::var("TW_SAML_IDP_SSO_URL")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let saml_cert = std::env::var("TW_SAML_CERTIFICATE")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let saml_private_key = std::env::var("TW_SAML_PRIVATE_KEY")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let saml_provider = std::env::var("TW_SAML_PROVIDER")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let saml_expected_issuer = std::env::var("TW_SAML_EXPECTED_ISSUER")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let saml_require_mfa = std::env::var("TW_SAML_REQUIRE_MFA")
+        .map(|value| {
+            matches!(
+                value.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false);
+    let sso = SsoSettingsData {
+        oidc_enabled: oidc_issuer.is_some() && oidc_client_id.is_some(),
+        oidc_issuer,
+        oidc_client_id_set: oidc_client_id.is_some(),
+        oidc_jwks_uri,
+        saml_enabled: saml_entity_id.is_some()
+            && saml_acs_url.is_some()
+            && saml_idp_sso_url.is_some()
+            && saml_cert.is_some(),
+        saml_provider,
+        saml_entity_id,
+        saml_acs_url,
+        saml_expected_issuer,
+        saml_require_mfa,
+        saml_cert_configured: saml_cert.is_some(),
+        saml_private_key_configured: saml_private_key.is_some(),
+    };
+
+    // Stage 6: RBAC summary
+    let rbac_repo = create_rbac_repository(&state.db);
+    let _ = rbac_repo.ensure_builtin_roles(tenant_id).await;
+    let roles = rbac_repo
+        .list_roles(tenant_id, true)
+        .await
+        .unwrap_or_default();
+    let custom_roles_count = roles.iter().filter(|role| !role.is_system).count();
+    let users = create_user_repository(&state.db)
+        .list(&UserFilter {
+            tenant_id: Some(tenant_id),
+            ..Default::default()
+        })
+        .await
+        .unwrap_or_default();
+    let mut assignments_count = 0usize;
+    for listed_user in users {
+        assignments_count += rbac_repo
+            .list_user_assignments(tenant_id, listed_user.id)
+            .await
+            .map(|rows| rows.len())
+            .unwrap_or(0);
+    }
+    let access_reviews: Vec<AccessReview> = settings_repo
+        .get_raw(tenant_id, ACCESS_REVIEWS_SETTINGS_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default();
+    let now = Utc::now();
+    let access_reviews_total = access_reviews.len();
+    let access_reviews_active = access_reviews
+        .iter()
+        .filter(|review| matches!(review.status, ReviewStatus::Active | ReviewStatus::Overdue))
+        .count();
+    let access_reviews_overdue = access_reviews
+        .iter()
+        .filter(|review| {
+            matches!(review.status, ReviewStatus::Overdue)
+                || (matches!(review.status, ReviewStatus::Active) && review.deadline < now)
+        })
+        .count();
+    let rbac = RbacSettingsData {
+        roles_count: roles.len(),
+        custom_roles_count,
+        assignments_count,
+        access_reviews_total,
+        access_reviews_active,
+        access_reviews_overdue,
+    };
+
+    // Stage 6: Privacy summary
+    let retention_policy_count = settings_repo
+        .get_raw(tenant_id, RETENTION_SETTINGS_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(&raw).ok())
+        .map(|policies| policies.len())
+        .unwrap_or_else(|| RetentionManager::default().all_policies().len());
+    let subject_access_records: Vec<SubjectAccessRecordSummary> = settings_repo
+        .get_raw(tenant_id, SUBJECT_ACCESS_REQUESTS_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default();
+    let subject_access_pending = subject_access_records
+        .iter()
+        .filter(|record| record.status == "pending_action")
+        .count();
+    let last_cleanup_job = settings_repo
+        .get_raw(tenant_id, PRIVACY_CLEANUP_SCHEDULER_LAST_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<CleanupSchedulerSummary>(&raw).ok())
+        .map(|summary| {
+            summary
+                .timestamp
+                .format("%Y-%m-%d %H:%M:%S UTC")
+                .to_string()
+        });
+    let privacy = PrivacySettingsData {
+        retention_policy_count,
+        subject_access_total: subject_access_records.len(),
+        subject_access_pending,
+        last_cleanup_job,
+    };
+
+    // Stage 6: Guardrails summary
+    let rollback_entries = settings_repo
+        .get_raw(tenant_id, GUARDRAIL_ROLLBACKS_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(&raw).ok())
+        .map(|entries| entries.len())
+        .unwrap_or(0);
+    let pause_state = settings_repo
+        .get_raw(tenant_id, GUARDRAIL_AUTOPAUSE_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<PauseStateSummary>(&raw).ok());
+    let guardrails = GuardrailsSettingsData {
+        rollback_entries,
+        automation_paused: pause_state.as_ref().is_some_and(|state| state.paused),
+        automation_pause_reason: pause_state.and_then(|state| {
+            if state.paused {
+                Some(state.reason)
+            } else {
+                None
+            }
+        }),
+    };
+
+    // Stage 6: Compliance + immutable audit summary
+    let reports_count = settings_repo
+        .get_raw(tenant_id, COMPLIANCE_REPORT_INDEX_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(&raw).ok())
+        .map(|entries| entries.len())
+        .unwrap_or(0);
+    let evidence_packages_count = settings_repo
+        .get_raw(tenant_id, EVIDENCE_PACKAGE_INDEX_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(&raw).ok())
+        .map(|entries| entries.len())
+        .unwrap_or(0);
+    let immutable_alerts_count = settings_repo
+        .get_raw(tenant_id, IMMUTABLE_VERIFY_ALERTS_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(&raw).ok())
+        .map(|entries| entries.len())
+        .unwrap_or(0);
+    let mut verify_summary = settings_repo
+        .get_raw(tenant_id, IMMUTABLE_VERIFY_SCHEDULER_LAST_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<VerifySummary>(&raw).ok());
+    if verify_summary.is_none() {
+        verify_summary = settings_repo
+            .get_raw(tenant_id, IMMUTABLE_VERIFY_LAST_KEY)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|raw| serde_json::from_str::<VerifySummary>(&raw).ok());
+    }
+    let latest_archive_location = settings_repo
+        .get_raw(tenant_id, IMMUTABLE_ARCHIVE_INDEX_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<Vec<ArchiveIndexSummary>>(&raw).ok())
+        .and_then(|mut entries| {
+            entries.sort_by(|a, b| b.archived_at.cmp(&a.archived_at));
+            entries
+                .into_iter()
+                .find_map(|entry| entry.external_archive_path)
+        });
+    let compliance = ComplianceSettingsData {
+        reports_count,
+        evidence_packages_count,
+        immutable_alerts_count,
+        last_verify_timestamp: verify_summary.as_ref().map(|summary| {
+            summary
+                .timestamp
+                .format("%Y-%m-%d %H:%M:%S UTC")
+                .to_string()
+        }),
+        last_verify_valid: verify_summary.as_ref().map(|summary| summary.valid),
+        latest_archive_location,
+    };
+
     let template = SettingsTemplate {
         active_nav: "settings".to_string(),
         critical_count: nav.critical_count,
@@ -692,6 +975,11 @@ async fn settings(
         llm_settings,
         api_keys,
         kill_switch,
+        sso,
+        rbac,
+        privacy,
+        guardrails,
+        compliance,
     };
 
     Ok(HtmlTemplate(template))

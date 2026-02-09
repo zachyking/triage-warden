@@ -55,6 +55,7 @@ rand = "0.8"
 time = "0.3"
 base64 = "0.22"
 jsonwebtoken = "9.3"
+rust-xmlsec = "1"
 
 # Metrics
 metrics.workspace = true

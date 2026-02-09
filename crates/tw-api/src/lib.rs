@@ -8,6 +8,7 @@
 pub mod auth;
 pub mod dto;
 pub mod error;
+pub mod jobs;
 pub mod middleware;
 pub mod rate_limit;
 pub mod routes;

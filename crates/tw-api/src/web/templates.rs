@@ -323,6 +323,11 @@ pub struct SettingsTemplate {
     pub llm_settings: LlmSettingsData,
     pub api_keys: Vec<ApiKeyData>,
     pub kill_switch: KillSwitchData,
+    pub sso: SsoSettingsData,
+    pub rbac: RbacSettingsData,
+    pub privacy: PrivacySettingsData,
+    pub guardrails: GuardrailsSettingsData,
+    pub compliance: ComplianceSettingsData,
 }
 
 /// Kill switch status data for the settings template.
@@ -390,6 +395,57 @@ pub struct ApiKeyData {
     pub expires_at: Option<String>,
     pub last_used_at: Option<String>,
     pub created_at: String,
+}
+
+/// SSO configuration summary for settings UI.
+pub struct SsoSettingsData {
+    pub oidc_enabled: bool,
+    pub oidc_issuer: Option<String>,
+    pub oidc_client_id_set: bool,
+    pub oidc_jwks_uri: Option<String>,
+    pub saml_enabled: bool,
+    pub saml_provider: Option<String>,
+    pub saml_entity_id: Option<String>,
+    pub saml_acs_url: Option<String>,
+    pub saml_expected_issuer: Option<String>,
+    pub saml_require_mfa: bool,
+    pub saml_cert_configured: bool,
+    pub saml_private_key_configured: bool,
+}
+
+/// RBAC summary for settings UI.
+pub struct RbacSettingsData {
+    pub roles_count: usize,
+    pub custom_roles_count: usize,
+    pub assignments_count: usize,
+    pub access_reviews_total: usize,
+    pub access_reviews_active: usize,
+    pub access_reviews_overdue: usize,
+}
+
+/// Privacy summary for settings UI.
+pub struct PrivacySettingsData {
+    pub retention_policy_count: usize,
+    pub subject_access_total: usize,
+    pub subject_access_pending: usize,
+    pub last_cleanup_job: Option<String>,
+}
+
+/// Guardrail summary for settings UI.
+pub struct GuardrailsSettingsData {
+    pub rollback_entries: usize,
+    pub automation_paused: bool,
+    pub automation_pause_reason: Option<String>,
+}
+
+/// Compliance and immutable audit summary for settings UI.
+pub struct ComplianceSettingsData {
+    pub reports_count: usize,
+    pub evidence_packages_count: usize,
+    pub immutable_alerts_count: usize,
+    pub last_verify_timestamp: Option<String>,
+    pub last_verify_valid: Option<bool>,
+    pub latest_archive_location: Option<String>,
 }
 
 // ============================================

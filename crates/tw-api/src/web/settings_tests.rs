@@ -395,6 +395,153 @@ async fn test_settings_notifications_tab() {
     );
 }
 
+#[tokio::test]
+async fn test_settings_sso_tab() {
+    let app = setup_test_app().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/settings?tab=sso")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_str = String::from_utf8(body.to_vec()).unwrap();
+
+    assert!(
+        body_str.contains("OIDC"),
+        "SSO tab should render OIDC section"
+    );
+    assert!(
+        body_str.contains("SAML"),
+        "SSO tab should render SAML section"
+    );
+}
+
+#[tokio::test]
+async fn test_settings_rbac_tab() {
+    let app = setup_test_app().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/settings?tab=rbac")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_str = String::from_utf8(body.to_vec()).unwrap();
+
+    assert!(
+        body_str.contains("Role Management"),
+        "RBAC tab should render role management section"
+    );
+    assert!(
+        body_str.contains("Access Reviews"),
+        "RBAC tab should render access review metrics"
+    );
+}
+
+#[tokio::test]
+async fn test_settings_privacy_tab() {
+    let app = setup_test_app().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/settings?tab=privacy")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_str = String::from_utf8(body.to_vec()).unwrap();
+
+    assert!(
+        body_str.contains("Cleanup Scheduler"),
+        "Privacy tab should render cleanup scheduler details"
+    );
+}
+
+#[tokio::test]
+async fn test_settings_guardrails_tab() {
+    let app = setup_test_app().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/settings?tab=guardrails")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_str = String::from_utf8(body.to_vec()).unwrap();
+
+    assert!(
+        body_str.contains("Guardrail Controls"),
+        "Guardrails tab should render control APIs"
+    );
+}
+
+#[tokio::test]
+async fn test_settings_compliance_tab() {
+    let app = setup_test_app().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/settings?tab=compliance")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_str = String::from_utf8(body.to_vec()).unwrap();
+
+    assert!(
+        body_str.contains("Immutable Audit Status"),
+        "Compliance tab should render immutable audit status"
+    );
+    assert!(
+        body_str.contains("Compliance APIs"),
+        "Compliance tab should render API references"
+    );
+}
+
 // ==============================================
 // Settings Modal Endpoints Tests
 // ==============================================

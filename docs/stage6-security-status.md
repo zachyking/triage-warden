@@ -17,7 +17,8 @@ Implemented:
 
 Implemented:
 - SP metadata/login/ACS/SLO endpoints (`/auth/saml/*`).
-- Assertion validation for audience, issuer (optional configured), validity window, signature presence, certificate pinning.
+- Cryptographic XMLDSIG signature verification integrated in ACS (canonicalization + digest/signature verification).
+- Assertion validation for audience, issuer (optional configured), validity window, and certificate pinning.
 - Request/response correlation via `InResponseTo` against stored AuthnRequest ID.
 - Destination/recipient validation against configured ACS URL.
 - RelayState validation and open-redirect protection.
@@ -31,12 +32,16 @@ Implemented:
 - SoD rules + enforcement/warn/audit behavior on assignment.
 - Access review campaign model and API workflow.
 - Reminder and attestation decision recording with optional role revocation application.
-- Route-level RBAC middleware enforced on Stage 6 APIs:
+- Route-level RBAC middleware enforced across API route groups (except intentionally public auth/webhook/health/metrics routes), including:
   - `/api(/v1)/roles` -> `role:manage`
   - `/api(/v1)/audit` -> `audit_log:read`
   - `/api(/v1)/compliance` -> `compliance:read`
   - `/api(/v1)/privacy` -> `privacy:read`
   - `/api(/v1)/guardrails` -> `guardrail:read`
+  - `/api(/v1)/connectors` -> `connector:read`
+  - `/api(/v1)/settings` -> `settings:read`
+  - `/api(/v1)/api-keys` -> `api_key:manage`
+  - Incident-adjacent groups (`feedback`, `comments`, `activity`, `handoffs`, `assets`, `identities`, `iocs`, `lessons`) -> `incident:read`
 
 ## AI Privacy (6.3)
 
@@ -49,6 +54,7 @@ Implemented:
   - `GET /api(/v1)/privacy/subject-access/requests`
   - `POST /api(/v1)/privacy/subject-access/export`
   - `POST /api(/v1)/privacy/subject-access/delete`
+- Scheduled retention cleanup executor with DSAR plan progression + audit-retention action application.
 - Local/cloud routing decision API for sensitive prompts.
 - Python ReAct routing support with sensitivity-aware provider selection and AI interaction audit hooks.
 
@@ -72,11 +78,15 @@ Implemented:
 - Immutable verification job with persisted integrity alerts:
   - `POST /api(/v1)/audit/immutable/verify/job`
   - `GET /api(/v1)/audit/immutable/verify/alerts`
+- Scheduled immutable verification orchestration with tenant-scoped persisted scheduler status.
 - Immutable archive snapshots with index and latest retrieval:
   - `POST /api(/v1)/audit/immutable/archive`
   - `GET /api(/v1)/audit/immutable/archive/index`
   - `GET /api(/v1)/audit/immutable/archive/latest`
-  - Optional external filesystem archive when `TW_IMMUTABLE_ARCHIVE_DIR` is configured.
+  - External archival targets:
+    - Filesystem (`TW_IMMUTABLE_ARCHIVE_DIR` / `TW_IMMUTABLE_ARCHIVE_TARGET=filesystem`)
+    - S3 (`TW_IMMUTABLE_ARCHIVE_TARGET=s3` + S3 credentials/bucket envs)
+    - Azure Blob (`TW_IMMUTABLE_ARCHIVE_TARGET=azure_blob` + Azure account/container/key envs)
 - Compliance report generation, retrieval, listing, and checksum verification:
   - `GET /api(/v1)/compliance/reports`
   - `POST /api(/v1)/compliance/reports/generate`
@@ -94,8 +104,4 @@ Implemented:
 ## Remaining Work (Stage 6 scope)
 
 Items that still require broader product/system work beyond current API/core implementation:
-- External immutable audit archival targets (S3/Azure Blob) and scheduled verify-job orchestration.
-- End-to-end UI for roles/access-review/privacy/guardrails/compliance dashboards.
-- Full endpoint-by-endpoint RBAC annotations across all routes.
-- Full cryptographic SAML XML signature verification (XMLDSIG canonicalization/verification library integration).
-- Scheduled retention cleanup executors and DSAR deletion orchestration jobs.
+- Security hardening items tracked outside Stage 6 implementation scope.
