@@ -40,8 +40,8 @@ async fn test_incident_crud_postgres() {
 
     sqlx::query(
         r#"
-        INSERT INTO incidents (id, tenant_id, alert_type, alert_data, status, created_at, updated_at)
-        VALUES ($1, $2, 'email_security', $3, 'pending', NOW(), NOW())
+        INSERT INTO incidents (id, tenant_id, source, severity, alert_data, status, created_at, updated_at)
+        VALUES ($1, $2, 'email_security', 'high', $3, 'new', NOW(), NOW())
         "#,
     )
     .bind(incident_id)
@@ -52,15 +52,15 @@ async fn test_incident_crud_postgres() {
     .expect("Failed to create incident");
 
     // Retrieve the incident
-    let row = sqlx::query("SELECT id, alert_type, status FROM incidents WHERE id = $1")
+    let row = sqlx::query("SELECT id, source, status FROM incidents WHERE id = $1")
         .bind(incident_id)
         .fetch_one(&pool)
         .await
         .expect("Failed to fetch incident");
 
     assert_eq!(row.get::<Uuid, _>("id"), incident_id);
-    assert_eq!(row.get::<String, _>("alert_type"), "email_security");
-    assert_eq!(row.get::<String, _>("status"), "pending");
+    assert_eq!(row.get::<String, _>("source"), "email_security");
+    assert_eq!(row.get::<String, _>("status"), "new");
 }
 
 /// Test that playbooks can be stored and retrieved from PostgreSQL.
@@ -86,25 +86,15 @@ async fn test_playbook_crud_postgres() {
 
     // Create a playbook
     let playbook_id = Uuid::new_v4();
-    let playbook_yaml = r#"
-name: Test Playbook
-description: A test playbook for integration testing
-alert_types:
-  - email_security
-steps:
-  - name: Check sender reputation
-    tool: lookup_domain
-    "#;
 
     sqlx::query(
         r#"
-        INSERT INTO playbooks (id, tenant_id, name, description, alert_types, playbook_yaml, enabled, created_at, updated_at)
-        VALUES ($1, $2, 'Test Playbook', 'A test playbook', ARRAY['email_security']::text[], $3, true, NOW(), NOW())
+        INSERT INTO playbooks (id, tenant_id, name, description, trigger_type, stages, enabled, created_at, updated_at)
+        VALUES ($1, $2, 'Test Playbook', 'A test playbook', 'alert_triggered', '[]'::jsonb, true, NOW(), NOW())
         "#,
     )
     .bind(playbook_id)
     .bind(tenant_id)
-    .bind(playbook_yaml)
     .execute(&pool)
     .await
     .expect("Failed to create playbook");
@@ -154,8 +144,8 @@ async fn test_multi_tenancy_isolation_postgres() {
 
     sqlx::query(
         r#"
-        INSERT INTO incidents (id, tenant_id, alert_type, alert_data, status, created_at, updated_at)
-        VALUES ($1, $2, 'edr_detection', '{}', 'pending', NOW(), NOW())
+        INSERT INTO incidents (id, tenant_id, source, severity, alert_data, status, created_at, updated_at)
+        VALUES ($1, $2, 'edr_detection', 'medium', '{}', 'new', NOW(), NOW())
         "#,
     )
     .bind(incident_a)
@@ -166,8 +156,8 @@ async fn test_multi_tenancy_isolation_postgres() {
 
     sqlx::query(
         r#"
-        INSERT INTO incidents (id, tenant_id, alert_type, alert_data, status, created_at, updated_at)
-        VALUES ($1, $2, 'authentication', '{}', 'pending', NOW(), NOW())
+        INSERT INTO incidents (id, tenant_id, source, severity, alert_data, status, created_at, updated_at)
+        VALUES ($1, $2, 'authentication', 'low', '{}', 'new', NOW(), NOW())
         "#,
     )
     .bind(incident_b)
@@ -274,31 +264,26 @@ async fn test_feedback_aggregation_postgres() {
     .await
     .expect("Failed to create tenant");
 
-    // Check if analyst_feedback table exists (may be created by separate migration)
-    let table_exists: bool = sqlx::query_scalar(
+    // Create a user (required for analyst_id foreign key in analyst_feedback)
+    let analyst_id = Uuid::new_v4();
+    sqlx::query(
         r#"
-        SELECT EXISTS (
-            SELECT FROM information_schema.tables
-            WHERE table_name = 'analyst_feedback'
-        )
+        INSERT INTO users (id, tenant_id, email, username, password_hash, role, enabled, created_at, updated_at)
+        VALUES ($1, $2, 'analyst@test.com', 'analyst-fb', 'not-a-real-hash', 'analyst', true, NOW(), NOW())
         "#,
     )
-    .fetch_one(&pool)
+    .bind(analyst_id)
+    .bind(tenant_id)
+    .execute(&pool)
     .await
-    .unwrap_or(false);
-
-    if !table_exists {
-        // Skip test if feedback table doesn't exist yet
-        println!("Skipping feedback test - analyst_feedback table not found");
-        return;
-    }
+    .expect("Failed to create user");
 
     // Create incident
     let incident_id = Uuid::new_v4();
     sqlx::query(
         r#"
-        INSERT INTO incidents (id, tenant_id, alert_type, alert_data, status, created_at, updated_at)
-        VALUES ($1, $2, 'email_security', '{}', 'completed', NOW(), NOW())
+        INSERT INTO incidents (id, tenant_id, source, severity, alert_data, status, created_at, updated_at)
+        VALUES ($1, $2, 'email_security', 'high', '{}', 'resolved', NOW(), NOW())
         "#,
     )
     .bind(incident_id)
@@ -307,15 +292,21 @@ async fn test_feedback_aggregation_postgres() {
     .await
     .expect("Failed to create incident");
 
-    // Insert feedback
+    // Insert feedback matching actual analyst_feedback schema
     sqlx::query(
         r#"
-        INSERT INTO analyst_feedback (id, incident_id, analyst_id, verdict_correct, confidence_appropriate, notes, created_at)
-        VALUES ($1, $2, 'analyst-1', true, true, 'Good analysis', NOW())
+        INSERT INTO analyst_feedback (
+            id, incident_id, tenant_id, analyst_id,
+            original_verdict, original_severity, original_confidence,
+            feedback_type, notes, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, 'true_positive', 'high', 0.85, 'correct', 'Good analysis', NOW(), NOW())
         "#,
     )
     .bind(Uuid::new_v4())
     .bind(incident_id)
+    .bind(tenant_id)
+    .bind(analyst_id)
     .execute(&pool)
     .await
     .expect("Failed to create feedback");

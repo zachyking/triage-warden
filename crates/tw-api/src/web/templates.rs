@@ -181,9 +181,7 @@ pub struct PendingAction {
     pub proposed_by: String,
 }
 
-#[allow(dead_code)]
-pub struct RecentApproval {
-    pub id: Uuid,
+pub(crate) struct RecentApproval {
     pub incident_id: Uuid,
     pub incident_title: String,
     pub action_type: String,
@@ -351,8 +349,7 @@ pub struct ConnectorData {
     pub last_check: Option<String>,
 }
 
-#[allow(dead_code)]
-pub struct PolicyData {
+pub(crate) struct PolicyData {
     pub id: Uuid,
     pub name: String,
     pub condition: String,
@@ -386,15 +383,13 @@ pub struct NotificationChannel {
 }
 
 /// API key data for display in settings.
-#[allow(dead_code)]
-pub struct ApiKeyData {
+pub(crate) struct ApiKeyData {
     pub id: Uuid,
     pub name: String,
     pub key_prefix: String,
     pub scopes: Vec<String>,
     pub expires_at: Option<String>,
     pub last_used_at: Option<String>,
-    pub created_at: String,
 }
 
 /// SSO configuration summary for settings UI.
@@ -638,13 +633,10 @@ pub struct EditNotificationModalTemplate {
     pub channel: EditNotificationChannel,
 }
 
-#[allow(dead_code)]
-pub struct EditNotificationChannel {
+pub(crate) struct EditNotificationChannel {
     pub id: Uuid,
     pub name: String,
     pub channel_type: String,
-    pub config: serde_json::Value,
-    pub events: Vec<String>,
     pub enabled: bool,
     // Pre-computed event flags for template use
     pub has_critical_incident: bool,
@@ -654,14 +646,11 @@ pub struct EditNotificationChannel {
     pub has_connector_error: bool,
     pub has_system_health: bool,
     // Pre-computed config values for template use
-    pub webhook_url: String,
     pub channel_name: String,
     pub recipients: String,
     pub smtp_host: String,
     pub smtp_port: String,
-    pub integration_key: String,
     pub pd_severity: String,
-    pub auth_header: String,
     pub has_webhook_url: bool,
     pub has_integration_key: bool,
     pub has_auth_header: bool,
@@ -699,19 +688,14 @@ impl EditNotificationChannel {
             has_playbook_failed: events.iter().any(|e| e == "playbook_failed"),
             has_connector_error: events.iter().any(|e| e == "connector_error"),
             has_system_health: events.iter().any(|e| e == "system_health"),
-            webhook_url: String::new(),
             channel_name: get_config("channel"),
             recipients: get_config("recipients"),
             smtp_host: get_config("smtp_host"),
             smtp_port: get_config("smtp_port"),
-            integration_key: String::new(),
             pd_severity: get_config("severity"),
-            auth_header: String::new(),
             has_webhook_url: !webhook_url.is_empty(),
             has_integration_key: !integration_key.is_empty(),
             has_auth_header: !auth_header.is_empty(),
-            config,
-            events,
         }
     }
 }
@@ -839,14 +823,6 @@ pub struct ActivityData {
     pub incident_title: Option<String>,
 }
 
-/// Single activity item partial.
-#[allow(dead_code)]
-#[derive(Template)]
-#[template(path = "partials/activity_item.html")]
-pub struct ActivityItemTemplate {
-    pub activity: ActivityData,
-}
-
 // ============================================
 // Stage 4: Knowledge Base
 // ============================================
@@ -888,9 +864,7 @@ pub struct KnowledgeDetailTemplate {
     pub article: KnowledgeArticleDetail,
 }
 
-#[allow(dead_code)]
-pub struct KnowledgeArticleDetail {
-    pub id: Uuid,
+pub(crate) struct KnowledgeArticleDetail {
     pub title: String,
     pub article_type: String,
     pub tags: Vec<String>,
@@ -955,9 +929,7 @@ pub struct LessonsTableTemplate {
     pub lessons: Vec<LessonData>,
 }
 
-#[allow(dead_code)]
-pub struct LessonData {
-    pub id: Uuid,
+pub(crate) struct LessonData {
     pub title: String,
     pub category: String,
     pub status: String,

@@ -1,4 +1,11 @@
 //! Tamper-evident immutable audit log entries.
+//!
+//! # Memory Safety
+//!
+//! Audit events are not accumulated in memory. Each [`ImmutableAuditLog`] entry
+//! is created individually and persisted to the database via `audit_repo`. The
+//! module holds no in-memory `Vec` or queue of events, so there is no risk of
+//! unbounded memory growth from audit log accumulation.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

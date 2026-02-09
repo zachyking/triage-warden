@@ -395,8 +395,7 @@ impl RedisMessageQueue {
     /// Gets the number of pending messages for a stream/group.
     ///
     /// This is useful for monitoring and can be called to check backlog.
-    #[allow(dead_code)]
-    pub async fn get_pending_count(
+    pub(crate) async fn get_pending_count(
         &self,
         stream: &str,
         group: &str,

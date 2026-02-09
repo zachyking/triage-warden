@@ -198,6 +198,21 @@ class PIIRedactor:
             description="International phone number",
         ),
         PIIPattern(
+            pii_type=PIIType.IP_ADDRESS,
+            pattern=re.compile(
+                r"\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}"
+                r"(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b"
+            ),
+            replacement="[REDACTED_IP]",
+            description="IPv4 address",
+        ),
+        PIIPattern(
+            pii_type=PIIType.IP_ADDRESS,
+            pattern=re.compile(r"\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b"),
+            replacement="[REDACTED_IP]",
+            description="IPv6 address (full notation)",
+        ),
+        PIIPattern(
             pii_type=PIIType.AWS_KEY,
             pattern=re.compile(r"\b(AKIA|ABIA|ACCA|ASIA)[A-Z0-9]{16}\b"),
             replacement="[REDACTED_AWS_KEY]",
@@ -935,19 +950,18 @@ class PromptSanitizer:
                 if pattern.action == SanitizationAction.REMOVE:
                     sanitized = sanitized[: match.start()] + sanitized[match.end() :]
                     was_modified = True
+                    # Search from beginning since removal shifts positions
+                    match = pattern.pattern.search(sanitized)
                 elif pattern.action == SanitizationAction.ESCAPE:
                     # Escape by wrapping in neutral markers
                     escaped = f"[USER_INPUT: {match.group()}]"
                     sanitized = sanitized[: match.start()] + escaped + sanitized[match.end() :]
                     was_modified = True
-                    # Move past the escaped content to avoid infinite loop
-                    break
+                    # Search past the escaped content to avoid re-matching
+                    match = pattern.pattern.search(sanitized, match.start() + len(escaped))
                 else:
-                    # LOG_ONLY: move past this match
-                    break
-
-                # Look for next match
-                match = pattern.pattern.search(sanitized)
+                    # LOG_ONLY: move past this match to find next occurrence
+                    match = pattern.pattern.search(sanitized, match.end())
 
         # Re-check blocking patterns after all modifications
         # This handles cases where removal creates new patterns

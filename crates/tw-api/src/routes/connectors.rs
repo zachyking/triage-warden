@@ -1180,20 +1180,6 @@ async fn test_generic_connection(config: &serde_json::Value) -> InternalTestResu
     }
 }
 
-/// Validates connector configuration has minimum required fields.
-#[allow(dead_code)] // May be used for create/update validation in the future
-fn validate_connector_config(connector: &ConnectorConfig) -> Result<(), String> {
-    if connector.name.is_empty() {
-        return Err("Connector name cannot be empty.".to_string());
-    }
-
-    if connector.config.is_null() {
-        return Err("Connector configuration cannot be null.".to_string());
-    }
-
-    Ok(())
-}
-
 /// Converts a ConnectorConfig to a response DTO with optional masking.
 fn connector_to_response(connector: ConnectorConfig, mask_sensitive: bool) -> ConnectorResponse {
     let masked_config = if mask_sensitive {

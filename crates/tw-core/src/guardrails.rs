@@ -100,19 +100,15 @@ impl ExecutionGuardrails {
     /// Check if an action is allowed by the guardrails.
     ///
     /// Checks are performed in order of severity:
-    /// 1. Guardrails enabled check
-    /// 2. Forbidden actions
-    /// 3. Protected targets
+    /// 1. Forbidden actions (always enforced, even when disabled)
+    /// 2. Protected targets (always enforced, even when disabled)
+    /// 3. Guardrails enabled check (remaining checks skipped if disabled)
     /// 4. Action limits
     /// 5. Blast radius
     /// 6. Forbidden combinations
     /// 7. Human approval requirements
     pub fn check(&self, context: &GuardrailCheckContext) -> GuardrailResult {
-        if !self.enabled {
-            return GuardrailResult::Allowed;
-        }
-
-        // 1. Forbidden actions
+        // 1. Forbidden actions - always enforced even when guardrails are disabled
         if self.forbidden_actions.contains(&context.action_type) {
             return GuardrailResult::Blocked {
                 reason: format!(
@@ -122,11 +118,18 @@ impl ExecutionGuardrails {
             };
         }
 
-        // 2. Protected targets
+        // 2. Protected targets - always enforced even when guardrails are disabled
         if self.is_protected_target(&context.target) {
             return GuardrailResult::Blocked {
                 reason: format!("Target '{}' is protected by guardrails", context.target),
             };
+        }
+
+        if !self.enabled {
+            tracing::warn!(
+                "Guardrails disabled - still enforcing forbidden actions and protected targets"
+            );
+            return GuardrailResult::Allowed;
         }
 
         // 3. Action limits - per incident
@@ -368,13 +371,62 @@ mod tests {
     }
 
     #[test]
-    fn test_disabled_guardrails() {
+    fn test_disabled_guardrails_still_blocks_forbidden() {
         let g = ExecutionGuardrails {
             enabled: false,
             ..ExecutionGuardrails::default()
         };
         let mut ctx = default_context();
         ctx.action_type = "delete_user".to_string();
+        match g.check(&ctx) {
+            GuardrailResult::Blocked { reason } => {
+                assert!(reason.contains("forbidden"));
+            }
+            other => panic!(
+                "Expected Blocked for forbidden action when disabled, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn test_disabled_guardrails_still_blocks_protected() {
+        let g = ExecutionGuardrails {
+            enabled: false,
+            ..ExecutionGuardrails::default()
+        };
+        let mut ctx = default_context();
+        ctx.target = "admin".to_string();
+        match g.check(&ctx) {
+            GuardrailResult::Blocked { reason } => {
+                assert!(reason.contains("protected"));
+            }
+            other => panic!(
+                "Expected Blocked for protected target when disabled, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn test_disabled_guardrails_allows_non_forbidden_non_protected() {
+        let g = ExecutionGuardrails {
+            enabled: false,
+            ..ExecutionGuardrails::default()
+        };
+        let ctx = default_context(); // block_ip to 10.0.1.50 - neither forbidden nor protected
+        assert_eq!(g.check(&ctx), GuardrailResult::Allowed);
+    }
+
+    #[test]
+    fn test_disabled_guardrails_skips_action_limits() {
+        let g = ExecutionGuardrails {
+            enabled: false,
+            max_actions_per_incident: 0, // Would block if enforced
+            ..ExecutionGuardrails::default()
+        };
+        let mut ctx = default_context();
+        ctx.actions_taken_count = 100;
         assert_eq!(g.check(&ctx), GuardrailResult::Allowed);
     }
 

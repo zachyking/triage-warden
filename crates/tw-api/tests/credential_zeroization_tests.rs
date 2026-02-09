@@ -170,14 +170,18 @@ fn test_equality_with_similar_prefixes() {
 // =============================================================================
 
 #[test]
-fn test_serialize_to_json() {
+fn test_serialize_to_json_redacts() {
     let secret = SecureString::new("serializable-secret".to_string());
     let json = serde_json::to_string(&secret).unwrap();
 
-    // JSON should contain the actual value (for storage)
+    // JSON must NOT contain the actual secret value
     assert!(
-        json.contains("serializable-secret"),
-        "Serialized JSON should contain the secret for storage"
+        !json.contains("serializable-secret"),
+        "Serialized JSON must not contain the secret value"
+    );
+    assert!(
+        json.contains("[REDACTED]"),
+        "Serialized JSON should contain [REDACTED]"
     );
 }
 
@@ -190,17 +194,25 @@ fn test_deserialize_from_json() {
 }
 
 #[test]
-fn test_serialize_deserialize_roundtrip() {
+fn test_serialize_then_deserialize_yields_redacted() {
     let original = SecureString::new("roundtrip-secret".to_string());
     let json = serde_json::to_string(&original).unwrap();
-    let restored: SecureString = serde_json::from_str(&json).unwrap();
 
-    assert_eq!(original, restored);
+    // Serialization redacts, so deserializing that output gives "[REDACTED]"
+    let restored: SecureString = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored.expose_secret(), "[REDACTED]");
+}
+
+#[test]
+fn test_deserialize_from_stored_value() {
+    // Deserialization from a stored plaintext value still works
+    let json = r#""roundtrip-secret""#;
+    let restored: SecureString = serde_json::from_str(json).unwrap();
     assert_eq!(restored.expose_secret(), "roundtrip-secret");
 }
 
 #[test]
-fn test_serialize_in_struct() {
+fn test_serialize_in_struct_redacts_secret() {
     #[derive(serde::Serialize, serde::Deserialize)]
     struct Config {
         api_key: SecureString,
@@ -213,12 +225,12 @@ fn test_serialize_in_struct() {
     };
 
     let json = serde_json::to_string(&config).unwrap();
-    assert!(json.contains("secret-api-key"));
+    assert!(
+        !json.contains("secret-api-key"),
+        "Serialized struct must not contain the secret value"
+    );
+    assert!(json.contains("[REDACTED]"));
     assert!(json.contains("test"));
-
-    let restored: Config = serde_json::from_str(&json).unwrap();
-    assert_eq!(restored.api_key.expose_secret(), "secret-api-key");
-    assert_eq!(restored.name, "test");
 }
 
 // =============================================================================
@@ -301,10 +313,10 @@ fn test_special_characters() {
 
     assert_eq!(secret.expose_secret(), special_chars);
 
-    // Serialize and deserialize should preserve special chars
+    // Serialize should redact, not preserve the original value
     let json = serde_json::to_string(&secret).unwrap();
-    let restored: SecureString = serde_json::from_str(&json).unwrap();
-    assert_eq!(restored.expose_secret(), special_chars);
+    assert!(json.contains("[REDACTED]"));
+    assert!(!json.contains(special_chars));
 }
 
 #[test]

@@ -1,6 +1,6 @@
 //! API server implementation.
 
-use axum::{extract::Request, middleware, response::Response, Router};
+use axum::{extract::DefaultBodyLimit, extract::Request, middleware, response::Response, Router};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -283,6 +283,8 @@ impl ApiServer {
             ))
             // Tracing
             .layer(TraceLayer::new_for_http())
+            // Default 1MB body limit to prevent DoS via large request bodies
+            .layer(DefaultBodyLimit::max(1_048_576))
             // Request body size limit
             .layer(request_body_limit_layer())
             // CORS (with configured origins)

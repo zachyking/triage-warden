@@ -46,7 +46,13 @@ pub const DEFAULT_WEBHOOK_RATE: u32 = 1000;
 pub const DEFAULT_API_RATE_GLOBAL: u32 = 10000;
 
 /// Default maximum entries in rate limiter LRU cache.
-pub const DEFAULT_RATE_LIMIT_MAX_ENTRIES: usize = 10_000;
+///
+/// NOTE: LRU eviction effectively resets rate limits for evicted entries,
+/// allowing evicted IPs to get fresh rate-limit buckets. This capacity must
+/// be large enough to track all concurrently active clients. If the cache
+/// fills up, the least-recently-seen IPs lose their rate-limit state and
+/// can resume at full quota. Size this value conservatively.
+pub const DEFAULT_RATE_LIMIT_MAX_ENTRIES: usize = 100_000;
 
 /// Minimum allowed rate limit value when sanitizing invalid config.
 const MIN_RATE_LIMIT_VALUE: u32 = 1;
@@ -312,7 +318,21 @@ impl LoginRateLimiter {
 
         let limiter = Arc::new(RateLimiter::direct(quota));
 
-        // Push to cache - LRU will automatically evict oldest if at capacity
+        // Warn when cache is above 90% capacity -- approaching the point where
+        // LRU eviction resets rate limits for evicted entries.
+        let high_water = self.max_entries * 9 / 10;
+        if cache.len() >= high_water {
+            tracing::warn!(
+                cache_size = cache.len(),
+                max_entries = self.max_entries,
+                high_water_mark = high_water,
+                "Login IP rate-limit cache above 90% capacity; \
+                 LRU evictions reset rate limits for evicted IPs"
+            );
+        }
+
+        // Push to cache - LRU will automatically evict oldest if at capacity.
+        // WARNING: evicted IPs get fresh rate-limit buckets on their next request.
         cache.push(ip, limiter.clone());
 
         // Update metrics
@@ -673,7 +693,21 @@ impl ApiRateLimiter {
 
         let limiter = Arc::new(RateLimiter::direct(quota));
 
-        // Push to cache - LRU will automatically evict oldest if at capacity
+        // Warn when cache is above 90% capacity -- approaching the point where
+        // LRU eviction resets rate limits for evicted entries.
+        let high_water = self.max_ip_entries * 9 / 10;
+        if cache.len() >= high_water {
+            tracing::warn!(
+                cache_size = cache.len(),
+                max_entries = self.max_ip_entries,
+                high_water_mark = high_water,
+                "API IP rate-limit cache above 90% capacity; \
+                 LRU evictions reset rate limits for evicted IPs"
+            );
+        }
+
+        // Push to cache - LRU will automatically evict oldest if at capacity.
+        // WARNING: evicted IPs get fresh rate-limit buckets on their next request.
         cache.push(ip, limiter.clone());
 
         // Update metrics
@@ -722,7 +756,21 @@ impl ApiRateLimiter {
 
         let limiter = Arc::new(RateLimiter::direct(quota));
 
-        // Push to cache - LRU will automatically evict oldest if at capacity
+        // Warn when cache is above 90% capacity -- approaching the point where
+        // LRU eviction resets rate limits for evicted entries.
+        let high_water = self.max_user_entries * 9 / 10;
+        if cache.len() >= high_water {
+            tracing::warn!(
+                cache_size = cache.len(),
+                max_entries = self.max_user_entries,
+                high_water_mark = high_water,
+                "API user rate-limit cache above 90% capacity; \
+                 LRU evictions reset rate limits for evicted users"
+            );
+        }
+
+        // Push to cache - LRU will automatically evict oldest if at capacity.
+        // WARNING: evicted users get fresh rate-limit buckets on their next request.
         cache.push(user_id, limiter.clone());
 
         // Update metrics
@@ -1128,7 +1176,21 @@ impl WebhookRateLimiter {
 
         let limiter = Arc::new(RateLimiter::direct(quota));
 
-        // Push to cache - LRU will automatically evict oldest if at capacity
+        // Warn when cache is above 90% capacity -- approaching the point where
+        // LRU eviction resets rate limits for evicted entries.
+        let high_water = self.max_source_entries * 9 / 10;
+        if cache.len() >= high_water {
+            tracing::warn!(
+                cache_size = cache.len(),
+                max_entries = self.max_source_entries,
+                high_water_mark = high_water,
+                "Webhook source rate-limit cache above 90% capacity; \
+                 LRU evictions reset rate limits for evicted sources"
+            );
+        }
+
+        // Push to cache - LRU will automatically evict oldest if at capacity.
+        // WARNING: evicted sources get fresh rate-limit buckets on their next request.
         cache.push(source.to_string(), limiter.clone());
 
         if was_at_capacity {
@@ -1396,9 +1458,19 @@ use axum::{
 
 use crate::state::AppState;
 
-/// Extracts client IP from request, checking X-Forwarded-For header first.
+/// Extracts client IP from request using only trusted sources.
+///
+/// Security: X-Forwarded-For and X-Real-IP headers are NOT trusted as an IP
+/// source because they are trivially spoofable by any client. Without an
+/// explicit, validated reverse-proxy configuration that strips and re-writes
+/// these headers, trusting them allows attackers to forge arbitrary source IPs
+/// and bypass per-IP rate limiting entirely. Only the socket-level ConnectInfo
+/// (populated by the TCP listener) is used. When ConnectInfo is unavailable
+/// (e.g., in tests or misconfigured deployments), a fixed unspecified IP
+/// (0.0.0.0) is returned so that all such requests share a single rate-limit
+/// bucket rather than being able to pick arbitrary ones.
 fn extract_client_ip(req: &Request<Body>) -> IpAddr {
-    // Prefer socket-level ConnectInfo when available to avoid trusting spoofable headers.
+    // Use socket-level ConnectInfo -- this is the only trustworthy IP source.
     if let Some(connect_info) = req
         .extensions()
         .get::<axum::extract::connect_info::ConnectInfo<std::net::SocketAddr>>()
@@ -1406,30 +1478,13 @@ fn extract_client_ip(req: &Request<Body>) -> IpAddr {
         return connect_info.0.ip();
     }
 
-    // Fallback to X-Forwarded-For header (for reverse proxy setups where
-    // ConnectInfo is not propagated into this request).
-    if let Some(forwarded_for) = req.headers().get("x-forwarded-for") {
-        if let Ok(value) = forwarded_for.to_str() {
-            // Take the first IP in the comma-separated list
-            if let Some(first_ip) = value.split(',').next() {
-                if let Ok(ip) = first_ip.trim().parse::<IpAddr>() {
-                    return ip;
-                }
-            }
-        }
-    }
-
-    // Try X-Real-IP header
-    if let Some(real_ip) = req.headers().get("x-real-ip") {
-        if let Ok(value) = real_ip.to_str() {
-            if let Ok(ip) = value.trim().parse::<IpAddr>() {
-                return ip;
-            }
-        }
-    }
-
-    // Fallback to loopback (in production, you'd get this from the connection)
-    IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))
+    // ConnectInfo unavailable -- do NOT fall back to X-Forwarded-For / X-Real-IP
+    // headers; they are client-controlled and trivially spoofable without an
+    // explicit trusted-proxy allowlist, which is not configured here.
+    tracing::warn!(
+        "ConnectInfo unavailable, using fallback IP - X-Forwarded-For headers ignored for security"
+    );
+    IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)
 }
 
 /// Global rate limit middleware that applies per-IP rate limiting to all API requests.
@@ -2063,7 +2118,9 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_client_ip_uses_forwarded_header_without_connect_info() {
+    fn test_extract_client_ip_ignores_forwarded_header_without_connect_info() {
+        // Security: X-Forwarded-For must NOT be trusted when ConnectInfo is
+        // absent, because the header is trivially spoofable by any client.
         let mut req = Request::builder()
             .uri("/api/incidents")
             .body(Body::empty())
@@ -2073,9 +2130,7 @@ mod tests {
             "198.51.100.10, 198.51.100.11".parse().unwrap(),
         );
 
-        assert_eq!(
-            extract_client_ip(&req),
-            IpAddr::V4(Ipv4Addr::new(198, 51, 100, 10))
-        );
+        // Should return 0.0.0.0 (UNSPECIFIED), NOT the spoofable header value
+        assert_eq!(extract_client_ip(&req), IpAddr::V4(Ipv4Addr::UNSPECIFIED));
     }
 }

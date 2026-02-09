@@ -226,7 +226,10 @@ impl AutonomyConfig {
                 "high".to_string()
             }
             "delete_user" | "wipe_host" => "critical".to_string(),
-            _ => "medium".to_string(),
+            _ => {
+                tracing::warn!("Unknown action '{}' defaulting to High risk", action);
+                "high".to_string()
+            }
         }
     }
 }

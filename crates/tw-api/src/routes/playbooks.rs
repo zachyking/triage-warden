@@ -1709,6 +1709,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_playbook_invalid_stages_json() {
+        // Set non-production env so error details are not sanitized
+        std::env::set_var("TW_ENV", "development");
         let (app, _pool) = setup_test_app().await;
 
         // Malformed JSON in stages
@@ -1744,6 +1746,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_playbook_invalid_stages_json() {
+        // Set non-production env so error details are not sanitized
+        std::env::set_var("TW_ENV", "development");
         let (app, pool) = setup_test_app().await;
 
         let playbook_id = create_playbook_in_db(&pool, "update-bad-stages", "alert").await;

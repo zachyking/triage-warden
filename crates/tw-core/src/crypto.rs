@@ -124,8 +124,10 @@ impl Serialize for SecureString {
     where
         S: Serializer,
     {
-        // Serialize the actual secret value
-        serializer.serialize_str(&self.0)
+        // Never serialize the actual secret value to prevent accidental leakage
+        // through logs, API responses, or serialized configs.
+        // Use expose_secret() explicitly when the raw value is needed (e.g., encryption).
+        serializer.serialize_str("[REDACTED]")
     }
 }
 
@@ -320,9 +322,26 @@ pub fn create_encryptor() -> Result<Arc<dyn CredentialEncryptor>, CryptoError> {
                         e
                     )))
                 } else {
+                    // Additional production-environment guard: refuse PlaintextEncryptor
+                    // if RUST_ENV=production or PRODUCTION env var is set.
+                    if std::env::var("RUST_ENV")
+                        .map(|v| v == "production")
+                        .unwrap_or(false)
+                        || std::env::var("PRODUCTION").is_ok()
+                    {
+                        panic!(
+                            "PlaintextEncryptor cannot be used in production \
+                             - set a valid ENCRYPTION_KEY"
+                        );
+                    }
                     tracing::error!(
                         "Invalid TW_ENCRYPTION_KEY: {}. Using plaintext storage in development!",
                         e
+                    );
+                    tracing::warn!(
+                        "SECURITY WARNING: PlaintextEncryptor active \
+                         - credentials stored WITHOUT encryption. \
+                         Set ENCRYPTION_KEY for production."
                     );
                     Ok(Arc::new(PlaintextEncryptor))
                 }
@@ -342,11 +361,28 @@ pub fn create_encryptor() -> Result<Arc<dyn CredentialEncryptor>, CryptoError> {
                         .to_string(),
                 ))
             } else {
+                // Additional production-environment guard: refuse PlaintextEncryptor
+                // if RUST_ENV=production or PRODUCTION env var is set.
+                if std::env::var("RUST_ENV")
+                    .map(|v| v == "production")
+                    .unwrap_or(false)
+                    || std::env::var("PRODUCTION").is_ok()
+                {
+                    panic!(
+                        "PlaintextEncryptor cannot be used in production \
+                         - set a valid ENCRYPTION_KEY"
+                    );
+                }
                 tracing::warn!(
                     "TW_ENCRYPTION_KEY not set. Credentials will be stored in PLAINTEXT. \
                      This is acceptable for development but NOT for production. \
                      Set this environment variable with a 32-byte base64-encoded key for production. \
                      Generate a key with: openssl rand -base64 32"
+                );
+                tracing::warn!(
+                    "SECURITY WARNING: PlaintextEncryptor active \
+                     - credentials stored WITHOUT encryption. \
+                     Set ENCRYPTION_KEY for production."
                 );
                 Ok(Arc::new(PlaintextEncryptor))
             }
@@ -576,10 +612,12 @@ mod tests {
     #[test]
     fn test_create_encryptor_dev_mode_no_key() {
         let _lock = ENV_MUTEX.lock().unwrap();
-        // Ensure we're not in production
+        // Ensure we're not in production (clear all production-detection env vars)
         std::env::remove_var("TW_ENV");
         std::env::remove_var("NODE_ENV");
         std::env::remove_var("ENVIRONMENT");
+        std::env::remove_var("RUST_ENV");
+        std::env::remove_var("PRODUCTION");
         std::env::remove_var("TW_ENCRYPTION_KEY");
 
         // In dev mode, should return PlaintextEncryptor (Ok)
@@ -723,15 +761,27 @@ mod tests {
     }
 
     #[test]
-    fn test_secure_string_serialize_deserialize() {
+    fn test_secure_string_serialize_redacts() {
         let original = SecureString::new("serializable-secret".to_string());
         let serialized = serde_json::to_string(&original).unwrap();
 
-        // Verify the serialized form contains the actual value (for storage)
-        assert!(serialized.contains("serializable-secret"));
+        // Verify the serialized form does NOT contain the actual secret
+        assert!(
+            !serialized.contains("serializable-secret"),
+            "Serialized SecureString must not contain the secret value"
+        );
+        assert!(
+            serialized.contains("[REDACTED]"),
+            "Serialized SecureString should contain [REDACTED]"
+        );
+    }
 
-        let deserialized: SecureString = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(original, deserialized);
+    #[test]
+    fn test_secure_string_deserialize() {
+        // Deserialization still works for loading stored values
+        let json = r#""loaded-secret""#;
+        let deserialized: SecureString = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized.expose_secret(), "loaded-secret");
     }
 
     #[test]

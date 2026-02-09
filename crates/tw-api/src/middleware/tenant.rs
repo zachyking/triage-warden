@@ -172,8 +172,8 @@ impl TenantCache {
     }
 
     /// Invalidates a tenant from both caches.
-    #[allow(dead_code)]
-    pub async fn invalidate(&self, tenant_id: Uuid, slug: &str) {
+    #[cfg(test)]
+    pub(crate) async fn invalidate(&self, tenant_id: Uuid, slug: &str) {
         {
             let mut by_slug = self.by_slug.write().await;
             by_slug.pop(slug);

@@ -13,7 +13,6 @@ pub struct ApiClient {
     base_url: String,
 }
 
-#[allow(dead_code)]
 impl ApiClient {
     /// Creates a new API client.
     pub fn new(base_url: &str) -> Result<Self> {
@@ -26,16 +25,6 @@ impl ApiClient {
             client,
             base_url: base_url.trim_end_matches('/').to_string(),
         })
-    }
-
-    /// Creates a client pointing to localhost.
-    pub fn localhost(port: u16) -> Result<Self> {
-        Self::new(&format!("http://localhost:{}", port))
-    }
-
-    /// Checks if the API server is healthy.
-    pub async fn health(&self) -> Result<HealthResponse> {
-        self.get("/health").await
     }
 
     /// Lists incidents with optional filtering.
@@ -83,16 +72,6 @@ impl ApiClient {
         request: &ExecuteActionRequest,
     ) -> Result<ActionExecutionResponse> {
         self.post(&format!("/api/incidents/{}/actions", incident_id), request)
-            .await
-    }
-
-    /// Approves or denies an action.
-    pub async fn approve_action(
-        &self,
-        incident_id: Uuid,
-        request: &ApproveActionRequest,
-    ) -> Result<ActionExecutionResponse> {
-        self.post(&format!("/api/incidents/{}/approve", incident_id), request)
             .await
     }
 
@@ -232,23 +211,6 @@ struct IncidentStatusForm {
     reason: Option<String>,
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Serialize, Deserialize)]
-pub struct HealthResponse {
-    pub status: String,
-    pub version: String,
-    pub database: DatabaseHealth,
-    pub uptime_seconds: u64,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DatabaseHealth {
-    pub connected: bool,
-    pub pool_size: u32,
-    pub idle_connections: usize,
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PaginatedIncidents {
     pub data: Vec<IncidentSummary>,
@@ -312,9 +274,8 @@ pub struct AuditEntry {
     pub timestamp: DateTime<Utc>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ExecuteActionRequest {
+pub(crate) struct ExecuteActionRequest {
     pub action_type: String,
     pub target: serde_json::Value,
     pub reason: String,
@@ -324,18 +285,8 @@ pub struct ExecuteActionRequest {
     pub skip_policy_check: bool,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ApproveActionRequest {
-    pub action_id: Uuid,
-    pub approved: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ActionExecutionResponse {
+pub(crate) struct ActionExecutionResponse {
     pub action_id: Uuid,
     pub incident_id: Uuid,
     pub action_type: String,

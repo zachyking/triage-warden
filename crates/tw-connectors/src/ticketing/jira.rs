@@ -78,30 +78,6 @@ const JQL_RESERVED_WORDS: &[&str] = &[
     "DESC",
 ];
 
-/// Allowed field names for JQL queries (allowlist approach).
-/// Only these fields can be used in query building.
-const JQL_ALLOWED_FIELDS: &[&str] = &[
-    "project",
-    "summary",
-    "description",
-    "status",
-    "priority",
-    "assignee",
-    "reporter",
-    "labels",
-    "created",
-    "updated",
-    "resolved",
-    "due",
-    "issuetype",
-    "component",
-    "fixVersion",
-    "affectedVersion",
-    "key",
-    "id",
-    "text",
-];
-
 /// Error type for JQL validation failures.
 #[derive(Debug, Clone)]
 pub enum JqlValidationError {
@@ -111,8 +87,6 @@ pub enum JqlValidationError {
     ReservedWord(String),
     /// Input contains potential function call syntax.
     FunctionSyntax(String),
-    /// Field name is not in the allowlist.
-    InvalidField(String),
     /// Input is too long (potential DoS).
     InputTooLong(usize),
     /// Input contains control characters.
@@ -137,7 +111,6 @@ impl std::fmt::Display for JqlValidationError {
                 "Function syntax '{}' is not allowed in search values",
                 func
             ),
-            Self::InvalidField(field) => write!(f, "Field '{}' is not allowed in queries", field),
             Self::InputTooLong(len) => write!(f, "Search query too long ({} chars, max 1000)", len),
             Self::ControlCharacter => write!(f, "Search query contains invalid control characters"),
         }
@@ -148,19 +121,6 @@ impl std::error::Error for JqlValidationError {}
 
 /// Maximum allowed length for search queries to prevent DoS.
 const MAX_QUERY_LENGTH: usize = 1000;
-
-/// Validates that a field name is in the allowlist.
-fn validate_field_name(field: &str) -> Result<(), JqlValidationError> {
-    let field_lower = field.to_lowercase();
-    if JQL_ALLOWED_FIELDS
-        .iter()
-        .any(|f| f.to_lowercase() == field_lower)
-    {
-        Ok(())
-    } else {
-        Err(JqlValidationError::InvalidField(field.to_string()))
-    }
-}
 
 /// Validates that input doesn't contain JQL reserved words as standalone tokens.
 fn validate_no_reserved_words(value: &str) -> Result<(), JqlValidationError> {
@@ -258,22 +218,6 @@ fn escape_jql_text_value(value: &str) -> Result<String, JqlValidationError> {
     }
 
     Ok(result)
-}
-
-/// Legacy escape function - escapes JQL special characters without validation.
-///
-/// WARNING: This function should only be used for trusted internal values.
-/// For user input, use `escape_jql_text_value()` which includes validation.
-#[allow(dead_code)]
-fn escape_jql(value: &str) -> String {
-    let mut result = String::with_capacity(value.len() * 2);
-    for c in value.chars() {
-        if JQL_SPECIAL_CHARS.contains(&c) || JQL_FORBIDDEN_CHARS.contains(&c) {
-            result.push('\\');
-        }
-        result.push(c);
-    }
-    result
 }
 
 /// Validates that a project key contains only valid characters.
@@ -641,49 +585,6 @@ impl JiraConnector {
             .into_iter()
             .map(|i| self.parse_issue(i))
             .collect())
-    }
-
-    /// Build a JQL query with validated field names.
-    ///
-    /// This method ensures all field names are from the allowlist to prevent
-    /// JQL injection through field name manipulation.
-    #[allow(dead_code)]
-    pub fn build_jql_query(&self, filters: &[(String, String)]) -> ConnectorResult<String> {
-        // Always validate project key
-        validate_project_key(&self.config.project_key)?;
-
-        let mut clauses = vec![format!("project = {}", self.config.project_key)];
-
-        for (field, value) in filters {
-            // Validate field name against allowlist
-            validate_field_name(field).map_err(|e| {
-                ConnectorError::ConfigError(format!("Invalid field in query: {}", e))
-            })?;
-
-            // Validate and escape the value
-            let escaped_value = escape_jql_text_value(value).map_err(|e| {
-                ConnectorError::ConfigError(format!("Invalid value for field '{}': {}", field, e))
-            })?;
-
-            // Use appropriate operator based on field type
-            let clause = match field.as_str() {
-                "summary" | "description" | "text" => {
-                    // Text fields use ~ operator with quoted values
-                    format!("{} ~ \"{}\"", field, escaped_value)
-                }
-                "labels" => {
-                    // Labels use IN operator
-                    format!("labels IN (\"{}\")", escaped_value)
-                }
-                _ => {
-                    // Other fields use = operator with quoted values
-                    format!("{} = \"{}\"", field, escaped_value)
-                }
-            };
-            clauses.push(clause);
-        }
-
-        Ok(clauses.join(" AND "))
     }
 }
 
@@ -1453,42 +1354,6 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_field_name_allowed() {
-        // Allowed field names should pass
-        assert!(validate_field_name("summary").is_ok());
-        assert!(validate_field_name("description").is_ok());
-        assert!(validate_field_name("status").is_ok());
-        assert!(validate_field_name("priority").is_ok());
-        assert!(validate_field_name("assignee").is_ok());
-        assert!(validate_field_name("reporter").is_ok());
-        assert!(validate_field_name("labels").is_ok());
-        assert!(validate_field_name("created").is_ok());
-        assert!(validate_field_name("updated").is_ok());
-        assert!(validate_field_name("project").is_ok());
-    }
-
-    #[test]
-    fn test_validate_field_name_case_insensitive() {
-        // Field name validation should be case-insensitive
-        assert!(validate_field_name("Summary").is_ok());
-        assert!(validate_field_name("SUMMARY").is_ok());
-        assert!(validate_field_name("sUmMaRy").is_ok());
-    }
-
-    #[test]
-    fn test_validate_field_name_rejected() {
-        // Non-allowlisted field names should be rejected
-        assert!(validate_field_name("customfield_12345").is_err());
-        assert!(validate_field_name("malicious_field").is_err());
-        assert!(validate_field_name("drop_table").is_err());
-
-        match validate_field_name("bad_field").unwrap_err() {
-            JqlValidationError::InvalidField(field) => assert_eq!(field, "bad_field"),
-            e => panic!("Expected InvalidField, got {:?}", e),
-        }
-    }
-
-    #[test]
     fn test_validate_no_reserved_words_allows_partial_matches() {
         // Words containing reserved words but not as standalone tokens should pass
         // e.g., "android" contains "and" but isn't the AND operator
@@ -1505,47 +1370,6 @@ mod tests {
     }
 
     #[test]
-    fn test_escape_jql_legacy_function() {
-        // Legacy escape function should escape wildcards too
-        let result = escape_jql("test*value?end");
-        assert_eq!(result, "test\\*value\\?end");
-    }
-
-    #[test]
-    fn test_build_jql_query_basic() {
-        let config = create_test_config();
-        let connector = JiraConnector::new(config).unwrap();
-
-        let filters = vec![("summary".to_string(), "test search".to_string())];
-
-        let jql = connector.build_jql_query(&filters).unwrap();
-        assert!(jql.contains("project = SEC"));
-        assert!(jql.contains("summary ~ \"test search\""));
-    }
-
-    #[test]
-    fn test_build_jql_query_rejects_invalid_field() {
-        let config = create_test_config();
-        let connector = JiraConnector::new(config).unwrap();
-
-        let filters = vec![("malicious_field".to_string(), "value".to_string())];
-
-        let result = connector.build_jql_query(&filters);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_build_jql_query_rejects_injection_in_value() {
-        let config = create_test_config();
-        let connector = JiraConnector::new(config).unwrap();
-
-        let filters = vec![("summary".to_string(), "test AND status = Done".to_string())];
-
-        let result = connector.build_jql_query(&filters);
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn test_jql_validation_error_display() {
         // Ensure error messages are user-friendly
         let err = JqlValidationError::ForbiddenWildcard('*');
@@ -1559,10 +1383,6 @@ mod tests {
         let err = JqlValidationError::FunctionSyntax("currentUser()".to_string());
         assert!(err.to_string().contains("Function"));
         assert!(err.to_string().contains("currentUser"));
-
-        let err = JqlValidationError::InvalidField("bad".to_string());
-        assert!(err.to_string().contains("Field"));
-        assert!(err.to_string().contains("bad"));
 
         let err = JqlValidationError::InputTooLong(2000);
         assert!(err.to_string().contains("too long"));

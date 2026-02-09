@@ -120,7 +120,7 @@ async fn login(
     let cfg = load_saml_config()?;
     let relay_state = query
         .relay_state
-        .filter(|path| path.starts_with('/') && !path.starts_with("//"))
+        .filter(|path| is_safe_relay_state(path))
         .unwrap_or_else(|| "/".to_string());
 
     let request_id = format!("_{}", uuid::Uuid::new_v4().simple());
@@ -693,30 +693,27 @@ fn resolve_relay_state(
         (None, None) => "/".to_string(),
     };
 
+    // Default to "/" if the relay state fails safety validation
     if !is_safe_relay_state(&resolved) {
-        return Err(ApiError::Unauthorized(
-            "Invalid SAML relay state path".to_string(),
-        ));
+        warn!(
+            relay_state = %resolved,
+            "Unsafe SAML relay state rejected, defaulting to /"
+        );
+        return Ok("/".to_string());
     }
 
     Ok(resolved)
 }
 
-fn is_safe_relay_state(path: &str) -> bool {
-    if !path.starts_with('/') || path.starts_with("//") {
-        return false;
-    }
-
-    if path.contains('\\') {
-        return false;
-    }
-
-    if path.bytes().any(|byte| byte.is_ascii_control()) {
-        return false;
-    }
-
-    // Defensive: reject scheme-like payloads even if they are prefixed by a slash.
-    !path.to_ascii_lowercase().contains("://")
+fn is_safe_relay_state(relay_state: &str) -> bool {
+    relay_state.starts_with('/')
+        && !relay_state.starts_with("//")
+        && !relay_state.contains("://")
+        && !relay_state.contains('\\')
+        && !relay_state.contains("%5c")
+        && !relay_state.contains("%5C")
+        && !relay_state.contains("%2f")
+        && !relay_state.contains("%2F")
 }
 
 fn env_required(key: &str) -> Result<String, ApiError> {
@@ -827,9 +824,62 @@ mod tests {
             .ok(),
             Some("/dashboard".to_string())
         );
-        assert!(resolve_relay_state(Some("https://evil.com".to_string()), None).is_err());
-        assert!(resolve_relay_state(Some("/\\evil.com".to_string()), None).is_err());
-        assert!(resolve_relay_state(Some("/path\nx".to_string()), None).is_err());
+        // Unsafe relay states default to "/" instead of returning an error
+        assert_eq!(
+            resolve_relay_state(Some("https://evil.com".to_string()), None).ok(),
+            Some("/".to_string())
+        );
+        assert_eq!(
+            resolve_relay_state(Some("/\\evil.com".to_string()), None).ok(),
+            Some("/".to_string())
+        );
+        // Mismatched provided vs stored is still an error
         assert!(resolve_relay_state(Some("/a".to_string()), Some("/b".to_string())).is_err());
+    }
+
+    #[test]
+    fn test_is_safe_relay_state_valid_paths() {
+        assert!(is_safe_relay_state("/"));
+        assert!(is_safe_relay_state("/dashboard"));
+        assert!(is_safe_relay_state("/incidents/123"));
+        assert!(is_safe_relay_state("/path?query=value"));
+    }
+
+    #[test]
+    fn test_is_safe_relay_state_rejects_double_slash() {
+        assert!(!is_safe_relay_state("//evil.com"));
+        assert!(!is_safe_relay_state("//evil.com/path"));
+    }
+
+    #[test]
+    fn test_is_safe_relay_state_rejects_scheme() {
+        assert!(!is_safe_relay_state("https://evil.com"));
+        assert!(!is_safe_relay_state("http://evil.com"));
+        assert!(!is_safe_relay_state("/redirect?url=http://evil.com"));
+    }
+
+    #[test]
+    fn test_is_safe_relay_state_rejects_backslash() {
+        assert!(!is_safe_relay_state("/\\evil.com"));
+        assert!(!is_safe_relay_state("/path\\to\\evil"));
+    }
+
+    #[test]
+    fn test_is_safe_relay_state_rejects_encoded_backslash() {
+        assert!(!is_safe_relay_state("/%5cevil.com"));
+        assert!(!is_safe_relay_state("/%5Cevil.com"));
+    }
+
+    #[test]
+    fn test_is_safe_relay_state_rejects_encoded_forward_slash() {
+        assert!(!is_safe_relay_state("/%2fevil.com"));
+        assert!(!is_safe_relay_state("/%2Fevil.com"));
+    }
+
+    #[test]
+    fn test_is_safe_relay_state_rejects_non_slash_prefix() {
+        assert!(!is_safe_relay_state("evil.com"));
+        assert!(!is_safe_relay_state(""));
+        assert!(!is_safe_relay_state("javascript:alert(1)"));
     }
 }

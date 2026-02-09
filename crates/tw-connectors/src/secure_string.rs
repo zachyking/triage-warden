@@ -97,8 +97,10 @@ impl Serialize for SecureString {
     where
         S: Serializer,
     {
-        // Serialize the actual secret value
-        serializer.serialize_str(&self.0)
+        // Never serialize the actual secret value to prevent accidental leakage
+        // through logs, API responses, or serialized configs.
+        // Use expose_secret() explicitly when the raw value is needed (e.g., encryption).
+        serializer.serialize_str("[REDACTED]")
     }
 }
 
@@ -193,14 +195,26 @@ mod tests {
     }
 
     #[test]
-    fn test_secure_string_serialize_deserialize() {
+    fn test_secure_string_serialize_redacts() {
         let original = SecureString::new("serializable-secret".to_string());
         let serialized = serde_json::to_string(&original).unwrap();
 
-        // Verify the serialized form contains the actual value (for storage)
-        assert!(serialized.contains("serializable-secret"));
+        // Verify the serialized form does NOT contain the actual secret
+        assert!(
+            !serialized.contains("serializable-secret"),
+            "Serialized SecureString must not contain the secret value"
+        );
+        assert!(
+            serialized.contains("[REDACTED]"),
+            "Serialized SecureString should contain [REDACTED]"
+        );
+    }
 
-        let deserialized: SecureString = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(original, deserialized);
+    #[test]
+    fn test_secure_string_deserialize() {
+        // Deserialization still works for loading stored values
+        let json = r#""loaded-secret""#;
+        let deserialized: SecureString = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized.expose_secret(), "loaded-secret");
     }
 }

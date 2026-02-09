@@ -1,6 +1,6 @@
 //! Feature flag repository for database operations.
 
-use super::{DbError, DbPool};
+use super::DbPool;
 #[cfg(not(feature = "database"))]
 use crate::features::InMemoryFeatureFlagStore;
 use crate::features::{FeatureFlag, FeatureFlagError, FeatureFlagStore};
@@ -8,12 +8,6 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use uuid::Uuid;
-
-/// Converts a database error to a FeatureFlagError.
-#[allow(dead_code)]
-fn db_to_flag_error(err: DbError) -> FeatureFlagError {
-    FeatureFlagError::Storage(err.to_string())
-}
 
 /// Converts an sqlx error to a FeatureFlagError.
 #[cfg(feature = "database")]
@@ -346,16 +340,6 @@ pub fn create_feature_flag_store(_pool: &DbPool) -> Box<dyn FeatureFlagStore> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_db_to_flag_error() {
-        let db_err = DbError::Query("test error".to_string());
-        let flag_err = db_to_flag_error(db_err);
-        match flag_err {
-            FeatureFlagError::Storage(msg) => assert!(msg.contains("test error")),
-            _ => panic!("Expected Storage error"),
-        }
-    }
 
     #[cfg(feature = "database")]
     mod database_tests {

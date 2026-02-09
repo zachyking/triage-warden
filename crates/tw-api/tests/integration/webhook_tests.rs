@@ -23,7 +23,7 @@ fn post_json_request(uri: &str, body: &Value) -> axum::extract::Request<Body> {
 async fn test_webhook_accepts_valid_alert() {
     // This test runs in dev mode without signature validation
     std::env::set_var("TW_WEBHOOK_REQUIRE_SIGNATURE", "false");
-    std::env::remove_var("TW_ENV");
+    std::env::set_var("TW_ENV", "development");
 
     let (app, _state) = create_test_router().await;
 
@@ -61,7 +61,7 @@ async fn test_webhook_accepts_valid_alert() {
 #[tokio::test]
 async fn test_webhook_rejects_malformed_json() {
     std::env::set_var("TW_WEBHOOK_REQUIRE_SIGNATURE", "false");
-    std::env::remove_var("TW_ENV");
+    std::env::set_var("TW_ENV", "development");
 
     let (app, _state) = create_test_router().await;
 
@@ -87,7 +87,7 @@ async fn test_webhook_rejects_malformed_json() {
 #[tokio::test]
 async fn test_webhook_validates_required_fields() {
     std::env::set_var("TW_WEBHOOK_REQUIRE_SIGNATURE", "false");
-    std::env::remove_var("TW_ENV");
+    std::env::set_var("TW_ENV", "development");
 
     let (app, _state) = create_test_router().await;
 
@@ -114,7 +114,7 @@ async fn test_webhook_validates_required_fields() {
 #[tokio::test]
 async fn test_webhook_source_path_parameter() {
     std::env::set_var("TW_WEBHOOK_REQUIRE_SIGNATURE", "false");
-    std::env::remove_var("TW_ENV");
+    std::env::set_var("TW_ENV", "development");
 
     let (app, _state) = create_test_router().await;
 
@@ -139,7 +139,7 @@ async fn test_webhook_source_path_parameter() {
 #[tokio::test]
 async fn test_webhook_creates_incident() {
     std::env::set_var("TW_WEBHOOK_REQUIRE_SIGNATURE", "false");
-    std::env::remove_var("TW_ENV");
+    std::env::set_var("TW_ENV", "development");
 
     let (app, state) = create_test_router().await;
 
@@ -182,7 +182,7 @@ async fn test_webhook_creates_incident() {
 #[tokio::test]
 async fn test_multiple_webhook_alerts() {
     std::env::set_var("TW_WEBHOOK_REQUIRE_SIGNATURE", "false");
-    std::env::remove_var("TW_ENV");
+    std::env::set_var("TW_ENV", "development");
 
     for i in 0..3 {
         let (app, _state) = create_test_router().await;

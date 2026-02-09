@@ -76,14 +76,6 @@ impl AppConfig {
         Ok(config)
     }
 
-    /// Saves configuration to a file.
-    #[allow(dead_code)]
-    pub fn save(&self, path: &Path) -> Result<()> {
-        let contents = serde_yaml::to_string(self)?;
-        std::fs::write(path, contents)?;
-        Ok(())
-    }
-
     /// Creates a copy with secrets redacted.
     pub fn redact_secrets(&self) -> Self {
         let mut config = self.clone();

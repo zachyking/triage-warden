@@ -478,8 +478,7 @@ impl ConcurrentTracker {
     }
 
     /// Gets the current concurrent count for an action type.
-    #[allow(dead_code)]
-    async fn get_count(&self, action_type: &str) -> u32 {
+    pub(crate) async fn get_count(&self, action_type: &str) -> u32 {
         let counts = self.counts.read().await;
         counts
             .get(action_type)

@@ -707,7 +707,6 @@ async fn settings(
             scopes: key.scopes,
             expires_at: key.expires_at.map(|t| t.to_rfc3339()),
             last_used_at: key.last_used_at.map(format_time_ago),
-            created_at: key.created_at.to_rfc3339(),
         })
         .collect();
 
@@ -1001,12 +1000,9 @@ async fn partials_kpis(
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct PartialsQuery {
     #[serde(default)]
     severity: String,
-    #[serde(default)]
-    q: String,
 }
 
 async fn partials_incidents(
@@ -2053,7 +2049,6 @@ fn knowledge_document_to_detail(
     doc: tw_core::knowledge::KnowledgeDocument,
 ) -> KnowledgeArticleDetail {
     KnowledgeArticleDetail {
-        id: doc.id,
         title: doc.title,
         article_type: knowledge_category(doc.doc_type).to_string(),
         tags: doc.metadata.tags,
@@ -2174,7 +2169,6 @@ async fn partials_lessons(
         };
 
         lessons.push(LessonData {
-            id: lesson.id,
             title: lesson.title,
             category: lesson.category.as_str().to_string(),
             status: match lesson.status {

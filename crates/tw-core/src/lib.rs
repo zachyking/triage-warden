@@ -121,10 +121,43 @@ pub use auth::{
 
 // Crypto exports
 pub use crypto::{
-    create_encryptor, create_encryptor_or_panic, generate_encryption_key,
-    is_production_environment, Aes256GcmEncryptor, CredentialEncryptor, CryptoError,
-    PlaintextEncryptor, SecureString,
+    create_encryptor, create_encryptor_or_panic, generate_encryption_key, Aes256GcmEncryptor,
+    CredentialEncryptor, CryptoError, PlaintextEncryptor, SecureString,
 };
+
+/// Determines if we're running in a production environment.
+///
+/// Checks `TW_ENV`, `NODE_ENV`, and `ENVIRONMENT` environment variables.
+/// Returns `true` (production) when **none** of these variables are set,
+/// following the secure-by-default principle: error details and internal
+/// information are hidden unless the operator explicitly configures a
+/// non-production environment (e.g. `TW_ENV=development`).
+pub fn is_production_environment() -> bool {
+    // If any env var is explicitly set to a non-production value, treat as
+    // non-production. Otherwise default to production (safe by default).
+    let check = |var: &str| -> Option<bool> {
+        std::env::var(var).ok().map(|v| {
+            let lower = v.to_lowercase();
+            lower == "production" || lower == "prod"
+        })
+    };
+
+    // If TW_ENV is set, it takes precedence
+    if let Some(is_prod) = check("TW_ENV") {
+        return is_prod;
+    }
+    // Fall back to NODE_ENV
+    if let Some(is_prod) = check("NODE_ENV") {
+        return is_prod;
+    }
+    // Fall back to ENVIRONMENT
+    if let Some(is_prod) = check("ENVIRONMENT") {
+        return is_prod;
+    }
+    // Default: treat as production (secure by default -- sanitize errors,
+    // hide internal details when the environment is unknown).
+    true
+}
 
 // Validation exports
 pub use validation::{

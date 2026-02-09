@@ -80,15 +80,6 @@ impl LookupAttachmentsAction {
         matches!(verdict, ThreatVerdict::Malicious)
     }
 
-    /// Determines if a verdict indicates a potential threat (includes suspicious).
-    #[allow(dead_code)]
-    fn is_threat(verdict: &ThreatVerdict) -> bool {
-        matches!(
-            verdict,
-            ThreatVerdict::Malicious | ThreatVerdict::Suspicious
-        )
-    }
-
     /// Parses attachment input from JSON value.
     fn parse_attachment(value: &serde_json::Value) -> Result<AttachmentInput, String> {
         serde_json::from_value(value.clone())
@@ -660,17 +651,5 @@ mod tests {
         assert!(!LookupAttachmentsAction::is_malware(
             &ThreatVerdict::Unknown
         ));
-    }
-
-    #[test]
-    fn test_is_threat() {
-        assert!(LookupAttachmentsAction::is_threat(
-            &ThreatVerdict::Malicious
-        ));
-        assert!(LookupAttachmentsAction::is_threat(
-            &ThreatVerdict::Suspicious
-        ));
-        assert!(!LookupAttachmentsAction::is_threat(&ThreatVerdict::Clean));
-        assert!(!LookupAttachmentsAction::is_threat(&ThreatVerdict::Unknown));
     }
 }

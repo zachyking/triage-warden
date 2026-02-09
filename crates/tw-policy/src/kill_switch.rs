@@ -65,12 +65,37 @@ pub struct KillSwitchStatus {
     pub activated_by: Option<String>,
 }
 
+/// Metadata snapshot for the kill switch activation.
+///
+/// Bundling `activated_at` and `activated_by` into a single struct allows
+/// both fields to be read/written under one `RwLock`, eliminating the
+/// TOCTOU race that existed when they were stored in separate locks.
+#[derive(Debug, Clone, Default)]
+struct KillSwitchMetadata {
+    activated_at: Option<DateTime<Utc>>,
+    activated_by: Option<String>,
+}
+
 /// Emergency kill switch that immediately halts all automation.
 ///
 /// The kill switch provides a thread-safe mechanism to immediately stop all
 /// automated actions in the system. It uses atomic operations for the active
 /// flag to ensure consistent reads across threads, and broadcast channels
 /// to notify all interested parties when the switch state changes.
+///
+/// # Consistency model
+///
+/// The `active` flag is an `AtomicBool` for fast, lock-free reads. The
+/// activation metadata (`activated_at`, `activated_by`) is stored behind a
+/// single `RwLock` to ensure both fields are always read/written as a
+/// consistent pair. Because the `AtomicBool` and the `RwLock` are separate
+/// synchronization primitives, there is a brief window where a reader could
+/// observe the flag change before the metadata is updated (or vice-versa).
+/// The `activate`/`deactivate` methods minimize this window by updating
+/// metadata immediately after the atomic compare-exchange. For callers that
+/// need a fully consistent snapshot, `check_async()` and `status()` read
+/// metadata only when the flag indicates active, and fall back to defaults
+/// if the metadata has not yet been written.
 ///
 /// # Example
 ///
@@ -96,10 +121,9 @@ pub struct KillSwitchStatus {
 pub struct KillSwitch {
     /// Whether the kill switch is currently active.
     active: AtomicBool,
-    /// When the kill switch was activated.
-    activated_at: RwLock<Option<DateTime<Utc>>>,
-    /// Who activated the kill switch.
-    activated_by: RwLock<Option<String>>,
+    /// Activation metadata (who and when). Protected by a single RwLock to
+    /// ensure both fields are always read/written atomically as a pair.
+    metadata: RwLock<KillSwitchMetadata>,
     /// Broadcast sender for kill switch events.
     sender: broadcast::Sender<KillSwitchEvent>,
 }
@@ -110,8 +134,7 @@ impl KillSwitch {
         let (sender, _) = broadcast::channel(16);
         Self {
             active: AtomicBool::new(false),
-            activated_at: RwLock::new(None),
-            activated_by: RwLock::new(None),
+            metadata: RwLock::new(KillSwitchMetadata::default()),
             sender,
         }
     }
@@ -143,14 +166,11 @@ impl KillSwitch {
 
         let now = Utc::now();
 
-        // Update metadata
+        // Update metadata in a single lock acquisition for consistency
         {
-            let mut at = self.activated_at.write().await;
-            *at = Some(now);
-        }
-        {
-            let mut by = self.activated_by.write().await;
-            *by = Some(activated_by.to_string());
+            let mut meta = self.metadata.write().await;
+            meta.activated_at = Some(now);
+            meta.activated_by = Some(activated_by.to_string());
         }
 
         // Broadcast the event
@@ -197,25 +217,13 @@ impl KillSwitch {
 
         let now = Utc::now();
 
-        // Get previous activation info for logging
-        let previous_by = {
-            let by = self.activated_by.read().await;
-            by.clone()
+        // Read previous info and clear metadata in a single lock acquisition
+        let (previous_by, previous_at) = {
+            let mut meta = self.metadata.write().await;
+            let prev_by = meta.activated_by.take();
+            let prev_at = meta.activated_at.take();
+            (prev_by, prev_at)
         };
-        let previous_at = {
-            let at = self.activated_at.read().await;
-            *at
-        };
-
-        // Clear metadata
-        {
-            let mut at = self.activated_at.write().await;
-            *at = None;
-        }
-        {
-            let mut by = self.activated_by.write().await;
-            *by = None;
-        }
 
         // Broadcast the event
         let event = KillSwitchEvent::Deactivated {
@@ -282,17 +290,18 @@ impl KillSwitch {
     /// Checks if automation can proceed, with full metadata in errors.
     ///
     /// This is the async version of `check()` that provides accurate
-    /// activation metadata in the error.
+    /// activation metadata in the error. Both `activated_at` and
+    /// `activated_by` are read from a single lock acquisition to ensure
+    /// a consistent snapshot.
     pub async fn check_async(&self) -> Result<(), KillSwitchActive> {
         if self.is_active() {
-            let activated_at = {
-                let at = self.activated_at.read().await;
-                at.unwrap_or_else(Utc::now)
-            };
-            let activated_by = {
-                let by = self.activated_by.read().await;
-                by.clone().unwrap_or_else(|| "unknown".to_string())
-            };
+            // Read both metadata fields in one lock acquisition for consistency
+            let meta = self.metadata.read().await;
+            let activated_at = meta.activated_at.unwrap_or_else(Utc::now);
+            let activated_by = meta
+                .activated_by
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string());
             Err(KillSwitchActive {
                 activated_at,
                 activated_by,
@@ -311,21 +320,18 @@ impl KillSwitch {
     }
 
     /// Returns the current status of the kill switch.
+    ///
+    /// Reads the active flag and metadata. Both metadata fields are read
+    /// in a single lock acquisition for a consistent snapshot.
     pub async fn status(&self) -> KillSwitchStatus {
         let active = self.is_active();
-        let activated_at = {
-            let at = self.activated_at.read().await;
-            *at
-        };
-        let activated_by = {
-            let by = self.activated_by.read().await;
-            by.clone()
-        };
+        // Read both metadata fields in one lock acquisition for consistency
+        let meta = self.metadata.read().await;
 
         KillSwitchStatus {
             active,
-            activated_at,
-            activated_by,
+            activated_at: meta.activated_at,
+            activated_by: meta.activated_by.clone(),
         }
     }
 }

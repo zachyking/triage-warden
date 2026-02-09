@@ -658,11 +658,6 @@ impl<V: Clone + Send + Sync + 'static> ResponseCache<V> {
         self.cache.insert(key, value).await;
     }
 
-    /// Removes a value from the cache.
-    pub async fn invalidate(&self, key: &str) {
-        self.cache.invalidate(key).await;
-    }
-
     /// Clears all entries from the cache.
     pub async fn clear(&self) {
         self.cache.invalidate_all();

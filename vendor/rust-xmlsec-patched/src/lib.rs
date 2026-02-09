@@ -176,7 +176,6 @@ enum InnerAlgorithmData<'a> {
 #[derive(Debug)]
 enum AlgorithmData<'a> {
     NodeSet(&'a [xml::reader::XmlEvent]),
-    OctetStream(&'a str),
     OwnedNodeSet(Vec<xml::reader::XmlEvent>),
     OwnedOctetStream(String),
 }
@@ -186,13 +185,12 @@ impl<'a> AlgorithmData<'a> {
         match self {
             AlgorithmData::NodeSet(n) => InnerAlgorithmData::NodeSet(n),
             AlgorithmData::OwnedNodeSet(n) => InnerAlgorithmData::NodeSet(n),
-            AlgorithmData::OctetStream(o) => InnerAlgorithmData::OctetStream(o),
             AlgorithmData::OwnedOctetStream(o) => InnerAlgorithmData::OctetStream(o),
         }
     }
 }
 
-fn transform_canonical_xml_1_0<'a>(events: AlgorithmData<'a>) -> Result<AlgorithmData, String> {
+fn transform_canonical_xml_1_0<'a>(events: AlgorithmData<'a>) -> Result<AlgorithmData<'a>, String> {
     let events = match events.into_inner_data() {
         InnerAlgorithmData::NodeSet(e) => e,
         _ => return Err("unsupported input format for canonical XML 1.0".to_string())
@@ -203,7 +201,7 @@ fn transform_canonical_xml_1_0<'a>(events: AlgorithmData<'a>) -> Result<Algorith
     Ok(AlgorithmData::OwnedOctetStream(canon_output))
 }
 
-fn transform_canonical_xml_1_0_with_comments<'a>(events: AlgorithmData<'a>) -> Result<AlgorithmData, String> {
+fn transform_canonical_xml_1_0_with_comments<'a>(events: AlgorithmData<'a>) -> Result<AlgorithmData<'a>, String> {
     let events = match events.into_inner_data() {
         InnerAlgorithmData::NodeSet(e) => e,
         _ => return Err("unsupported input format for canonical XML 1.0 (with comments)".to_string())
@@ -214,7 +212,7 @@ fn transform_canonical_xml_1_0_with_comments<'a>(events: AlgorithmData<'a>) -> R
     Ok(AlgorithmData::OwnedOctetStream(canon_output))
 }
 
-fn transform_canonical_xml_1_1<'a>(events: AlgorithmData<'a>) -> Result<AlgorithmData, String> {
+fn transform_canonical_xml_1_1<'a>(events: AlgorithmData<'a>) -> Result<AlgorithmData<'a>, String> {
     let events = match events.into_inner_data() {
         InnerAlgorithmData::NodeSet(e) => e,
         _ => return Err("unsupported input format for canonical XML 1.1".to_string())
@@ -225,7 +223,7 @@ fn transform_canonical_xml_1_1<'a>(events: AlgorithmData<'a>) -> Result<Algorith
     Ok(AlgorithmData::OwnedOctetStream(canon_output))
 }
 
-fn transform_canonical_xml_1_1_with_comments<'a>(events: AlgorithmData<'a>) -> Result<AlgorithmData, String> {
+fn transform_canonical_xml_1_1_with_comments<'a>(events: AlgorithmData<'a>) -> Result<AlgorithmData<'a>, String> {
     let events = match events.into_inner_data() {
         InnerAlgorithmData::NodeSet(e) => e,
         _ => return Err("unsupported input format for canonical XML 1.1 (with comments)".to_string())
@@ -236,7 +234,7 @@ fn transform_canonical_xml_1_1_with_comments<'a>(events: AlgorithmData<'a>) -> R
     Ok(AlgorithmData::OwnedOctetStream(canon_output))
 }
 
-fn transform_exclusive_canonical_xml_1_0<'a>(events: AlgorithmData<'a>) -> Result<AlgorithmData, String> {
+fn transform_exclusive_canonical_xml_1_0<'a>(events: AlgorithmData<'a>) -> Result<AlgorithmData<'a>, String> {
     let events = match events.into_inner_data() {
         InnerAlgorithmData::NodeSet(e) => e,
         _ => return Err("unsupported input format for exclusive canonical XML 1.0".to_string())
@@ -247,7 +245,7 @@ fn transform_exclusive_canonical_xml_1_0<'a>(events: AlgorithmData<'a>) -> Resul
     Ok(AlgorithmData::OwnedOctetStream(canon_output))
 }
 
-fn transform_exclusive_canonical_xml_1_0_with_comments<'a>(events: AlgorithmData<'a>) -> Result<AlgorithmData, String> {
+fn transform_exclusive_canonical_xml_1_0_with_comments<'a>(events: AlgorithmData<'a>) -> Result<AlgorithmData<'a>, String> {
     let events = match events.into_inner_data() {
         InnerAlgorithmData::NodeSet(e) => e,
         _ => return Err("unsupported input format for exclusive canonical XML 1.0 (with comments)".to_string())
@@ -258,7 +256,7 @@ fn transform_exclusive_canonical_xml_1_0_with_comments<'a>(events: AlgorithmData
     Ok(AlgorithmData::OwnedOctetStream(canon_output))
 }
 
-fn transform_enveloped_signature<'a>(events: AlgorithmData<'a>) -> Result<AlgorithmData, String> {
+fn transform_enveloped_signature<'a>(events: AlgorithmData<'a>) -> Result<AlgorithmData<'a>, String> {
     let events = match events.into_inner_data() {
         InnerAlgorithmData::NodeSet(e) => e,
         _ => return Err("unsupported input format for envelopd signature transform".to_string())

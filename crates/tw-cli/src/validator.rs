@@ -43,13 +43,6 @@ impl ValidationResult {
         !self.warnings.is_empty()
     }
 
-    /// Merges another validation result into this one.
-    #[allow(dead_code)]
-    pub fn merge(&mut self, other: ValidationResult) {
-        self.errors.extend(other.errors);
-        self.warnings.extend(other.warnings);
-    }
-
     /// Prints the validation result to the console.
     pub fn print(&self) {
         if !self.warnings.is_empty() {
@@ -363,21 +356,6 @@ mod tests {
 
         assert_eq!(result.errors.len(), 1);
         assert_eq!(result.warnings.len(), 1);
-    }
-
-    #[test]
-    fn test_validation_result_merge() {
-        let mut result1 = ValidationResult::new();
-        result1.add_error("Error 1");
-
-        let mut result2 = ValidationResult::new();
-        result2.add_error("Error 2");
-        result2.add_warning("Warning 1");
-
-        result1.merge(result2);
-
-        assert_eq!(result1.errors.len(), 2);
-        assert_eq!(result1.warnings.len(), 1);
     }
 
     #[test]

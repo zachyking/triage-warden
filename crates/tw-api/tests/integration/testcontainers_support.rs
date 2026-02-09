@@ -98,9 +98,76 @@ pub async fn create_postgres_pool(pg: &PostgresContainer) -> PgPool {
     pool
 }
 
+/// Splits SQL into individual statements, respecting dollar-quoted blocks ($$ or $tag$).
+/// PostgreSQL uses $tag$...$tag$ as string delimiters which may contain semicolons.
+fn split_sql_statements(sql: &str) -> Vec<String> {
+    let mut statements = Vec::new();
+    let mut current = String::new();
+    let bytes = sql.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    let mut dollar_tag: Option<String> = None;
+
+    while i < len {
+        if let Some(ref tag) = dollar_tag {
+            // Inside a dollar-quoted block — look for the closing tag
+            if bytes[i] == b'$' && sql[i..].starts_with(tag.as_str()) {
+                current.push_str(tag);
+                i += tag.len();
+                dollar_tag = None;
+            } else {
+                current.push(char::from(bytes[i]));
+                i += 1;
+            }
+        } else if bytes[i] == b'$' {
+            if let Some(tag) = find_dollar_tag(&sql[i..]) {
+                current.push_str(&tag);
+                i += tag.len();
+                dollar_tag = Some(tag);
+            } else {
+                current.push('$');
+                i += 1;
+            }
+        } else if bytes[i] == b';' {
+            statements.push(std::mem::take(&mut current));
+            i += 1;
+        } else {
+            current.push(char::from(bytes[i]));
+            i += 1;
+        }
+    }
+
+    if !current.trim().is_empty() {
+        statements.push(current);
+    }
+
+    statements
+}
+
+/// Extracts a dollar-quote tag at the start of the string (e.g. "$$" or "$tag$").
+fn find_dollar_tag(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() || bytes[0] != b'$' {
+        return None;
+    }
+    if bytes.len() >= 2 && bytes[1] == b'$' {
+        return Some("$$".to_string());
+    }
+    for (idx, &b) in bytes[1..].iter().enumerate() {
+        if b == b'$' {
+            return Some(s[..idx + 2].to_string());
+        }
+        if !b.is_ascii_alphanumeric() && b != b'_' {
+            return None;
+        }
+    }
+    None
+}
+
 /// Helper to run SQL statements from a migration file.
+/// Uses a dollar-quote-aware splitter to correctly handle DO $$ blocks.
 async fn run_migration_file(pool: &PgPool, migration_sql: &str) {
-    for raw_statement in migration_sql.split(';') {
+    for raw_statement in split_sql_statements(migration_sql) {
         let lines: Vec<&str> = raw_statement
             .lines()
             .filter(|line| !line.trim().starts_with("--"))
@@ -119,7 +186,7 @@ async fn run_migration_file(pool: &PgPool, migration_sql: &str) {
 
 /// Runs all database migrations against a PostgreSQL database.
 async fn run_postgres_migrations(pool: &PgPool) {
-    // Run migrations in order (paths are relative to this file's location in tests/integration/)
+    // Core schema
     run_migration_file(
         pool,
         include_str!(
@@ -166,12 +233,19 @@ async fn run_postgres_migrations(pool: &PgPool) {
     run_migration_file(
         pool,
         include_str!(
+            "../../../tw-core/src/db/migrations/postgres/20240202_000001_add_composite_indexes.sql"
+        ),
+    )
+    .await;
+    run_migration_file(
+        pool,
+        include_str!(
             "../../../tw-core/src/db/migrations/postgres/20240210_000001_create_feature_flags.sql"
         ),
     )
     .await;
 
-    // Run multi-tenancy migrations
+    // Multi-tenancy migrations
     run_migration_file(
         pool,
         include_str!(
@@ -179,8 +253,28 @@ async fn run_postgres_migrations(pool: &PgPool) {
         ),
     )
     .await;
+    // 20240215_000002 uses DO $$ blocks with IF NOT EXISTS guards for idempotent tenant_id addition.
+    // It handles all tables except sessions.
     run_migration_file(pool, include_str!("../../../tw-core/src/db/migrations/postgres/20240215_000002_add_tenant_id_to_tables.sql")).await;
-    run_migration_file(pool, include_str!("../../../tw-core/src/db/migrations/postgres/20240220_000001_add_tenant_id_to_tables.sql")).await;
+    // Add tenant_id to sessions (not covered by 20240215_000002)
+    run_migration_file(
+        pool,
+        r#"
+        ALTER TABLE sessions ADD COLUMN IF NOT EXISTS tenant_id UUID;
+        UPDATE sessions SET tenant_id = '00000000-0000-0000-0000-000000000001'::uuid WHERE tenant_id IS NULL;
+        ALTER TABLE sessions ALTER COLUMN tenant_id SET NOT NULL;
+        DO $$ BEGIN
+            ALTER TABLE sessions ADD CONSTRAINT fk_sessions_tenant
+                FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE;
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+        CREATE INDEX IF NOT EXISTS idx_sessions_tenant ON sessions(tenant_id);
+        "#,
+    )
+    .await;
+    // Skip 20240220_000001 — it duplicates 20240215_000002 without IF NOT EXISTS guards,
+    // causing constraint-already-exists errors when both run.
     run_migration_file(
         pool,
         include_str!("../../../tw-core/src/db/migrations/postgres/20240220_000002_enable_rls.sql"),
@@ -190,6 +284,25 @@ async fn run_postgres_migrations(pool: &PgPool) {
         pool,
         include_str!(
             "../../../tw-core/src/db/migrations/postgres/20240225_000001_add_optimized_indexes.sql"
+        ),
+    )
+    .await;
+
+    // Feature migrations
+    run_migration_file(pool, include_str!("../../../tw-core/src/db/migrations/postgres/20240301_000001_create_analyst_feedback.sql")).await;
+    run_migration_file(
+        pool,
+        include_str!(
+            "../../../tw-core/src/db/migrations/postgres/20240302_000001_create_knowledge_base.sql"
+        ),
+    )
+    .await;
+    run_migration_file(pool, include_str!("../../../tw-core/src/db/migrations/postgres/20240310_000001_create_comments_activity.sql")).await;
+    run_migration_file(pool, include_str!("../../../tw-core/src/db/migrations/postgres/20240311_000001_create_lessons_handoffs.sql")).await;
+    run_migration_file(
+        pool,
+        include_str!(
+            "../../../tw-core/src/db/migrations/postgres/20240312_000001_create_rbac_tables.sql"
         ),
     )
     .await;
