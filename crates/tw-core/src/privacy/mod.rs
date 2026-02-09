@@ -9,5 +9,6 @@ pub use classifier::{
 };
 pub use masker::{DataMasker, MaskMapping, MaskedText, MaskingStrategy};
 pub use retention::{
-    DataType, DeletionStrategy, RetentionDecision, RetentionManager, RetentionPolicy,
+    DataType, DeletionStrategy, RetentionCleanupAction, RetentionCleanupReport, RetentionDecision,
+    RetentionManager, RetentionPolicy, RetentionRecord,
 };

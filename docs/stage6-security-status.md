@@ -43,6 +43,12 @@ Implemented:
 Implemented:
 - Sensitive data classification and masking policies.
 - Retention policy API with evaluation.
+- Retention cleanup planning API:
+  - `POST /api(/v1)/privacy/retention/cleanup/plan`
+- Subject access and right-to-deletion workflow tracking:
+  - `GET /api(/v1)/privacy/subject-access/requests`
+  - `POST /api(/v1)/privacy/subject-access/export`
+  - `POST /api(/v1)/privacy/subject-access/delete`
 - Local/cloud routing decision API for sensitive prompts.
 - Python ReAct routing support with sensitivity-aware provider selection and AI interaction audit hooks.
 

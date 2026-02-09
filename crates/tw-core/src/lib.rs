@@ -136,8 +136,9 @@ pub use validation::{
 // Privacy exports
 pub use privacy::{
     ClassificationPattern, DataCategory, DataMasker, DataType, DeletionStrategy, MaskMapping,
-    MaskedText, MaskingStrategy, RetentionDecision, RetentionManager, RetentionPolicy,
-    SensitiveDataClassifier, SensitiveDataMatch,
+    MaskedText, MaskingStrategy, RetentionCleanupAction, RetentionCleanupReport, RetentionDecision,
+    RetentionManager, RetentionPolicy, RetentionRecord, SensitiveDataClassifier,
+    SensitiveDataMatch,
 };
 
 // Cache exports
