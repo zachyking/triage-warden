@@ -142,7 +142,6 @@ jobs:
 
       - name: Run mypy
         run: uv run mypy tw_ai --ignore-missing-imports
-        continue-on-error: true  # Type hints may be incomplete initially
 
   python-test:
     name: Python Test
@@ -176,6 +175,15 @@ jobs:
 
       - name: Run tests (isolated - test_tool_argument_validation.py)
         run: uv run pytest tests/test_tool_argument_validation.py -v --tb=short
+
+      - name: Run tests (isolated - test_metrics.py)
+        run: uv run pytest tests/test_metrics.py -v --tb=short
+
+      - name: Run tests (isolated - test_evaluation.py)
+        run: uv run pytest tests/test_evaluation.py -v --tb=short
+
+      - name: Run tests (isolated - test_rag suite)
+        run: uv run pytest tests/test_rag -v --tb=short
 
       - name: Run tests (core tests)
         run: |
