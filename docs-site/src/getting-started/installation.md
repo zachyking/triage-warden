@@ -16,7 +16,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/triage-warden.git
+git clone https://github.com/zachyking/triage-warden.git
 cd triage-warden
 
 # Build Rust components
@@ -31,7 +31,7 @@ uv sync
 
 ```bash
 # Check the CLI
-./target/release/tw-cli --version
+./target/release/triage-warden --version
 
 # Run tests
 cargo test
@@ -56,7 +56,7 @@ docker run -p 8080:8080 \
 
 ## Pre-built Binaries
 
-Download the latest release from the [releases page](https://github.com/your-org/triage-warden/releases).
+Download the latest release from the [releases page](https://github.com/zachyking/triage-warden/releases).
 
 Available platforms:
 - Linux x86_64 (glibc)
@@ -66,9 +66,9 @@ Available platforms:
 
 ```bash
 # Example for macOS
-curl -LO https://github.com/your-org/triage-warden/releases/latest/download/triage-warden-macos-aarch64.tar.gz
+curl -LO https://github.com/zachyking/triage-warden/releases/latest/download/triage-warden-macos-aarch64.tar.gz
 tar xzf triage-warden-macos-aarch64.tar.gz
-./tw-cli --version
+./triage-warden --version
 ```
 
 ## Database Setup
@@ -79,10 +79,10 @@ SQLite is used by default. The database file is created automatically:
 
 ```bash
 # Default location
-TW_DATABASE_URL=sqlite://./triage_warden.db
+DATABASE_URL=sqlite://./triage_warden.db
 
 # Custom location
-TW_DATABASE_URL=sqlite:///var/lib/triage-warden/data.db
+DATABASE_URL=sqlite:///var/lib/triage-warden/data.db
 ```
 
 ### PostgreSQL
@@ -94,10 +94,10 @@ For production deployments:
 createdb triage_warden
 
 # Set connection string
-export TW_DATABASE_URL=postgres://user:password@localhost/triage_warden
+export DATABASE_URL=postgres://user:password@localhost/triage_warden
 
 # Run migrations
-tw-cli db migrate
+triage-warden db migrate
 ```
 
 ## Next Steps

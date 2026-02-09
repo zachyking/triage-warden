@@ -100,6 +100,8 @@ deadpool-redis = "0.18"
 [patch.crates-io]
 tower-sessions-sqlx-store = { path = "vendor/tower-sessions-sqlx-store-patched" }
 sqlx-macros = { path = "vendor/sqlx-macros-patched" }
+rust-xmlsec = { path = "vendor/rust-xmlsec-patched" }
+xml_serde = { path = "vendor/xml_serde-patched" }
 
 [profile.release]
 lto = true

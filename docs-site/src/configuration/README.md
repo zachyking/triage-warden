@@ -11,6 +11,7 @@ After installation, configure Triage Warden in this order:
 3. **[Notifications](./notifications-setup.md)** - Set up alert channels
 4. **[Playbooks](./playbooks-guide.md)** - Create automation workflows
 5. **[Policies](./policies-guide.md)** - Define approval and safety rules
+6. **[SSO Integrations](../integrations/sso/README.md)** - Configure enterprise identity providers
 
 ## Quick Configuration
 
@@ -143,3 +144,4 @@ curl -X POST -H "Authorization: Bearer $API_KEY" \
 - [Set up connectors](./connectors-setup.md)
 - [Configure notifications](./notifications-setup.md)
 - [Create playbooks](./playbooks-guide.md)
+- [Configure SSO](../integrations/sso/README.md)

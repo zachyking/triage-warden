@@ -1,92 +1,97 @@
 # Triage Warden
 
-AI-Augmented SOC Triage System for automated incident analysis and response.
+[![CI](https://github.com/zachyking/triage-warden/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/zachyking/triage-warden/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## Overview
+AI-augmented SOC triage and response platform with Rust APIs/workflows and Python AI services.
 
-Triage Warden uses LLM-powered agents to analyze security alerts, enrich indicators, and propose remediation actions—all governed by configurable policy guardrails.
+## What It Does
 
-## Architecture
+- Ingests and normalizes alerts from security tooling.
+- Runs enrichment and triage pipelines with policy guardrails.
+- Supports approvals, audit trails, and incident response actions.
+- Exposes a REST API, web dashboard, and CLI.
 
+## Monorepo Layout
+
+```text
+crates/
+  tw-api/            # Axum API + dashboard routes
+  tw-core/           # Core domain models, workflows, repositories
+  tw-policy/         # Guardrails and policy engine
+  tw-connectors/     # Connector implementations
+  tw-actions/        # Response action implementations
+  tw-cli/            # `triage-warden` CLI binary
+python/
+  tw_ai/             # AI agent, RAG, orchestration, evaluation
+tw-bridge/           # PyO3 bridge package + Python tests
+docs-site/           # mdBook documentation source
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      Triage Warden                          │
-├─────────────┬─────────────┬─────────────┬──────────────────┤
-│  Connectors │   Policy    │  AI Agents  │    Workflows     │
-│  (Rust)     │   Engine    │  (Python)   │                  │
-├─────────────┼─────────────┼─────────────┼──────────────────┤
-│ • SIEM      │ • Guardrails│ • ReAct     │ • Phishing       │
-│ • EDR       │ • Approvals │ • Tools     │ • Malware        │
-│ • ThreatIntel│ • Kill Switch│ • Prompts  │ • Suspicious Login│
-│ • Ticketing │ • Modes     │ • LLM Layer │                  │
-└─────────────┴─────────────┴─────────────┴──────────────────┘
-```
 
-## Quick Start
+## CI Coverage
+
+Main workflow: `.github/workflows/ci.yml`
+
+- Rust quality gates: `fmt`, `clippy`, `check`, unit/integration tests
+- Python quality gates: `ruff`, `black --check`, `mypy`, pytest suites
+- Bridge tests: `tw-bridge` wheel build + Python tests
+- Security/quality: `cargo audit`, Rust coverage (Tarpaulin), docs build
+
+## Local Development
+
+### Prerequisites
+
+- Rust (stable toolchain)
+- Python 3.11+
+- `uv` (Python dependency/task runner)
+
+### Build
 
 ```bash
-# Build Rust components
-cargo build --release
-
-# Install Python package
-cd python && pip install -e .
-
-# Run phishing triage
-python -c "
-from tw_ai.workflows.phishing import PhishingTriageWorkflow
-workflow = PhishingTriageWorkflow()
-result = await workflow.triage(alert_data)
-"
+cargo build --workspace --exclude tw-bridge
+cd python && uv sync --extra dev
 ```
 
-## Project Structure
-
-```
-├── crates/
-│   ├── tw-core/        # Core data models, event bus
-│   ├── tw-connectors/  # SIEM, EDR, ThreatIntel, Ticketing
-│   ├── tw-policy/      # Guardrails, approvals, kill switch
-│   ├── tw-actions/     # Response action implementations
-│   └── tw-cli/         # Command-line interface
-├── tw-bridge/          # PyO3 Rust-Python bridge
-├── python/
-│   └── tw_ai/
-│       ├── agents/     # ReAct agent, tools, prompts
-│       ├── analysis/   # Email, phishing, security analysis
-│       ├── workflows/  # Triage orchestration
-│       ├── llm/        # OpenAI, Anthropic, Local providers
-│       └── metrics/    # Collection and reporting
-└── config/
-    ├── guardrails.yaml # Policy configuration
-    └── playbooks/      # Triage playbooks
-```
-
-## Key Features
-
-- **ReAct Agent**: Reasoning + Acting loop for intelligent triage
-- **Multi-Provider LLM**: OpenAI, Anthropic, local models
-- **Policy Guardrails**: Deny lists, rate limits, approval workflows
-- **Kill Switch**: Emergency halt for all automation
-- **Operation Modes**: Assisted → Supervised → Autonomous
-- **Playbooks**: YAML-configured triage workflows
-
-## Configuration
-
-Edit `config/guardrails.yaml` to configure:
-- Protected assets and users
-- Rate limits per action type
-- Approval requirements
-- Auto-approve rules
-
-## Testing
+### Run
 
 ```bash
-# Rust tests
-cargo test --workspace
+# API server (default binds on 0.0.0.0:8080 unless overridden)
+cargo run -p tw-api
 
-# Python tests
-cd python && pytest tests/ -v
+# CLI help
+cargo run -p tw-cli -- --help
 ```
+
+### Test
+
+```bash
+# Rust
+cargo fmt --all -- --check
+cargo clippy --workspace --exclude tw-bridge -- -D warnings
+cargo test --workspace --exclude tw-bridge
+
+# Python
+cd python
+uv run ruff check tw_ai
+uv run black --check tw_ai
+uv run mypy tw_ai --ignore-missing-imports
+uv run pytest tests/ -v --tb=short
+
+# tw-bridge
+cd ../tw-bridge
+python -m pytest python/tests -v
+```
+
+## Documentation
+
+- Docs source: `docs-site/src/`
+- Build docs locally:
+
+```bash
+mdbook build docs-site
+```
+
+- Open generated docs: `docs-site/book/index.html`
 
 ## License
 

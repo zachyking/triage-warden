@@ -73,6 +73,26 @@
   - [Notifications Setup](./configuration/notifications-setup.md)
   - [Policies Guide](./configuration/policies-guide.md)
 
+# Integrations
+
+- [Integrations Overview](./integrations/README.md)
+  - [SSO Integration Guide](./integrations/sso/README.md)
+  - [Okta Setup](./integrations/sso/okta.md)
+  - [Azure AD Setup](./integrations/sso/azure-ad.md)
+  - [Google Workspace Setup](./integrations/sso/google-workspace.md)
+  - [Generic OIDC/SAML Setup](./integrations/sso/generic-oidc-saml.md)
+
+# ADRs
+
+- [Architecture Decision Records](./adr/README.md)
+  - [ADR-001: Event Bus Architecture](./adr/001-event-bus-architecture.md)
+  - [ADR-002: Dual Database Support](./adr/002-dual-database-support.md)
+  - [ADR-003: Credential Encryption at Rest](./adr/003-credential-encryption.md)
+  - [ADR-004: Session Management Strategy](./adr/004-session-management.md)
+  - [ADR-005: API Key Format and Security](./adr/005-api-key-format.md)
+  - [ADR-006: Operation Modes](./adr/006-operation-modes.md)
+  - [ADR-007: Kill Switch Design](./adr/007-kill-switch-design.md)
+
 # Deployment
 
 - [Deployment Guide](./deployment/README.md)
