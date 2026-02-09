@@ -21,6 +21,7 @@ from tw_ai.rag.validation import (
     InvalidFilterKeyError,
     InvalidFilterOperatorError,
     InvalidFilterValueError,
+    InvalidTopKError,
     QueryTooLongError,
     QueryTooShortError,
     RAGQueryValidator,
@@ -205,6 +206,16 @@ class TestTopKValidation:
         result = validator.validate_top_k(1000)
         assert result == 50
 
+    def test_top_k_bool_rejected(self):
+        """Test that bool values are not accepted as integers for top_k."""
+        validator = RAGQueryValidator()
+
+        with pytest.raises(InvalidTopKError) as exc_info:
+            validator.validate_top_k(True)
+
+        assert "must be an integer" in str(exc_info.value)
+        assert exc_info.value.field == "top_k"
+
 
 class TestFilterValidation:
     """Tests for metadata filter validation."""
@@ -375,6 +386,20 @@ class TestFilterValidation:
         filters = {"is_subtechnique": "yes"}
         with pytest.raises(InvalidFilterValueError):
             validator.validate_filters(filters, "mitre_attack")
+
+    def test_bool_not_accepted_for_numeric_filter(self):
+        """Test that bool is rejected for numeric fields."""
+        validator = RAGQueryValidator()
+
+        with pytest.raises(InvalidFilterValueError):
+            validator.validate_filters({"confidence": True}, "triage_incidents")
+
+    def test_bool_accepted_for_bool_filter(self):
+        """Test that bool remains valid for boolean fields."""
+        validator = RAGQueryValidator()
+
+        result = validator.validate_filters({"is_subtechnique": True}, "mitre_attack")
+        assert result == {"is_subtechnique": True}
 
     def test_filter_string_sanitization(self):
         """Test that string values are sanitized."""

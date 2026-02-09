@@ -257,6 +257,12 @@ class FilterTooComplexError(RAGValidationError):
     pass
 
 
+class InvalidTopKError(RAGValidationError):
+    """Raised when top_k is invalid."""
+
+    pass
+
+
 # =============================================================================
 # Validator Classes
 # =============================================================================
@@ -393,16 +399,16 @@ class RAGQueryValidator:
             Validated top_k value.
 
         Raises:
-            ValueError: If top_k is invalid.
+            InvalidTopKError: If top_k is invalid.
         """
         if top_k is None:
             return 5  # Default
 
-        if not isinstance(top_k, int):
-            raise ValueError("top_k must be an integer", "top_k")
+        if isinstance(top_k, bool) or not isinstance(top_k, int):
+            raise InvalidTopKError("top_k must be an integer", field="top_k")
 
         if top_k < 1:
-            raise ValueError("top_k must be at least 1", "top_k")
+            raise InvalidTopKError("top_k must be at least 1", field="top_k")
 
         if top_k > self._max_top_k:
             logger.warning(
@@ -687,6 +693,16 @@ class RAGQueryValidator:
                     field="filters",
                 )
             return self._sanitize_value(value)
+
+        # `bool` is a subclass of `int` in Python. When a numeric type is expected,
+        # reject boolean values to avoid accepting unintended truthy/falsey filters.
+        if isinstance(value, bool) and not (
+            expected_type is bool or (isinstance(expected_type, tuple) and bool in expected_type)
+        ):
+            raise InvalidFilterValueError(
+                f"Filter value for '{key}' must be {expected_type}, got bool",
+                field="filters",
+            )
 
         if not isinstance(value, expected_type):
             raise InvalidFilterValueError(

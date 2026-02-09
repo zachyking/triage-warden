@@ -64,14 +64,14 @@ use tw_policy::{
 static TOKIO_RUNTIME: OnceCell<Runtime> = OnceCell::new();
 
 /// Gets or initializes the shared Tokio runtime.
-fn get_runtime() -> &'static Runtime {
-    TOKIO_RUNTIME.get_or_init(|| {
+fn get_runtime() -> PyResult<&'static Runtime> {
+    TOKIO_RUNTIME.get_or_try_init(|| {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .worker_threads(4)
             .thread_name("tw-bridge-worker")
             .build()
-            .expect("Failed to create Tokio runtime")
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {}", e)))
     })
 }
 
@@ -390,7 +390,7 @@ impl ThreatIntelBridge {
         let connector = Arc::clone(&self.connector);
         let hash = hash.to_string();
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.lookup_hash(&hash).await })
             .map_err(connector_error_to_py)?;
 
@@ -417,7 +417,7 @@ impl ThreatIntelBridge {
 
         let connector = Arc::clone(&self.connector);
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.lookup_ip(&ip_addr).await })
             .map_err(connector_error_to_py)?;
 
@@ -440,7 +440,7 @@ impl ThreatIntelBridge {
         let connector = Arc::clone(&self.connector);
         let domain = domain.to_string();
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.lookup_domain(&domain).await })
             .map_err(connector_error_to_py)?;
 
@@ -463,7 +463,7 @@ impl ThreatIntelBridge {
         let connector = Arc::clone(&self.connector);
         let url = url.to_string();
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.lookup_url(&url).await })
             .map_err(connector_error_to_py)?;
 
@@ -483,7 +483,7 @@ impl ThreatIntelBridge {
         let connector = Arc::clone(&self.connector);
         let connector_type = self.connector_type.clone();
 
-        let health = get_runtime()
+        let health = get_runtime()?
             .block_on(async move { connector.health_check().await })
             .map_err(connector_error_to_py)?;
 
@@ -645,7 +645,7 @@ impl SIEMBridge {
         let query = query.to_string();
         let timerange = TimeRange::last_hours(hours);
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.search(&query, timerange).await })
             .map_err(connector_error_to_py)?;
 
@@ -673,7 +673,7 @@ impl SIEMBridge {
     pub fn get_recent_alerts(&self, py: Python<'_>, limit: usize) -> PyResult<PyObject> {
         let connector = Arc::clone(&self.connector);
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.get_recent_alerts(limit).await })
             .map_err(connector_error_to_py)?;
 
@@ -692,7 +692,7 @@ impl SIEMBridge {
     pub fn get_saved_searches(&self, py: Python<'_>) -> PyResult<PyObject> {
         let connector = Arc::clone(&self.connector);
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.get_saved_searches().await })
             .map_err(connector_error_to_py)?;
 
@@ -725,7 +725,7 @@ impl SIEMBridge {
         let field = field.to_string();
         let timerange = TimeRange::last_hours(hours);
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.get_field_values(&field, timerange, limit).await })
             .map_err(connector_error_to_py)?;
 
@@ -741,7 +741,7 @@ impl SIEMBridge {
     pub fn health_check(&self, py: Python<'_>) -> PyResult<PyObject> {
         let connector = Arc::clone(&self.connector);
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.health_check().await })
             .map_err(connector_error_to_py)?;
 
@@ -927,7 +927,7 @@ impl EDRBridge {
         let connector = Arc::clone(&self.connector);
         let hostname = hostname.to_string();
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.get_host_info(&hostname).await })
             .map_err(connector_error_to_py)?;
 
@@ -952,7 +952,7 @@ impl EDRBridge {
         let connector = Arc::clone(&self.connector);
         let query = query.to_string();
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.search_hosts(&query, limit).await })
             .map_err(connector_error_to_py)?;
 
@@ -982,7 +982,7 @@ impl EDRBridge {
         let connector = Arc::clone(&self.connector);
         let hostname = hostname.to_string();
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.isolate_host(&hostname).await })
             .map_err(connector_error_to_py)?;
 
@@ -1005,7 +1005,7 @@ impl EDRBridge {
         let connector = Arc::clone(&self.connector);
         let hostname = hostname.to_string();
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.unisolate_host(&hostname).await })
             .map_err(connector_error_to_py)?;
 
@@ -1038,7 +1038,7 @@ impl EDRBridge {
         let connector = Arc::clone(&self.connector);
         let hostname = hostname.to_string();
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.get_host_detections(&hostname).await })
             .map_err(connector_error_to_py)?;
 
@@ -1064,7 +1064,7 @@ impl EDRBridge {
         let hostname = hostname.to_string();
         let timerange = TimeRange::last_hours(hours);
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.get_processes(&hostname, timerange).await })
             .map_err(connector_error_to_py)?;
 
@@ -1095,7 +1095,7 @@ impl EDRBridge {
         let hostname = hostname.to_string();
         let timerange = TimeRange::last_hours(hours);
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move {
                 connector
                     .get_network_connections(&hostname, timerange)
@@ -1115,7 +1115,7 @@ impl EDRBridge {
     pub fn health_check(&self, py: Python<'_>) -> PyResult<PyObject> {
         let connector = Arc::clone(&self.connector);
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.health_check().await })
             .map_err(connector_error_to_py)?;
 
@@ -1289,7 +1289,7 @@ impl EmailGatewayBridge {
             limit: 100,
         };
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.search_emails(search_query).await })
             .map_err(connector_error_to_py)?;
 
@@ -1312,7 +1312,7 @@ impl EmailGatewayBridge {
         let connector = Arc::clone(&self.connector);
         let message_id = message_id.to_string();
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.get_email(&message_id).await })
             .map_err(connector_error_to_py)?;
 
@@ -1335,7 +1335,7 @@ impl EmailGatewayBridge {
         let connector = Arc::clone(&self.connector);
         let message_id = message_id.to_string();
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.quarantine_email(&message_id).await })
             .map_err(connector_error_to_py)?;
 
@@ -1356,7 +1356,7 @@ impl EmailGatewayBridge {
         let connector = Arc::clone(&self.connector);
         let message_id = message_id.to_string();
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.release_email(&message_id).await })
             .map_err(connector_error_to_py)?;
 
@@ -1377,7 +1377,7 @@ impl EmailGatewayBridge {
         let connector = Arc::clone(&self.connector);
         let sender = sender_address.to_string();
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.block_sender(&sender).await })
             .map_err(connector_error_to_py)?;
 
@@ -1398,7 +1398,7 @@ impl EmailGatewayBridge {
         let connector = Arc::clone(&self.connector);
         let sender = sender_address.to_string();
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.unblock_sender(&sender).await })
             .map_err(connector_error_to_py)?;
 
@@ -1416,7 +1416,7 @@ impl EmailGatewayBridge {
         let connector = Arc::clone(&self.connector);
         let connector_type = self.connector_type.clone();
 
-        let health = get_runtime()
+        let health = get_runtime()?
             .block_on(async move { connector.health_check().await })
             .map_err(connector_error_to_py)?;
 
@@ -1542,7 +1542,7 @@ impl PolicyBridge {
 
         let policy_engine = Arc::clone(&self.policy_engine);
 
-        let decision = get_runtime().block_on(async move {
+        let decision = get_runtime()?.block_on(async move {
             let engine = policy_engine.read().await;
             engine.evaluate(&context).await
         });
@@ -1593,7 +1593,7 @@ impl PolicyBridge {
     ///     if mode == "autonomous":
     ///         # Full automation enabled
     pub fn get_operation_mode(&self) -> PyResult<String> {
-        let mode = get_runtime().block_on(async { self.mode_manager.get_mode().await });
+        let mode = get_runtime()?.block_on(async { self.mode_manager.get_mode().await });
         Ok(match mode {
             OperationMode::Assisted => "assisted".to_string(),
             OperationMode::Supervised => "supervised".to_string(),
@@ -1648,7 +1648,7 @@ impl PolicyBridge {
             }
         };
 
-        let request = get_runtime().block_on(async {
+        let request = get_runtime()?.block_on(async {
             self.approval_manager
                 .submit_request(action_type, target, approval_level, "ai-agent")
                 .await
@@ -1682,7 +1682,7 @@ impl PolicyBridge {
             .map_err(|e| PyValueError::new_err(format!("Invalid request_id: {}", e)))?;
 
         let request =
-            get_runtime().block_on(async { self.approval_manager.get_request(uuid).await });
+            get_runtime()?.block_on(async { self.approval_manager.get_request(uuid).await });
 
         let result = match request {
             Some(req) => {
@@ -1902,10 +1902,10 @@ impl TicketingBridge {
 
         let result = match &self.connector {
             TicketingConnectorType::Mock(c) => {
-                get_runtime().block_on(async { c.create_ticket(request).await })
+                get_runtime()?.block_on(async { c.create_ticket(request).await })
             }
             TicketingConnectorType::Jira(c) => {
-                get_runtime().block_on(async { c.create_ticket(request).await })
+                get_runtime()?.block_on(async { c.create_ticket(request).await })
             }
         }
         .map_err(connector_error_to_py)?;
@@ -1928,10 +1928,10 @@ impl TicketingBridge {
     pub fn get_ticket(&self, py: Python<'_>, ticket_id: &str) -> PyResult<PyObject> {
         let result = match &self.connector {
             TicketingConnectorType::Mock(c) => {
-                get_runtime().block_on(async { c.get_ticket(ticket_id).await })
+                get_runtime()?.block_on(async { c.get_ticket(ticket_id).await })
             }
             TicketingConnectorType::Jira(c) => {
-                get_runtime().block_on(async { c.get_ticket(ticket_id).await })
+                get_runtime()?.block_on(async { c.get_ticket(ticket_id).await })
             }
         }
         .map_err(connector_error_to_py)?;
@@ -2026,9 +2026,9 @@ impl TicketingBridge {
         let ticket_id = ticket_id.to_string();
         let result =
             match &self.connector {
-                TicketingConnectorType::Mock(c) => get_runtime()
+                TicketingConnectorType::Mock(c) => get_runtime()?
                     .block_on(async { c.update_ticket(&ticket_id, update_request).await }),
-                TicketingConnectorType::Jira(c) => get_runtime()
+                TicketingConnectorType::Jira(c) => get_runtime()?
                     .block_on(async { c.update_ticket(&ticket_id, update_request).await }),
             }
             .map_err(connector_error_to_py)?;
@@ -2055,10 +2055,10 @@ impl TicketingBridge {
 
         match &self.connector {
             TicketingConnectorType::Mock(c) => {
-                get_runtime().block_on(async { c.add_comment(&ticket_id, &comment).await })
+                get_runtime()?.block_on(async { c.add_comment(&ticket_id, &comment).await })
             }
             TicketingConnectorType::Jira(c) => {
-                get_runtime().block_on(async { c.add_comment(&ticket_id, &comment).await })
+                get_runtime()?.block_on(async { c.add_comment(&ticket_id, &comment).await })
             }
         }
         .map_err(connector_error_to_py)?;
@@ -2082,10 +2082,10 @@ impl TicketingBridge {
 
         let result = match &self.connector {
             TicketingConnectorType::Mock(c) => {
-                get_runtime().block_on(async { c.search_tickets(&query, limit).await })
+                get_runtime()?.block_on(async { c.search_tickets(&query, limit).await })
             }
             TicketingConnectorType::Jira(c) => {
-                get_runtime().block_on(async { c.search_tickets(&query, limit).await })
+                get_runtime()?.block_on(async { c.search_tickets(&query, limit).await })
             }
         }
         .map_err(connector_error_to_py)?;
@@ -2106,10 +2106,10 @@ impl TicketingBridge {
 
         let result = match &self.connector {
             TicketingConnectorType::Mock(c) => {
-                get_runtime().block_on(async { c.health_check().await })
+                get_runtime()?.block_on(async { c.health_check().await })
             }
             TicketingConnectorType::Jira(c) => {
-                get_runtime().block_on(async { c.health_check().await })
+                get_runtime()?.block_on(async { c.health_check().await })
             }
         }
         .map_err(connector_error_to_py)?;
@@ -2400,7 +2400,7 @@ impl TriageWardenBridge {
         let connector = Arc::clone(connector);
         let hash = hash.to_string();
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.lookup_hash(&hash).await })
             .map_err(connector_error_to_py)?;
 
@@ -2422,7 +2422,7 @@ impl TriageWardenBridge {
 
         let connector = Arc::clone(connector);
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.lookup_ip(&ip_addr).await })
             .map_err(connector_error_to_py)?;
 
@@ -2441,7 +2441,7 @@ impl TriageWardenBridge {
         let connector = Arc::clone(connector);
         let domain = domain.to_string();
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.lookup_domain(&domain).await })
             .map_err(connector_error_to_py)?;
 
@@ -2460,7 +2460,7 @@ impl TriageWardenBridge {
         let connector = Arc::clone(connector);
         let hostname = hostname.to_string();
 
-        match get_runtime().block_on(async move { connector.get_host_info(&hostname).await }) {
+        match get_runtime()?.block_on(async move { connector.get_host_info(&hostname).await }) {
             Ok(result) => {
                 let obj = pythonize::pythonize(py, &result)
                     .map_err(|e| PyRuntimeError::new_err(format!("Serialization error: {}", e)))?
@@ -2483,7 +2483,7 @@ impl TriageWardenBridge {
         let query = query.to_string();
         let timerange = TimeRange::last_hours(hours as i64);
 
-        let result = get_runtime()
+        let result = get_runtime()?
             .block_on(async move { connector.search(&query, timerange).await })
             .map_err(connector_error_to_py)?;
 
@@ -2529,7 +2529,7 @@ impl TriageWardenBridge {
             custom_fields: std::collections::HashMap::new(),
         };
 
-        let ticket = get_runtime()
+        let ticket = get_runtime()?
             .block_on(async move { connector.create_ticket(request).await })
             .map_err(connector_error_to_py)?;
 

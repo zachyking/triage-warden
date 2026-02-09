@@ -12,7 +12,10 @@ import json
 import re
 from typing import Any, Protocol
 
+import structlog
 from pydantic import BaseModel, Field
+
+logger = structlog.get_logger()
 
 
 class LLMProvider(Protocol):
@@ -71,9 +74,27 @@ class DynamicStepGenerator:
         """
         if self._llm is None:
             return self._default_steps(context)
+
         prompt = self._build_prompt(context)
-        response = await self._llm.generate(prompt)
-        return self._parse_steps(response)
+
+        try:
+            response = await self._llm.generate(prompt)
+        except Exception as e:
+            logger.warning(
+                "playbook_llm_generation_failed_falling_back_to_defaults",
+                error=str(e),
+            )
+            return self._default_steps(context)
+
+        steps = self._parse_steps(response)
+        if steps:
+            return steps
+
+        logger.warning(
+            "playbook_llm_response_parse_failed_falling_back_to_defaults",
+            response_preview=response[:250],
+        )
+        return self._default_steps(context)
 
     def _build_prompt(self, context: StepGenerationContext) -> str:
         """Build LLM prompt for step generation.

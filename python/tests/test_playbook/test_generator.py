@@ -13,7 +13,6 @@ from tw_ai.playbook.generator import (
     StepGenerationContext,
 )
 
-
 # =============================================================================
 # Fixtures
 # =============================================================================
@@ -37,7 +36,10 @@ def detailed_context() -> StepGenerationContext:
         incident_severity="critical",
         incident_type="phishing",
         available_actions=["block_sender", "quarantine_email", "isolate_host", "notify_team"],
-        organization_policies={"auto_quarantine_phishing": True, "require_approval_for_isolation": True},
+        organization_policies={
+            "auto_quarantine_phishing": True,
+            "require_approval_for_isolation": True,
+        },
         previous_step_results=[
             {"action": "collect_evidence", "status": "completed", "output": {"indicators": 5}},
         ],
@@ -74,6 +76,13 @@ class MockLLM:
     async def generate(self, prompt: str) -> str:
         self.prompts.append(prompt)
         return self.response
+
+
+class FailingLLM:
+    """Mock LLM provider that raises an exception."""
+
+    async def generate(self, prompt: str) -> str:
+        raise RuntimeError(f"provider unavailable for prompt: {prompt[:20]}")
 
 
 # =============================================================================
@@ -171,7 +180,9 @@ class TestPromptBuilding:
         assert "high" in prompt
         assert "unauthorized_access" in prompt
 
-    def test_prompt_contains_available_actions(self, detailed_context: StepGenerationContext) -> None:
+    def test_prompt_contains_available_actions(
+        self, detailed_context: StepGenerationContext
+    ) -> None:
         """Test that prompt includes available actions."""
         generator = DynamicStepGenerator()
         prompt = generator._build_prompt(detailed_context)
@@ -187,7 +198,9 @@ class TestPromptBuilding:
 
         assert "auto_quarantine_phishing" in prompt
 
-    def test_prompt_contains_previous_results(self, detailed_context: StepGenerationContext) -> None:
+    def test_prompt_contains_previous_results(
+        self, detailed_context: StepGenerationContext
+    ) -> None:
         """Test that prompt includes previous step results."""
         generator = DynamicStepGenerator()
         prompt = generator._build_prompt(detailed_context)
@@ -222,26 +235,28 @@ class TestStepParsing:
     def test_parse_valid_json_array(self) -> None:
         """Test parsing a valid JSON array of steps."""
         generator = DynamicStepGenerator()
-        response = json.dumps([
-            {
-                "name": "Collect Evidence",
-                "action": "collect_evidence",
-                "parameters": {},
-                "requires_approval": False,
-                "risk_level": "low",
-                "rationale": "Gather initial evidence",
-                "estimated_duration_secs": 30,
-            },
-            {
-                "name": "Block IP",
-                "action": "block_ip",
-                "parameters": {"ip": "10.0.0.1"},
-                "requires_approval": True,
-                "risk_level": "high",
-                "rationale": "Block malicious source",
-                "estimated_duration_secs": 15,
-            },
-        ])
+        response = json.dumps(
+            [
+                {
+                    "name": "Collect Evidence",
+                    "action": "collect_evidence",
+                    "parameters": {},
+                    "requires_approval": False,
+                    "risk_level": "low",
+                    "rationale": "Gather initial evidence",
+                    "estimated_duration_secs": 30,
+                },
+                {
+                    "name": "Block IP",
+                    "action": "block_ip",
+                    "parameters": {"ip": "10.0.0.1"},
+                    "requires_approval": True,
+                    "risk_level": "high",
+                    "rationale": "Block malicious source",
+                    "estimated_duration_secs": 15,
+                },
+            ]
+        )
 
         steps = generator._parse_steps(response)
         assert len(steps) == 2
@@ -476,17 +491,19 @@ class TestLLMIntegration:
     @pytest.mark.asyncio
     async def test_generate_steps_with_llm(self, basic_context: StepGenerationContext) -> None:
         """Test step generation with a mock LLM provider."""
-        mock_response = json.dumps([
-            {
-                "name": "Investigate Login",
-                "action": "investigate_login",
-                "parameters": {"ip": "10.0.0.1"},
-                "requires_approval": False,
-                "risk_level": "low",
-                "rationale": "Check the login source",
-                "estimated_duration_secs": 30,
-            },
-        ])
+        mock_response = json.dumps(
+            [
+                {
+                    "name": "Investigate Login",
+                    "action": "investigate_login",
+                    "parameters": {"ip": "10.0.0.1"},
+                    "requires_approval": False,
+                    "risk_level": "low",
+                    "rationale": "Check the login source",
+                    "estimated_duration_secs": 30,
+                },
+            ]
+        )
         llm = MockLLM(mock_response)
         generator = DynamicStepGenerator(llm_provider=llm)
 
@@ -511,12 +528,24 @@ class TestLLMIntegration:
 
     @pytest.mark.asyncio
     async def test_llm_returns_invalid_json(self, basic_context: StepGenerationContext) -> None:
-        """Test handling of invalid JSON from LLM."""
+        """Test invalid LLM output falls back to default deterministic steps."""
         llm = MockLLM("I cannot generate steps for this incident.")
         generator = DynamicStepGenerator(llm_provider=llm)
 
         steps = await generator.generate_steps(basic_context)
-        assert steps == []
+        assert len(steps) > 0
+        assert steps[0].action == "collect_evidence"
+
+    @pytest.mark.asyncio
+    async def test_llm_exception_falls_back_to_defaults(
+        self, basic_context: StepGenerationContext
+    ) -> None:
+        """Test LLM provider errors fall back to default steps."""
+        generator = DynamicStepGenerator(llm_provider=FailingLLM())
+        steps = await generator.generate_steps(basic_context)
+
+        assert len(steps) > 0
+        assert steps[0].action == "collect_evidence"
 
     @pytest.mark.asyncio
     async def test_no_llm_uses_defaults(self, basic_context: StepGenerationContext) -> None:
@@ -548,6 +577,6 @@ class TestLLMIntegration:
 
         valid_levels = {"low", "medium", "high", "critical"}
         for step in steps:
-            assert step.risk_level in valid_levels, (
-                f"Step '{step.name}' has invalid risk level '{step.risk_level}'"
-            )
+            assert (
+                step.risk_level in valid_levels
+            ), f"Step '{step.name}' has invalid risk level '{step.risk_level}'"
