@@ -336,10 +336,6 @@ impl Default for KillSwitch {
     }
 }
 
-// KillSwitch is Send + Sync due to its use of atomic operations and RwLock
-unsafe impl Send for KillSwitch {}
-unsafe impl Sync for KillSwitch {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
