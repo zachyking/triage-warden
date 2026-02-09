@@ -37,4 +37,4 @@ Use provider-specific documents in this folder for exact values.
 ## Security Notes
 
 - OIDC ID tokens are validated for issuer/audience/nonce/expiration and signature (JWKS).
-- SAML assertions enforce signature presence and certificate pinning checks.
+- SAML assertions enforce request correlation (`InResponseTo`), destination checks, signature presence, SHA-2 algorithm allow-listing, and certificate pinning checks.

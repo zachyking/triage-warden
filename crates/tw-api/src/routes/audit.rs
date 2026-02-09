@@ -7,6 +7,7 @@ use crate::state::AppState;
 use axum::extract::{Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tw_core::audit::immutable::ImmutableAuditPayload;
 use tw_core::auth::DEFAULT_TENANT_ID;
@@ -19,6 +20,7 @@ use tw_core::{
 };
 
 const IMMUTABLE_ANCHOR_KEY: &str = "immutable_audit_anchor";
+const IMMUTABLE_ARCHIVE_INDEX_KEY: &str = "immutable_audit_archive_index";
 
 fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> uuid::Uuid {
     tenant.map(|ctx| ctx.tenant_id).unwrap_or(DEFAULT_TENANT_ID)
@@ -30,6 +32,9 @@ pub fn routes() -> Router<AppState> {
         .route("/immutable/anchor", post(anchor_chain))
         .route("/immutable/verify", get(verify_chain))
         .route("/immutable/export", get(export_chain))
+        .route("/immutable/archive", post(archive_chain))
+        .route("/immutable/archive/index", get(list_archives))
+        .route("/immutable/archive/latest", get(get_latest_archive))
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,6 +62,20 @@ struct VerifyResponse {
 struct ExportResponse {
     entries: Vec<ImmutableAuditLog>,
     root_hash: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct ImmutableArchiveMetadata {
+    archive_id: uuid::Uuid,
+    archived_at: DateTime<Utc>,
+    entries: usize,
+    root_hash: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct ImmutableArchiveRecord {
+    metadata: ImmutableArchiveMetadata,
+    entries: Vec<ImmutableAuditLog>,
 }
 
 async fn anchor_chain(
@@ -137,6 +156,119 @@ async fn export_chain(
         entries: chain,
         root_hash,
     }))
+}
+
+async fn archive_chain(
+    State(state): State<AppState>,
+    RequireAdmin(_admin): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
+    Query(query): Query<AuditQuery>,
+) -> Result<Json<ImmutableArchiveMetadata>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
+    let chain = build_immutable_chain(&state, tenant_id, query.limit.unwrap_or(5000)).await?;
+    let root_hash = chain.last().map(|e| e.hash.clone()).unwrap_or_default();
+    let metadata = ImmutableArchiveMetadata {
+        archive_id: uuid::Uuid::new_v4(),
+        archived_at: Utc::now(),
+        entries: chain.len(),
+        root_hash,
+    };
+    let record = ImmutableArchiveRecord {
+        metadata: metadata.clone(),
+        entries: chain,
+    };
+
+    let settings_repo: Box<dyn SettingsRepository> =
+        create_settings_repository(&state.db, state.encryptor.clone());
+    let record_key = format!("immutable_audit_archive_{}", metadata.archive_id);
+    settings_repo
+        .save_raw(
+            tenant_id,
+            &record_key,
+            &serde_json::to_string(&record)
+                .map_err(|e| ApiError::Internal(format!("failed to serialize archive: {e}")))?,
+        )
+        .await
+        .map_err(ApiError::from)?;
+
+    let mut index = load_archive_index(settings_repo.as_ref(), tenant_id).await?;
+    index.retain(|entry| entry.archive_id != metadata.archive_id);
+    index.push(metadata.clone());
+    save_archive_index(settings_repo.as_ref(), tenant_id, &index).await?;
+
+    Ok(Json(metadata))
+}
+
+async fn list_archives(
+    State(state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
+) -> Result<Json<Vec<ImmutableArchiveMetadata>>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
+    let settings_repo: Box<dyn SettingsRepository> =
+        create_settings_repository(&state.db, state.encryptor.clone());
+    let mut index = load_archive_index(settings_repo.as_ref(), tenant_id).await?;
+    index.sort_by(|a, b| b.archived_at.cmp(&a.archived_at));
+    Ok(Json(index))
+}
+
+async fn get_latest_archive(
+    State(state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
+) -> Result<Json<Option<ImmutableArchiveRecord>>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
+    let settings_repo: Box<dyn SettingsRepository> =
+        create_settings_repository(&state.db, state.encryptor.clone());
+    let mut index = load_archive_index(settings_repo.as_ref(), tenant_id).await?;
+    index.sort_by(|a, b| b.archived_at.cmp(&a.archived_at));
+
+    let Some(latest) = index.first() else {
+        return Ok(Json(None));
+    };
+
+    let key = format!("immutable_audit_archive_{}", latest.archive_id);
+    let Some(raw) = settings_repo
+        .get_raw(tenant_id, &key)
+        .await
+        .map_err(ApiError::from)?
+    else {
+        return Ok(Json(None));
+    };
+
+    let record: ImmutableArchiveRecord = serde_json::from_str(&raw)
+        .map_err(|e| ApiError::Internal(format!("failed to parse archive record: {e}")))?;
+    Ok(Json(Some(record)))
+}
+
+async fn load_archive_index(
+    repo: &dyn SettingsRepository,
+    tenant_id: uuid::Uuid,
+) -> Result<Vec<ImmutableArchiveMetadata>, ApiError> {
+    if let Some(raw) = repo
+        .get_raw(tenant_id, IMMUTABLE_ARCHIVE_INDEX_KEY)
+        .await
+        .map_err(ApiError::from)?
+    {
+        let parsed = serde_json::from_str::<Vec<ImmutableArchiveMetadata>>(&raw)
+            .map_err(|e| ApiError::BadRequest(format!("invalid immutable archive index: {e}")))?;
+        return Ok(parsed);
+    }
+
+    Ok(Vec::new())
+}
+
+async fn save_archive_index(
+    repo: &dyn SettingsRepository,
+    tenant_id: uuid::Uuid,
+    entries: &[ImmutableArchiveMetadata],
+) -> Result<(), ApiError> {
+    let payload = serde_json::to_string(entries)
+        .map_err(|e| ApiError::Internal(format!("failed to serialize archive index: {e}")))?;
+    repo.save_raw(tenant_id, IMMUTABLE_ARCHIVE_INDEX_KEY, &payload)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(())
 }
 
 async fn build_immutable_chain(

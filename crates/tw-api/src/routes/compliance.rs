@@ -18,6 +18,9 @@ use tw_core::db::{
     create_audit_repository, create_settings_repository, AuditRepository, SettingsRepository,
 };
 
+const COMPLIANCE_REPORT_INDEX_KEY: &str = "compliance_report_index";
+const EVIDENCE_PACKAGE_INDEX_KEY: &str = "compliance_evidence_package_index";
+
 fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> uuid::Uuid {
     tenant.map(|ctx| ctx.tenant_id).unwrap_or(DEFAULT_TENANT_ID)
 }
@@ -25,10 +28,41 @@ fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> uuid:
 /// Creates compliance routes.
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route("/reports", get(list_reports))
         .route("/reports/generate", post(generate_report))
         .route("/reports/:report_id", get(get_report))
+        .route("/reports/:report_id/verify", get(verify_report))
         .route("/evidence/package", post(create_evidence_package))
+        .route("/evidence/packages", get(list_evidence_packages))
+        .route("/evidence/package/:package_id", get(get_evidence_package))
+        .route(
+            "/evidence/package/:package_id/verify",
+            get(verify_evidence_package),
+        )
+        .route(
+            "/evidence/package/:package_id/custody",
+            post(add_evidence_custody_event),
+        )
         .route("/metrics", get(security_metrics))
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct ReportIndexEntry {
+    report_id: uuid::Uuid,
+    framework: ComplianceFramework,
+    period_start: DateTime<Utc>,
+    period_end: DateTime<Utc>,
+    generated_at: DateTime<Utc>,
+    checksum: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct EvidencePackageIndexEntry {
+    package_id: uuid::Uuid,
+    name: String,
+    request_id: Option<String>,
+    generated_at: DateTime<Utc>,
+    checksum: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -46,6 +80,13 @@ struct EvidencePackageRequest {
     period_end: DateTime<Utc>,
 }
 
+#[derive(Debug, Deserialize)]
+struct CustodyEventRequest {
+    actor: String,
+    action: String,
+    notes: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct SecurityMetricsResponse {
     total_security_events: usize,
@@ -53,6 +94,27 @@ struct SecurityMetricsResponse {
     failed_events: usize,
     guardrail_triggered_events: usize,
     last_7d_events: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct VerifyIntegrityResponse {
+    valid: bool,
+    stored_checksum: String,
+    computed_checksum: String,
+    reason: Option<String>,
+}
+
+async fn list_reports(
+    State(state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
+) -> Result<Json<Vec<ReportIndexEntry>>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
+    let settings_repo: Box<dyn SettingsRepository> =
+        create_settings_repository(&state.db, state.encryptor.clone());
+    let mut entries = load_report_index(settings_repo.as_ref(), tenant_id).await?;
+    entries.sort_by(|a, b| b.generated_at.cmp(&a.generated_at));
+    Ok(Json(entries))
 }
 
 async fn generate_report(
@@ -135,6 +197,18 @@ async fn generate_report(
         .await
         .map_err(ApiError::from)?;
 
+    let mut index = load_report_index(settings_repo.as_ref(), tenant_id).await?;
+    index.retain(|entry| entry.report_id != report.id);
+    index.push(ReportIndexEntry {
+        report_id: report.id,
+        framework: report.framework.clone(),
+        period_start: report.period.start,
+        period_end: report.period.end,
+        generated_at: report.summary.generated_at,
+        checksum: report.checksum.clone(),
+    });
+    save_report_index(settings_repo.as_ref(), tenant_id, &index).await?;
+
     Ok(Json(report))
 }
 
@@ -157,6 +231,50 @@ async fn get_report(
     let report: ComplianceReport = serde_json::from_str(&raw)
         .map_err(|e| ApiError::Internal(format!("failed to parse report: {e}")))?;
     Ok(Json(report))
+}
+
+async fn verify_report(
+    State(state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
+    Path(report_id): Path<uuid::Uuid>,
+) -> Result<Json<VerifyIntegrityResponse>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
+    let settings_repo: Box<dyn SettingsRepository> =
+        create_settings_repository(&state.db, state.encryptor.clone());
+
+    let key = format!("compliance_report_{report_id}");
+    let raw = settings_repo
+        .get_raw(tenant_id, &key)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::NotFound(format!("Compliance report {} not found", report_id)))?;
+    let report: ComplianceReport = serde_json::from_str(&raw)
+        .map_err(|e| ApiError::Internal(format!("failed to parse report: {e}")))?;
+
+    let computed = report.compute_checksum();
+    let stored = report.checksum.clone();
+    let mut valid = stored == computed;
+    let mut reason = if valid {
+        None
+    } else {
+        Some("Report checksum mismatch".to_string())
+    };
+
+    let index = load_report_index(settings_repo.as_ref(), tenant_id).await?;
+    if let Some(indexed) = index.iter().find(|entry| entry.report_id == report_id) {
+        if indexed.checksum != stored {
+            valid = false;
+            reason = Some("Stored report checksum differs from report index".to_string());
+        }
+    }
+
+    Ok(Json(VerifyIntegrityResponse {
+        valid,
+        stored_checksum: stored,
+        computed_checksum: computed,
+        reason,
+    }))
 }
 
 async fn create_evidence_package(
@@ -216,6 +334,157 @@ async fn create_evidence_package(
         .await
         .map_err(ApiError::from)?;
 
+    let mut index = load_evidence_package_index(settings_repo.as_ref(), tenant_id).await?;
+    index.retain(|entry| entry.package_id != package.id);
+    index.push(EvidencePackageIndexEntry {
+        package_id: package.id,
+        name: package.name.clone(),
+        request_id: package.request_id.clone(),
+        generated_at: package.generated_at,
+        checksum: package.checksum.clone(),
+    });
+    save_evidence_package_index(settings_repo.as_ref(), tenant_id, &index).await?;
+
+    Ok(Json(package))
+}
+
+async fn list_evidence_packages(
+    State(state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
+) -> Result<Json<Vec<EvidencePackageIndexEntry>>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
+    let settings_repo: Box<dyn SettingsRepository> =
+        create_settings_repository(&state.db, state.encryptor.clone());
+    let mut entries = load_evidence_package_index(settings_repo.as_ref(), tenant_id).await?;
+    entries.sort_by(|a, b| b.generated_at.cmp(&a.generated_at));
+    Ok(Json(entries))
+}
+
+async fn get_evidence_package(
+    State(state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
+    Path(package_id): Path<uuid::Uuid>,
+) -> Result<Json<EvidencePackage>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
+    let settings_repo: Box<dyn SettingsRepository> =
+        create_settings_repository(&state.db, state.encryptor.clone());
+    let key = format!("evidence_package_{package_id}");
+    let raw = settings_repo
+        .get_raw(tenant_id, &key)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::NotFound(format!("Evidence package {} not found", package_id)))?;
+    let package: EvidencePackage = serde_json::from_str(&raw)
+        .map_err(|e| ApiError::Internal(format!("failed to parse evidence package: {e}")))?;
+    Ok(Json(package))
+}
+
+async fn verify_evidence_package(
+    State(state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
+    Path(package_id): Path<uuid::Uuid>,
+) -> Result<Json<VerifyIntegrityResponse>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
+    let settings_repo: Box<dyn SettingsRepository> =
+        create_settings_repository(&state.db, state.encryptor.clone());
+    let key = format!("evidence_package_{package_id}");
+    let raw = settings_repo
+        .get_raw(tenant_id, &key)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::NotFound(format!("Evidence package {} not found", package_id)))?;
+    let package: EvidencePackage = serde_json::from_str(&raw)
+        .map_err(|e| ApiError::Internal(format!("failed to parse evidence package: {e}")))?;
+    let computed = package.compute_checksum();
+    let stored = package.checksum.clone();
+    let mut valid = stored == computed;
+    let mut reason = if valid {
+        None
+    } else {
+        Some("Evidence package checksum mismatch".to_string())
+    };
+
+    let index = load_evidence_package_index(settings_repo.as_ref(), tenant_id).await?;
+    if let Some(indexed) = index.iter().find(|entry| entry.package_id == package_id) {
+        if indexed.checksum != stored {
+            valid = false;
+            reason = Some("Stored package checksum differs from package index".to_string());
+        }
+    }
+
+    Ok(Json(VerifyIntegrityResponse {
+        valid,
+        stored_checksum: stored,
+        computed_checksum: computed,
+        reason,
+    }))
+}
+
+async fn add_evidence_custody_event(
+    State(state): State<AppState>,
+    RequireAdmin(_admin): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
+    Path(package_id): Path<uuid::Uuid>,
+    Json(request): Json<CustodyEventRequest>,
+) -> Result<Json<EvidencePackage>, ApiError> {
+    if request.actor.trim().is_empty() {
+        return Err(ApiError::validation_field(
+            "actor",
+            "required",
+            "actor is required",
+        ));
+    }
+    if request.action.trim().is_empty() {
+        return Err(ApiError::validation_field(
+            "action",
+            "required",
+            "action is required",
+        ));
+    }
+
+    let tenant_id = tenant_id_or_default(tenant);
+    let settings_repo: Box<dyn SettingsRepository> =
+        create_settings_repository(&state.db, state.encryptor.clone());
+    let key = format!("evidence_package_{package_id}");
+    let raw = settings_repo
+        .get_raw(tenant_id, &key)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::NotFound(format!("Evidence package {} not found", package_id)))?;
+
+    let mut package: EvidencePackage = serde_json::from_str(&raw)
+        .map_err(|e| ApiError::Internal(format!("failed to parse evidence package: {e}")))?;
+    package.add_custody_event(
+        request.actor.trim(),
+        request.action.trim(),
+        request.notes.clone(),
+    );
+
+    settings_repo
+        .save_raw(
+            tenant_id,
+            &key,
+            &serde_json::to_string(&package).map_err(|e| {
+                ApiError::Internal(format!("failed to store evidence package: {e}"))
+            })?,
+        )
+        .await
+        .map_err(ApiError::from)?;
+
+    let mut index = load_evidence_package_index(settings_repo.as_ref(), tenant_id).await?;
+    index.retain(|entry| entry.package_id != package_id);
+    index.push(EvidencePackageIndexEntry {
+        package_id,
+        name: package.name.clone(),
+        request_id: package.request_id.clone(),
+        generated_at: package.generated_at,
+        checksum: package.checksum.clone(),
+    });
+    save_evidence_package_index(settings_repo.as_ref(), tenant_id, &index).await?;
+
     Ok(Json(package))
 }
 
@@ -271,4 +540,65 @@ async fn security_metrics(
         guardrail_triggered_events,
         last_7d_events,
     }))
+}
+
+async fn load_report_index(
+    repo: &dyn SettingsRepository,
+    tenant_id: uuid::Uuid,
+) -> Result<Vec<ReportIndexEntry>, ApiError> {
+    if let Some(raw) = repo
+        .get_raw(tenant_id, COMPLIANCE_REPORT_INDEX_KEY)
+        .await
+        .map_err(ApiError::from)?
+    {
+        let parsed = serde_json::from_str::<Vec<ReportIndexEntry>>(&raw)
+            .map_err(|e| ApiError::BadRequest(format!("invalid compliance report index: {e}")))?;
+        return Ok(parsed);
+    }
+
+    Ok(Vec::new())
+}
+
+async fn save_report_index(
+    repo: &dyn SettingsRepository,
+    tenant_id: uuid::Uuid,
+    entries: &[ReportIndexEntry],
+) -> Result<(), ApiError> {
+    let payload = serde_json::to_string(entries)
+        .map_err(|e| ApiError::Internal(format!("failed to serialize report index: {e}")))?;
+    repo.save_raw(tenant_id, COMPLIANCE_REPORT_INDEX_KEY, &payload)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(())
+}
+
+async fn load_evidence_package_index(
+    repo: &dyn SettingsRepository,
+    tenant_id: uuid::Uuid,
+) -> Result<Vec<EvidencePackageIndexEntry>, ApiError> {
+    if let Some(raw) = repo
+        .get_raw(tenant_id, EVIDENCE_PACKAGE_INDEX_KEY)
+        .await
+        .map_err(ApiError::from)?
+    {
+        let parsed = serde_json::from_str::<Vec<EvidencePackageIndexEntry>>(&raw).map_err(|e| {
+            ApiError::BadRequest(format!("invalid evidence package index payload: {e}"))
+        })?;
+        return Ok(parsed);
+    }
+
+    Ok(Vec::new())
+}
+
+async fn save_evidence_package_index(
+    repo: &dyn SettingsRepository,
+    tenant_id: uuid::Uuid,
+    entries: &[EvidencePackageIndexEntry],
+) -> Result<(), ApiError> {
+    let payload = serde_json::to_string(entries)
+        .map_err(|e| ApiError::Internal(format!("failed to serialize evidence index: {e}")))?;
+    repo.save_raw(tenant_id, EVIDENCE_PACKAGE_INDEX_KEY, &payload)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(())
 }

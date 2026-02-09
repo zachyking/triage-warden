@@ -35,6 +35,7 @@ use super::provisioning::{SsoClaims, UserProvisioner};
 const SAML_PROVIDER_KEY: &str = "saml_provider";
 const SAML_RELAY_STATE_KEY: &str = "saml_relay_state";
 const SAML_SESSION_INDEX_KEY: &str = "saml_session_index";
+const SAML_REQUEST_ID_KEY: &str = "saml_request_id";
 
 /// SAML route set mounted at `/auth/saml`.
 pub fn routes() -> Router<AppState> {
@@ -63,11 +64,16 @@ struct ParsedSamlAssertion {
     issuer: String,
     subject: String,
     audience: String,
+    destination: Option<String>,
+    in_response_to: Option<String>,
+    nameid_format: Option<String>,
     email: String,
     name: Option<String>,
     groups: Vec<String>,
     roles: Vec<String>,
     session_index: Option<String>,
+    signature_method: Option<String>,
+    digest_method: Option<String>,
     mfa_verified: bool,
     not_before: Option<DateTime<Utc>>,
     not_on_or_after: Option<DateTime<Utc>>,
@@ -134,6 +140,10 @@ async fn login(
         .await
         .map_err(|e| ApiError::Internal(format!("failed to persist saml provider: {e}")))?;
     session
+        .insert(SAML_REQUEST_ID_KEY, request_id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("failed to persist saml request id: {e}")))?;
+    session
         .insert(SAML_RELAY_STATE_KEY, relay_state.clone())
         .await
         .map_err(|e| ApiError::Internal(format!("failed to persist relay state: {e}")))?;
@@ -155,6 +165,15 @@ async fn acs(
     Form(form): Form<SamlAcsForm>,
 ) -> Result<Response, ApiError> {
     let cfg = load_saml_config()?;
+    let expected_request_id = session
+        .get::<String>(SAML_REQUEST_ID_KEY)
+        .await
+        .map_err(|e| ApiError::Internal(format!("failed to read SAML request id: {e}")))?;
+    let stored_relay_state = session
+        .get::<String>(SAML_RELAY_STATE_KEY)
+        .await
+        .map_err(|e| ApiError::Internal(format!("failed to read relay state: {e}")))?;
+
     let xml_bytes = STANDARD
         .decode(form.saml_response.as_bytes())
         .map_err(|e| ApiError::Unauthorized(format!("invalid base64 SAML response: {e}")))?;
@@ -162,7 +181,7 @@ async fn acs(
         .map_err(|e| ApiError::Unauthorized(format!("invalid SAML XML encoding: {e}")))?;
 
     let parsed = parse_saml_assertion(&xml, &cfg.attribute_mapping)?;
-    validate_assertion(&parsed, &cfg)?;
+    validate_assertion(&parsed, &cfg, expected_request_id.as_deref())?;
 
     let claims = SsoClaims {
         subject: parsed.subject.clone(),
@@ -212,6 +231,7 @@ async fn acs(
     if let Some(session_index) = parsed.session_index {
         let _ = session.insert(SAML_SESSION_INDEX_KEY, session_index).await;
     }
+    let _ = session.remove::<String>(SAML_REQUEST_ID_KEY).await;
 
     let user_repo = create_user_repository(&state.db);
     let _ = user_repo.update_last_login(user.id).await;
@@ -223,16 +243,7 @@ async fn acs(
         "SAML login completed"
     );
 
-    let stored_relay = session
-        .get::<String>(SAML_RELAY_STATE_KEY)
-        .await
-        .ok()
-        .flatten();
-    let relay_state = form
-        .relay_state
-        .or(stored_relay)
-        .filter(|v| v.starts_with('/') && !v.starts_with("//"))
-        .unwrap_or_else(|| "/".to_string());
+    let relay_state = resolve_relay_state(form.relay_state, stored_relay_state)?;
     let _ = session.remove::<String>(SAML_RELAY_STATE_KEY).await;
 
     Ok(Redirect::to(&relay_state).into_response())
@@ -329,8 +340,12 @@ fn parse_saml_assertion(
         .ok_or_else(|| ApiError::Unauthorized("missing SAML issuer".to_string()))?;
     let subject = extract_tag_text(xml, "NameID")
         .ok_or_else(|| ApiError::Unauthorized("missing SAML NameID".to_string()))?;
+    let nameid_format = extract_attribute_value(xml, "NameID", "Format");
     let audience = extract_tag_text(xml, "Audience")
         .ok_or_else(|| ApiError::Unauthorized("missing SAML audience".to_string()))?;
+    let destination = extract_attribute_value(xml, "Response", "Destination")
+        .or_else(|| extract_attribute_value(xml, "SubjectConfirmationData", "Recipient"));
+    let in_response_to = extract_attribute_value(xml, "Response", "InResponseTo");
 
     let attrs = extract_attributes(xml);
     let email = attrs
@@ -367,6 +382,8 @@ fn parse_saml_assertion(
         });
 
     let session_index = extract_attribute_value(xml, "AuthnStatement", "SessionIndex");
+    let signature_method = extract_attribute_value(xml, "SignatureMethod", "Algorithm");
+    let digest_method = extract_attribute_value(xml, "DigestMethod", "Algorithm");
     let not_before = extract_attribute_value(xml, "Conditions", "NotBefore")
         .and_then(|s| parse_saml_time(&s).ok());
     let not_on_or_after = extract_attribute_value(xml, "Conditions", "NotOnOrAfter")
@@ -384,11 +401,16 @@ fn parse_saml_assertion(
         issuer,
         subject,
         audience,
+        destination,
+        in_response_to,
+        nameid_format,
         email,
         name,
         groups,
         roles,
         session_index,
+        signature_method,
+        digest_method,
         mfa_verified,
         not_before,
         not_on_or_after,
@@ -399,11 +421,38 @@ fn parse_saml_assertion(
     })
 }
 
-fn validate_assertion(assertion: &ParsedSamlAssertion, cfg: &SamlConfig) -> Result<(), ApiError> {
+fn validate_assertion(
+    assertion: &ParsedSamlAssertion,
+    cfg: &SamlConfig,
+    expected_request_id: Option<&str>,
+) -> Result<(), ApiError> {
     if assertion.audience != cfg.entity_id {
         return Err(ApiError::Unauthorized(
             "SAML audience validation failed".to_string(),
         ));
+    }
+
+    if let Some(expected) = expected_request_id {
+        let response_to = assertion
+            .in_response_to
+            .as_deref()
+            .ok_or_else(|| ApiError::Unauthorized("missing SAML InResponseTo".to_string()))?;
+        if !secure_equals(response_to.trim(), expected.trim()) {
+            return Err(ApiError::Unauthorized(
+                "SAML request correlation failed (InResponseTo mismatch)".to_string(),
+            ));
+        }
+    }
+
+    if let Some(destination) = assertion.destination.as_deref() {
+        if !secure_equals(
+            destination.trim_end_matches('/').trim(),
+            cfg.acs_url.trim_end_matches('/').trim(),
+        ) {
+            return Err(ApiError::Unauthorized(
+                "SAML destination validation failed".to_string(),
+            ));
+        }
     }
 
     if let Ok(expected_issuer) = std::env::var("TW_SAML_EXPECTED_ISSUER") {
@@ -411,6 +460,16 @@ fn validate_assertion(assertion: &ParsedSamlAssertion, cfg: &SamlConfig) -> Resu
             return Err(ApiError::Unauthorized(
                 "SAML issuer validation failed".to_string(),
             ));
+        }
+    }
+
+    if let Some(expected_format) = cfg.attribute_mapping.subject_nameid_format.as_deref() {
+        if let Some(actual_format) = assertion.nameid_format.as_deref() {
+            if !secure_equals(actual_format.trim(), expected_format.trim()) {
+                return Err(ApiError::Unauthorized(
+                    "SAML NameID format validation failed".to_string(),
+                ));
+            }
         }
     }
 
@@ -439,6 +498,24 @@ fn validate_assertion(assertion: &ParsedSamlAssertion, cfg: &SamlConfig) -> Resu
     if !assertion.has_signature {
         return Err(ApiError::Unauthorized(
             "Unsigned SAML assertion rejected".to_string(),
+        ));
+    }
+    let signature_method = assertion
+        .signature_method
+        .as_deref()
+        .ok_or_else(|| ApiError::Unauthorized("Missing SAML signature method".to_string()))?;
+    if !is_allowed_signature_method(signature_method) {
+        return Err(ApiError::Unauthorized(
+            "Unsupported SAML signature method".to_string(),
+        ));
+    }
+    let digest_method = assertion
+        .digest_method
+        .as_deref()
+        .ok_or_else(|| ApiError::Unauthorized("Missing SAML digest method".to_string()))?;
+    if !is_allowed_digest_method(digest_method) {
+        return Err(ApiError::Unauthorized(
+            "Unsupported SAML digest method".to_string(),
         ));
     }
 
@@ -560,6 +637,51 @@ fn is_mfa_value(value: &str) -> bool {
         || normalized.contains("multifactor")
 }
 
+fn is_allowed_signature_method(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    normalized.contains("rsa-sha256")
+        || normalized.contains("rsa-sha384")
+        || normalized.contains("rsa-sha512")
+}
+
+fn is_allowed_digest_method(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    normalized.ends_with("sha256")
+        || normalized.ends_with("sha384")
+        || normalized.ends_with("sha512")
+}
+
+fn resolve_relay_state(
+    provided: Option<String>,
+    stored: Option<String>,
+) -> Result<String, ApiError> {
+    let resolved = match (provided, stored) {
+        (Some(provided), Some(stored)) => {
+            if !secure_equals(provided.as_str(), stored.as_str()) {
+                return Err(ApiError::Unauthorized(
+                    "SAML relay state validation failed".to_string(),
+                ));
+            }
+            provided
+        }
+        (Some(provided), None) => provided,
+        (None, Some(stored)) => stored,
+        (None, None) => "/".to_string(),
+    };
+
+    if !is_safe_relay_state(&resolved) {
+        return Err(ApiError::Unauthorized(
+            "Invalid SAML relay state path".to_string(),
+        ));
+    }
+
+    Ok(resolved)
+}
+
+fn is_safe_relay_state(path: &str) -> bool {
+    path.starts_with('/') && !path.starts_with("//")
+}
+
 fn env_required(key: &str) -> Result<String, ApiError> {
     std::env::var(key)
         .map_err(|_| ApiError::BadRequest(format!("Missing environment variable: {key}")))
@@ -612,5 +734,35 @@ mod tests {
         ));
         assert!(is_mfa_value("MFA"));
         assert!(!is_mfa_value("password"));
+    }
+
+    #[test]
+    fn test_allowed_signature_and_digest_algorithms() {
+        assert!(is_allowed_signature_method(
+            "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"
+        ));
+        assert!(!is_allowed_signature_method(
+            "http://www.w3.org/2000/09/xmldsig#hmac-sha1"
+        ));
+        assert!(is_allowed_digest_method(
+            "http://www.w3.org/2001/04/xmlenc#sha256"
+        ));
+        assert!(!is_allowed_digest_method(
+            "http://www.w3.org/2000/09/xmldsig#sha1"
+        ));
+    }
+
+    #[test]
+    fn test_resolve_relay_state_validation() {
+        assert_eq!(
+            resolve_relay_state(
+                Some("/dashboard".to_string()),
+                Some("/dashboard".to_string())
+            )
+            .ok(),
+            Some("/dashboard".to_string())
+        );
+        assert!(resolve_relay_state(Some("https://evil.com".to_string()), None).is_err());
+        assert!(resolve_relay_state(Some("/a".to_string()), Some("/b".to_string())).is_err());
     }
 }
