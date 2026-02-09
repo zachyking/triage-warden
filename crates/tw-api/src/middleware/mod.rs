@@ -9,6 +9,7 @@
 //! - Rate limiting (via rate_limit module)
 //! - Tenant resolution (multi-tenancy support)
 
+pub mod authorization;
 pub mod tenant;
 
 use axum::{
@@ -25,6 +26,7 @@ use tw_core::is_production_environment;
 use uuid::Uuid;
 
 // Re-export tenant middleware components
+pub use authorization::{require_permission_middleware, AuthorizationState, PermissionRequirement};
 pub use tenant::{
     create_tenant_resolver, create_tenant_resolver_with_config, tenant_resolution_middleware,
     OptionalTenant, RequireTenant, TenantCache, TenantResolutionConfig, TenantResolutionError,

@@ -27,12 +27,14 @@ pub mod playbooks;
 pub mod policies;
 pub mod reports;
 pub mod risk;
+pub mod roles;
 pub mod settings;
 pub mod training;
 pub mod users;
 pub mod webhooks;
 
 use crate::auth::RequireAnalyst;
+use crate::middleware::{AuthorizationState, PermissionRequirement};
 use crate::state::AppState;
 use axum::{
     extract::Request,
@@ -40,6 +42,7 @@ use axum::{
     response::Response,
     Router,
 };
+use tw_core::rbac::{Action as RbacAction, Resource as RbacResource};
 
 /// Creates the main API router.
 pub fn create_router(state: AppState) -> Router {
@@ -60,6 +63,16 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/admin/users", users::routes())
         .nest("/admin/features", features::routes())
         .nest("/api-keys", api_keys::routes())
+        .nest(
+            "/roles",
+            roles::routes().route_layer(from_fn_with_state(
+                AuthorizationState {
+                    app_state: state.clone(),
+                    requirement: PermissionRequirement::new(RbacResource::Role, RbacAction::Manage),
+                },
+                crate::middleware::require_permission_middleware,
+            )),
+        )
         .nest("/connectors", connectors::routes())
         .nest("/feedback", feedback::routes())
         .nest("/incidents", incidents::routes())

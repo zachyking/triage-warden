@@ -33,6 +33,7 @@ pub mod orchestrator;
 pub mod packages;
 pub mod playbook;
 pub mod policy;
+pub mod rbac;
 pub mod risk;
 pub mod sandbox_pipeline;
 pub mod tenant;
@@ -82,6 +83,14 @@ pub use policy::{ApprovalLevel, Policy, PolicyAction};
 pub use workflow::{
     ManualApprovalRequest, ManualApprovalStatus, WorkflowEngine, WorkflowState, WorkflowTransition,
     DEFAULT_APPROVAL_TIMEOUT_HOURS,
+};
+
+// RBAC exports
+pub use rbac::{
+    builtin_roles, default_sod_rules, Action as RbacAction, AuthorizationDecision,
+    AuthorizationRequest, Constraint, ConstraintOp, Permission as RbacPermission,
+    PermissionEvaluator, RbacRole, Resource as RbacResource, RoleAssignment,
+    SeparationOfDutiesRule, SodEnforcement, SodValidator,
 };
 
 // Auth exports
