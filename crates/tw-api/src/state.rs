@@ -408,3 +408,59 @@ impl WebhookSecrets {
         self.sources.get(source).or(self.default.as_ref())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use tw_core::{FeatureFlagStore, InMemoryFeatureFlagStore};
+
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
+
+    async fn test_db_pool() -> DbPool {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("failed to create sqlite pool");
+        DbPool::Sqlite(pool)
+    }
+
+    fn test_feature_flags() -> FeatureFlags {
+        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
+        FeatureFlags::new(store)
+    }
+
+    #[tokio::test]
+    async fn test_try_new_returns_error_when_production_key_missing() {
+        let _guard = ENV_MUTEX.lock().expect("env mutex poisoned");
+
+        std::env::set_var("TW_ENV", "production");
+        std::env::remove_var("TW_ENCRYPTION_KEY");
+
+        let result = AppState::try_new(
+            test_db_pool().await,
+            EventBus::new(16),
+            test_feature_flags(),
+        );
+        assert!(result.is_err());
+
+        std::env::remove_var("TW_ENV");
+    }
+
+    #[tokio::test]
+    async fn test_builder_try_build_returns_error_when_production_key_missing() {
+        let _guard = ENV_MUTEX.lock().expect("env mutex poisoned");
+
+        std::env::set_var("TW_ENV", "production");
+        std::env::remove_var("TW_ENCRYPTION_KEY");
+
+        let result = AppState::builder(
+            test_db_pool().await,
+            EventBus::new(16),
+            test_feature_flags(),
+        )
+        .try_build();
+        assert!(result.is_err());
+
+        std::env::remove_var("TW_ENV");
+    }
+}
