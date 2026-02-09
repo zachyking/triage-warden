@@ -63,6 +63,7 @@ Implemented:
 - Persisted automation pause state and resume endpoints:
   - `GET /api(/v1)/guardrails/automation/pause`
   - `POST /api(/v1)/guardrails/automation/pause/resume`
+- Auto-pause enforcement in simulation path (`/api(/v1)/guardrails/simulate`) with pause expiry handling.
 
 ## Compliance and Audit (6.5)
 

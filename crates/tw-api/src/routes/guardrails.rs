@@ -116,9 +116,39 @@ struct AutomationPauseState {
 }
 
 async fn simulate_action(
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Json(request): Json<SimulateRequest>,
 ) -> Result<Json<SimulateResponse>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
+    let settings_repo: Box<dyn SettingsRepository> =
+        create_settings_repository(&state.db, state.encryptor.clone());
+    if let Some(mut pause_state) = load_pause_state(settings_repo.as_ref(), tenant_id).await? {
+        let now = Utc::now();
+        let is_active = pause_state.paused
+            && pause_state
+                .resume_after
+                .map(|resume_after| now < resume_after)
+                .unwrap_or(true);
+        if is_active {
+            return Ok(Json(SimulateResponse {
+                would_execute: false,
+                estimated_impact: 0,
+                warnings: vec![format!("Automation paused: {}", pause_state.reason)],
+                required_approvals: vec!["manual_resume".to_string()],
+            }));
+        }
+
+        if pause_state.paused {
+            pause_state.paused = false;
+            pause_state.resumed_at = Some(now);
+            pause_state.resumed_reason = Some("pause window elapsed".to_string());
+            pause_state.resume_after = None;
+            save_pause_state(settings_repo.as_ref(), tenant_id, &pause_state).await?;
+        }
+    }
+
     let context = GuardrailCheckContext {
         incident_id: request.incident_id,
         action_type: request.action_type,
