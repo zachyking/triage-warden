@@ -28,6 +28,8 @@ pub struct OidcConfig {
     pub authorization_endpoint: Option<String>,
     /// Optional explicit token endpoint override.
     pub token_endpoint: Option<String>,
+    /// Optional explicit JWKS endpoint override.
+    pub jwks_uri: Option<String>,
     /// Optional explicit userinfo endpoint override.
     pub userinfo_endpoint: Option<String>,
     /// Optional explicit end-session endpoint override.

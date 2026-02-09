@@ -19,6 +19,7 @@ Triage Warden supports enterprise SSO through both OIDC and SAML endpoints.
 - `TW_OIDC_CLIENT_SECRET`
 - `TW_OIDC_REDIRECT_URI`
 - `TW_OIDC_SCOPES`
+- `TW_OIDC_JWKS_URI` (optional override; discovery `jwks_uri` is used by default)
 - `TW_OIDC_REQUIRE_MFA`
 - `TW_SSO_ROLE_MAPPING`
 - `TW_SSO_DEFAULT_ROLE`
@@ -33,3 +34,7 @@ Triage Warden supports enterprise SSO through both OIDC and SAML endpoints.
 
 Use provider-specific documents in this folder for exact values.
 
+## Security Notes
+
+- OIDC ID tokens are validated for issuer/audience/nonce/expiration and signature (JWKS).
+- SAML assertions enforce signature presence and certificate pinning checks.

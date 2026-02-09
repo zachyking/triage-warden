@@ -90,10 +90,11 @@ pub use workflow::{
 
 // RBAC exports
 pub use rbac::{
-    builtin_roles, default_sod_rules, Action as RbacAction, AuthorizationDecision,
-    AuthorizationRequest, Constraint, ConstraintOp, Permission as RbacPermission,
-    PermissionEvaluator, RbacRole, Resource as RbacResource, RoleAssignment,
-    SeparationOfDutiesRule, SodEnforcement, SodValidator,
+    builtin_roles, default_sod_rules, AccessDecision, AccessDecisionOutcome, AccessReview,
+    Action as RbacAction, AuthorizationDecision, AuthorizationRequest, Constraint, ConstraintOp,
+    Permission as RbacPermission, PermissionEvaluator, RbacRole, Resource as RbacResource,
+    ReviewScope, ReviewStatus, RoleAssignment, SeparationOfDutiesRule, SodEnforcement,
+    SodValidator,
 };
 
 // Immutable audit exports

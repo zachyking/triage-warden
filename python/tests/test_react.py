@@ -1291,3 +1291,86 @@ class TestIntegration:
         # Error should be in trace
         error_steps = [s for s in result.execution_trace if s.step_type == StepType.ERROR]
         assert len(error_steps) == 1
+
+
+class TestSecurityRouting:
+    """Tests for Stage 6 local-routing and AI audit logging hooks."""
+
+    @pytest.mark.asyncio
+    async def test_routes_sensitive_prompt_to_local_provider(
+        self, mock_registry, sample_analysis_json
+    ):
+        cloud_llm = MagicMock()
+        cloud_llm.name = "cloud"
+        cloud_llm.complete = AsyncMock()
+
+        local_llm = MagicMock()
+        local_llm.name = "local"
+        local_llm.complete = AsyncMock(
+            return_value=_MockLLMBase.LLMResponse(
+                content=f"```json\n{sample_analysis_json}\n```",
+                usage={"total_tokens": 50},
+                model="local-model",
+            )
+        )
+
+        class PrivacyStub:
+            @staticmethod
+            def infer_sensitivity(_text: str) -> str:
+                return "restricted"
+
+        audit_logger = MagicMock()
+
+        agent = ReActAgent(
+            llm=cloud_llm,
+            local_llm=local_llm,
+            privacy_service=PrivacyStub(),
+            ai_audit_logger=audit_logger,
+            tools=mock_registry,
+        )
+        result = await agent.run("Investigate this incident")
+
+        assert result.success is True
+        local_llm.complete.assert_awaited()
+        cloud_llm.complete.assert_not_awaited()
+        audit_logger.log.assert_called()
+        assert audit_logger.log.call_args.kwargs["provider"] == "local"
+
+    @pytest.mark.asyncio
+    async def test_routes_non_sensitive_prompt_to_primary_provider(
+        self, mock_llm, mock_registry, sample_analysis_json
+    ):
+        mock_llm.name = "cloud"
+        mock_llm.complete = AsyncMock(
+            return_value=_MockLLMBase.LLMResponse(
+                content=f"```json\n{sample_analysis_json}\n```",
+                usage={"total_tokens": 40},
+                model="cloud-model",
+            )
+        )
+
+        local_llm = MagicMock()
+        local_llm.name = "local"
+        local_llm.complete = AsyncMock()
+
+        class PrivacyStub:
+            @staticmethod
+            def infer_sensitivity(_text: str) -> str:
+                return "public"
+
+        audit_logger = MagicMock()
+
+        agent = ReActAgent(
+            llm=mock_llm,
+            local_llm=local_llm,
+            privacy_service=PrivacyStub(),
+            ai_audit_logger=audit_logger,
+            tools=mock_registry,
+        )
+        result = await agent.run("Summarize alert details")
+
+        assert result.success is True
+        mock_llm.complete.assert_awaited()
+        local_llm.complete.assert_not_awaited()
+        audit_logger.log.assert_called()
+        assert audit_logger.log.call_args.kwargs["provider"] == "cloud"

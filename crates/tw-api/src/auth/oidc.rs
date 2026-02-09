@@ -15,6 +15,7 @@ use axum::{Json, Router};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use chrono::Utc;
+use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use rand::rngs::OsRng;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -72,6 +73,7 @@ struct OidcDiscoveryDocument {
     issuer: String,
     authorization_endpoint: String,
     token_endpoint: String,
+    jwks_uri: Option<String>,
     userinfo_endpoint: Option<String>,
     end_session_endpoint: Option<String>,
 }
@@ -83,6 +85,22 @@ struct OidcTokenResponse {
     id_token: Option<String>,
     refresh_token: Option<String>,
     expires_in: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OidcJwks {
+    keys: Vec<OidcJwk>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OidcJwk {
+    kid: Option<String>,
+    kty: String,
+    n: Option<String>,
+    e: Option<String>,
+    alg: Option<String>,
+    #[serde(rename = "use")]
+    key_use: Option<String>,
 }
 
 #[derive(Debug)]
@@ -202,7 +220,7 @@ async fn callback(
         ApiError::Unauthorized("OIDC provider did not return id_token".to_string())
     })?;
 
-    let raw_claims = parse_jwt_payload(&id_token)?;
+    let raw_claims = verify_id_token_signature(&id_token, &discovery).await?;
     validate_claims(&raw_claims, &config, &discovery, &nonce)?;
 
     let userinfo = if let Some(endpoint) = &discovery.userinfo_endpoint {
@@ -412,6 +430,7 @@ fn load_oidc_config(provider: &str) -> Result<OidcConfig, ApiError> {
         claims_mapping,
         authorization_endpoint: std::env::var(format!("{prefix}_AUTHORIZATION_ENDPOINT")).ok(),
         token_endpoint: std::env::var(format!("{prefix}_TOKEN_ENDPOINT")).ok(),
+        jwks_uri: std::env::var(format!("{prefix}_JWKS_URI")).ok(),
         userinfo_endpoint: std::env::var(format!("{prefix}_USERINFO_ENDPOINT")).ok(),
         end_session_endpoint: std::env::var(format!("{prefix}_END_SESSION_ENDPOINT")).ok(),
     })
@@ -423,6 +442,7 @@ async fn discover(config: &OidcConfig) -> Result<OidcDiscoveryDocument, ApiError
             issuer: config.issuer.clone(),
             authorization_endpoint: auth.clone(),
             token_endpoint: token.clone(),
+            jwks_uri: config.jwks_uri.clone(),
             userinfo_endpoint: config.userinfo_endpoint.clone(),
             end_session_endpoint: config.end_session_endpoint.clone(),
         });
@@ -654,19 +674,115 @@ fn validate_claims(
     Ok(())
 }
 
-fn parse_jwt_payload(id_token: &str) -> Result<Value, ApiError> {
-    let mut segments = id_token.split('.');
-    let _header = segments
-        .next()
-        .ok_or_else(|| ApiError::Unauthorized("invalid id_token header".to_string()))?;
-    let payload = segments
-        .next()
-        .ok_or_else(|| ApiError::Unauthorized("invalid id_token payload".to_string()))?;
-    let decoded = URL_SAFE_NO_PAD
-        .decode(payload)
-        .map_err(|e| ApiError::Unauthorized(format!("invalid id_token encoding: {e}")))?;
-    serde_json::from_slice(&decoded)
-        .map_err(|e| ApiError::Unauthorized(format!("invalid id_token json: {e}")))
+async fn verify_id_token_signature(
+    id_token: &str,
+    discovery: &OidcDiscoveryDocument,
+) -> Result<Value, ApiError> {
+    let header = decode_header(id_token)
+        .map_err(|e| ApiError::Unauthorized(format!("invalid id_token header: {e}")))?;
+
+    let alg = match header.alg {
+        Algorithm::RS256
+        | Algorithm::RS384
+        | Algorithm::RS512
+        | Algorithm::PS256
+        | Algorithm::PS384
+        | Algorithm::PS512 => header.alg,
+        _ => {
+            return Err(ApiError::Unauthorized(
+                "OIDC id_token algorithm is unsupported".to_string(),
+            ))
+        }
+    };
+
+    let jwks_uri = discovery
+        .jwks_uri
+        .as_deref()
+        .ok_or_else(|| ApiError::Unauthorized("OIDC discovery is missing jwks_uri".to_string()))?;
+    let response = reqwest::Client::new()
+        .get(jwks_uri)
+        .send()
+        .await
+        .map_err(|e| ApiError::Internal(format!("failed to fetch JWKS: {e}")))?;
+    if !response.status().is_success() {
+        return Err(ApiError::Unauthorized(format!(
+            "failed to fetch JWKS: HTTP {}",
+            response.status()
+        )));
+    }
+    let jwks = response
+        .json::<OidcJwks>()
+        .await
+        .map_err(|e| ApiError::Unauthorized(format!("invalid JWKS document: {e}")))?;
+
+    let expected_kid = header.kid.as_deref();
+    let expected_alg = algorithm_name(alg);
+    let mut saw_candidate = false;
+    let mut last_error: Option<String> = None;
+
+    for key in jwks.keys {
+        if !key.kty.eq_ignore_ascii_case("rsa") {
+            continue;
+        }
+        if key
+            .key_use
+            .as_deref()
+            .is_some_and(|value| !value.eq_ignore_ascii_case("sig"))
+        {
+            continue;
+        }
+        if key
+            .alg
+            .as_deref()
+            .is_some_and(|value| !value.eq_ignore_ascii_case(expected_alg))
+        {
+            continue;
+        }
+        if let Some(kid) = expected_kid {
+            if key.kid.as_deref() != Some(kid) {
+                continue;
+            }
+        }
+
+        let (Some(n), Some(e)) = (key.n.as_deref(), key.e.as_deref()) else {
+            continue;
+        };
+        saw_candidate = true;
+
+        let decoding_key = DecodingKey::from_rsa_components(n, e)
+            .map_err(|err| ApiError::Unauthorized(format!("invalid RSA JWK components: {err}")))?;
+        let mut validation = Validation::new(alg);
+        validation.validate_exp = false;
+        validation.required_spec_claims.clear();
+
+        match decode::<Value>(id_token, &decoding_key, &validation) {
+            Ok(token) => return Ok(token.claims),
+            Err(error) => last_error = Some(error.to_string()),
+        }
+    }
+
+    if !saw_candidate {
+        return Err(ApiError::Unauthorized(
+            "OIDC id_token signature key not found in JWKS".to_string(),
+        ));
+    }
+
+    Err(ApiError::Unauthorized(format!(
+        "OIDC id_token signature verification failed: {}",
+        last_error.unwrap_or_else(|| "no matching key validated".to_string())
+    )))
+}
+
+fn algorithm_name(alg: Algorithm) -> &'static str {
+    match alg {
+        Algorithm::RS256 => "RS256",
+        Algorithm::RS384 => "RS384",
+        Algorithm::RS512 => "RS512",
+        Algorithm::PS256 => "PS256",
+        Algorithm::PS384 => "PS384",
+        Algorithm::PS512 => "PS512",
+        _ => "unsupported",
+    }
 }
 
 fn claim_values(value: &Value) -> Vec<String> {

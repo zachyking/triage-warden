@@ -22,7 +22,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import structlog
 
@@ -161,7 +161,19 @@ from tw_ai.sanitization import (  # noqa: E402
     create_security_analysis_redactor,
 )
 
+if TYPE_CHECKING:
+    from tw_ai.logging.audit import AiInteractionAuditLogger
+    from tw_ai.privacy.masking import PrivacyMaskingService
+
 logger = structlog.get_logger()
+
+
+class _FallbackPrivacyService:
+    """Fallback classifier when privacy module is unavailable in constrained tests."""
+
+    @staticmethod
+    def infer_sensitivity(_text: str) -> str:
+        return "public"
 
 
 # =============================================================================
@@ -580,6 +592,11 @@ class ReActAgent:
         enable_pii_redaction: bool = True,
         prompt_sanitizer: PromptSanitizer | None = None,
         enable_prompt_sanitization: bool = True,
+        local_llm: LLMProvider | None = None,
+        privacy_service: PrivacyMaskingService | None = None,
+        ai_audit_logger: AiInteractionAuditLogger | None = None,
+        route_local_for: set[str] | None = None,
+        store_full_ai_content: bool = False,
     ):
         """
         Initialize the ReAct agent.
@@ -600,8 +617,14 @@ class ReActAgent:
             enable_pii_redaction: Whether to enable PII redaction (default: True)
             prompt_sanitizer: Custom PromptSanitizer instance (uses default if not provided)
             enable_prompt_sanitization: Enable prompt injection protection (default: True)
+            local_llm: Optional local LLM used for sensitive prompts
+            privacy_service: Privacy classifier for local-vs-cloud routing decisions
+            ai_audit_logger: Optional durable AI interaction audit logger
+            route_local_for: Sensitivity levels that must route to local LLM
+            store_full_ai_content: Whether audit logger should store full prompt/response content
         """
         self.llm = llm
+        self.local_llm = local_llm
         self.tools = tools
         self.max_iterations = max_iterations
         self.max_tokens = max_tokens
@@ -611,6 +634,12 @@ class ReActAgent:
         self.system_prompt = system_prompt or self._default_system_prompt()
         self.enable_pii_redaction = enable_pii_redaction
         self.enable_prompt_sanitization = enable_prompt_sanitization
+        self._privacy_service = privacy_service or self._create_default_privacy_service()
+        self._ai_audit_logger = ai_audit_logger
+        self._route_local_for = {
+            value.lower() for value in (route_local_for or {"confidential", "restricted"})
+        }
+        self._store_full_ai_content = store_full_ai_content
 
         # PII redactor (use default security analysis redactor if none provided)
         self._pii_redactor: PIIRedactor | None
@@ -635,7 +664,7 @@ class ReActAgent:
         self._token_counter = TokenCounter()
 
         # Store PII redaction audit log for the current run
-        self._current_run_redaction_log: list[RedactionRecord] = []
+        self._current_run_redaction_log: list[dict[str, Any]] = []
 
         # Store prompt injection detection log for the current run
         self._current_run_injection_log: list[dict[str, Any]] = []
@@ -649,6 +678,7 @@ class ReActAgent:
             tools_available=tools.list_tools(),
             pii_redaction_enabled=enable_pii_redaction,
             prompt_sanitization_enabled=enable_prompt_sanitization,
+            local_llm_enabled=local_llm is not None,
         )
 
     def _default_system_prompt(self) -> str:
@@ -704,6 +734,7 @@ Use them wisely to build a complete picture of the incident."""
         start_time = time.time()
 
         # Clear previous run's logs
+        self._current_run_redaction_log = []
         self._current_run_injection_log = []
 
         # Convert string to TriageRequest if needed
@@ -742,6 +773,8 @@ Use them wisely to build a complete picture of the incident."""
                     prompt_sanitizer=self._prompt_sanitizer,
                 )
                 context = request.context
+                # Copy redaction and injection logs from request
+                self._current_run_redaction_log = request.get_redaction_audit_log()
                 # Copy injection detection log from request
                 self._current_run_injection_log.extend(request.get_injection_detection_log())
             except PromptInjectionError as e:
@@ -841,12 +874,32 @@ Use them wisely to build a complete picture of the incident."""
 
             # Get LLM response
             step_start = time.time()
-            response = await self.llm.complete(
-                messages=messages,
-                tools=tool_defs if tool_defs else None,
-                temperature=0.1,
-            )
+            selected_llm = self._select_llm_provider(messages)
+            prompt_for_audit = self._compose_prompt_for_audit(messages)
+            try:
+                response = await selected_llm.complete(
+                    messages=messages,
+                    tools=tool_defs if tool_defs else None,
+                    temperature=0.1,
+                )
+            except Exception as error:
+                self._log_ai_interaction(
+                    provider=selected_llm,
+                    prompt=prompt_for_audit,
+                    response="",
+                    latency_ms=int((time.time() - step_start) * 1000),
+                    error=str(error),
+                )
+                raise
             step_duration = int((time.time() - step_start) * 1000)
+            self._log_ai_interaction(
+                provider=selected_llm,
+                prompt=prompt_for_audit,
+                response=response.content or "",
+                latency_ms=step_duration,
+                error=None,
+                model=response.model,
+            )
 
             # Track tokens from response
             response_tokens = response.usage.get("total_tokens", 0)
@@ -1086,6 +1139,77 @@ Use them wisely to build a complete picture of the incident."""
             tokens_used=total_tokens,
             execution_time_seconds=time.time() - start_time,
             error=f"Token budget exceeded: {total_tokens} >= {self.max_tokens}",
+        )
+
+    @staticmethod
+    def _create_default_privacy_service() -> Any:
+        """Build default privacy service with graceful fallback for isolated tests."""
+        try:
+            from tw_ai.privacy.masking import PrivacyMaskingService
+
+            return PrivacyMaskingService()
+        except Exception:
+            return _FallbackPrivacyService()
+
+    def _select_llm_provider(self, messages: list[Message]) -> LLMProvider:
+        """Select cloud/local provider based on inferred sensitivity."""
+        if self.local_llm is None:
+            return self.llm
+
+        sensitivity = self._privacy_service.infer_sensitivity(
+            self._compose_prompt_for_audit(messages)
+        )
+        sensitivity_key = getattr(sensitivity, "value", str(sensitivity)).lower()
+        if sensitivity_key in self._route_local_for:
+            logger.info(
+                "react_agent_routed_to_local_llm",
+                sensitivity=sensitivity_key,
+                local_provider=self.local_llm.name,
+            )
+            return self.local_llm
+
+        return self.llm
+
+    @staticmethod
+    def _compose_prompt_for_audit(messages: list[Message]) -> str:
+        """Normalize conversation messages into a single audit payload."""
+        normalized: list[str] = []
+        for msg in messages:
+            role_value = getattr(msg.role, "value", str(msg.role))
+            normalized.append(f"[{role_value}] {msg.content}")
+        return "\n\n".join(normalized)
+
+    def _log_ai_interaction(
+        self,
+        *,
+        provider: LLMProvider,
+        prompt: str,
+        response: str,
+        latency_ms: int,
+        error: str | None,
+        model: str | None = None,
+    ) -> None:
+        """Write structured AI interaction audit entry when logger is configured."""
+        if self._ai_audit_logger is None:
+            return
+
+        masked_fields = sorted(
+            {
+                str(record.get("pii_type"))
+                for record in self._current_run_redaction_log
+                if record.get("pii_type")
+            }
+        )
+        model_name = str(model or getattr(provider, "model", provider.name))
+        self._ai_audit_logger.log(
+            provider=provider.name,
+            model=model_name,
+            prompt=prompt,
+            response=response,
+            latency_ms=latency_ms,
+            masked_fields=masked_fields,
+            error=error,
+            store_full_content=self._store_full_ai_content,
         )
 
     def save_execution_trace(self, result: AgentResult, filepath: str) -> None:
