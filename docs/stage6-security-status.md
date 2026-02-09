@@ -57,7 +57,12 @@ Implemented:
 Implemented:
 - Dry-run simulation endpoint.
 - Rollback metadata registry with tenant persistence.
+- Rollback derivation for common reversible actions:
+  - `POST /api(/v1)/guardrails/rollback/derive`
 - Automation anomaly detection endpoint with auto-pause signal.
+- Persisted automation pause state and resume endpoints:
+  - `GET /api(/v1)/guardrails/automation/pause`
+  - `POST /api(/v1)/guardrails/automation/pause/resume`
 
 ## Compliance and Audit (6.5)
 

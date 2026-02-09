@@ -18,6 +18,7 @@ use tw_core::guardrails::{
 use uuid::Uuid;
 
 const GUARDRAIL_ROLLBACKS_KEY: &str = "guardrail_rollback_registry";
+const GUARDRAIL_AUTOPAUSE_KEY: &str = "guardrail_automation_pause_state";
 
 fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> Uuid {
     tenant.map(|ctx| ctx.tenant_id).unwrap_or(DEFAULT_TENANT_ID)
@@ -28,9 +29,12 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/simulate", post(simulate_action))
         .route("/rollback/register", post(register_rollback))
+        .route("/rollback/derive", post(derive_rollback))
         .route("/rollback/:action_id", get(get_rollback))
         .route("/rollback/:action_id/status", post(update_rollback_status))
         .route("/anomaly/check", post(check_anomaly))
+        .route("/automation/pause", get(get_automation_pause_state))
+        .route("/automation/pause/resume", post(resume_automation))
 }
 
 #[derive(Debug, Deserialize)]
@@ -65,6 +69,13 @@ struct RegisterRollbackRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct DeriveRollbackRequest {
+    action_id: Option<Uuid>,
+    action_type: String,
+    target: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct UpdateRollbackStatusRequest {
     status: RollbackStatus,
 }
@@ -85,6 +96,23 @@ struct AnomalyCheckRequest {
 struct AnomalyCheckResponse {
     anomaly: Option<Anomaly>,
     auto_paused: bool,
+    pause_state: Option<AutomationPauseState>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResumeAutomationRequest {
+    reason: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct AutomationPauseState {
+    paused: bool,
+    anomaly: Option<Anomaly>,
+    reason: String,
+    paused_at: DateTime<Utc>,
+    resume_after: Option<DateTime<Utc>>,
+    resumed_at: Option<DateTime<Utc>>,
+    resumed_reason: Option<String>,
 }
 
 async fn simulate_action(
@@ -134,6 +162,50 @@ async fn register_rollback(
     Ok(Json(info))
 }
 
+async fn derive_rollback(
+    State(state): State<AppState>,
+    RequireAdmin(_admin): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
+    Json(request): Json<DeriveRollbackRequest>,
+) -> Result<Json<ActionRollbackInfo>, ApiError> {
+    let action_type = request.action_type.trim();
+    if action_type.is_empty() {
+        return Err(ApiError::validation_field(
+            "action_type",
+            "required",
+            "action_type is required",
+        ));
+    }
+    let target = request.target.trim();
+    if target.is_empty() {
+        return Err(ApiError::validation_field(
+            "target",
+            "required",
+            "target is required",
+        ));
+    }
+
+    let action_id = request.action_id.unwrap_or_else(Uuid::new_v4);
+    let now = Utc::now();
+    let info = ActionRollbackInfo::from_executed_action(action_id, action_type, target, now)
+        .ok_or_else(|| {
+            ApiError::BadRequest(format!(
+                "No rollback template available for action type '{}'",
+                action_type
+            ))
+        })?;
+
+    let tenant_id = tenant_id_or_default(tenant);
+    let settings_repo: Box<dyn SettingsRepository> =
+        create_settings_repository(&state.db, state.encryptor.clone());
+    let mut entries = load_rollbacks(settings_repo.as_ref(), tenant_id).await?;
+    entries.retain(|entry| entry.action_id != info.action_id);
+    entries.push(info.clone());
+    save_rollbacks(settings_repo.as_ref(), tenant_id, &entries).await?;
+
+    Ok(Json(info))
+}
+
 async fn get_rollback(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -176,8 +248,9 @@ async fn update_rollback_status(
 }
 
 async fn check_anomaly(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Json(request): Json<AnomalyCheckRequest>,
 ) -> Result<Json<AnomalyCheckResponse>, ApiError> {
     let detector = AutomationAnomalyDetector {
@@ -189,10 +262,68 @@ async fn check_anomaly(
         anomaly,
         Some(Anomaly::UnusualVolume | Anomaly::UnusualTargetCount)
     );
+    let mut pause_state = None;
+    if auto_paused {
+        let tenant_id = tenant_id_or_default(tenant);
+        let persisted = AutomationPauseState {
+            paused: true,
+            anomaly,
+            reason: "Automation auto-paused due anomaly threshold breach".to_string(),
+            paused_at: Utc::now(),
+            resume_after: Some(Utc::now() + chrono::Duration::hours(1)),
+            resumed_at: None,
+            resumed_reason: None,
+        };
+        let settings_repo: Box<dyn SettingsRepository> =
+            create_settings_repository(&state.db, state.encryptor.clone());
+        save_pause_state(settings_repo.as_ref(), tenant_id, &persisted).await?;
+        pause_state = Some(persisted);
+    }
     Ok(Json(AnomalyCheckResponse {
         anomaly,
         auto_paused,
+        pause_state,
     }))
+}
+
+async fn get_automation_pause_state(
+    State(state): State<AppState>,
+    RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
+) -> Result<Json<Option<AutomationPauseState>>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
+    let settings_repo: Box<dyn SettingsRepository> =
+        create_settings_repository(&state.db, state.encryptor.clone());
+    let state = load_pause_state(settings_repo.as_ref(), tenant_id).await?;
+    Ok(Json(state))
+}
+
+async fn resume_automation(
+    State(state): State<AppState>,
+    RequireAdmin(_admin): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
+    Json(request): Json<ResumeAutomationRequest>,
+) -> Result<Json<AutomationPauseState>, ApiError> {
+    let tenant_id = tenant_id_or_default(tenant);
+    let settings_repo: Box<dyn SettingsRepository> =
+        create_settings_repository(&state.db, state.encryptor.clone());
+    let mut current = load_pause_state(settings_repo.as_ref(), tenant_id)
+        .await?
+        .unwrap_or(AutomationPauseState {
+            paused: true,
+            anomaly: None,
+            reason: "manual pause state initialized".to_string(),
+            paused_at: Utc::now(),
+            resume_after: None,
+            resumed_at: None,
+            resumed_reason: None,
+        });
+    current.paused = false;
+    current.resume_after = None;
+    current.resumed_at = Some(Utc::now());
+    current.resumed_reason = request.reason;
+    save_pause_state(settings_repo.as_ref(), tenant_id, &current).await?;
+    Ok(Json(current))
 }
 
 async fn load_rollbacks(
@@ -220,6 +351,36 @@ async fn save_rollbacks(
     let payload = serde_json::to_string(entries)
         .map_err(|e| ApiError::Internal(format!("failed to serialize rollbacks: {e}")))?;
     repo.save_raw(tenant_id, GUARDRAIL_ROLLBACKS_KEY, &payload)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(())
+}
+
+async fn load_pause_state(
+    repo: &dyn SettingsRepository,
+    tenant_id: Uuid,
+) -> Result<Option<AutomationPauseState>, ApiError> {
+    if let Some(raw) = repo
+        .get_raw(tenant_id, GUARDRAIL_AUTOPAUSE_KEY)
+        .await
+        .map_err(ApiError::from)?
+    {
+        let parsed = serde_json::from_str::<AutomationPauseState>(&raw).map_err(|e| {
+            ApiError::BadRequest(format!("invalid guardrail automation pause payload: {e}"))
+        })?;
+        return Ok(Some(parsed));
+    }
+    Ok(None)
+}
+
+async fn save_pause_state(
+    repo: &dyn SettingsRepository,
+    tenant_id: Uuid,
+    state: &AutomationPauseState,
+) -> Result<(), ApiError> {
+    let payload = serde_json::to_string(state)
+        .map_err(|e| ApiError::Internal(format!("failed to serialize pause state: {e}")))?;
+    repo.save_raw(tenant_id, GUARDRAIL_AUTOPAUSE_KEY, &payload)
         .await
         .map_err(ApiError::from)?;
     Ok(())

@@ -1,6 +1,6 @@
 //! Rollback tracking models for reversible actions.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -42,6 +42,45 @@ impl ActionRollbackInfo {
             rollback_deadline,
             rollback_status: RollbackStatus::Available,
         }
+    }
+
+    /// Derives rollback metadata for known reversible executed actions.
+    pub fn from_executed_action(
+        action_id: Uuid,
+        action_type: &str,
+        target: &str,
+        now: DateTime<Utc>,
+    ) -> Option<Self> {
+        let (rollback_action, rollback_payload, rollback_deadline) = match action_type {
+            "isolate_host" => (
+                "unisolate_host",
+                serde_json::json!({ "host": target }),
+                Some(now + Duration::hours(24)),
+            ),
+            "disable_user" => (
+                "enable_user",
+                serde_json::json!({ "user": target }),
+                Some(now + Duration::days(7)),
+            ),
+            "block_ip" => (
+                "unblock_ip",
+                serde_json::json!({ "ip": target }),
+                Some(now + Duration::hours(24)),
+            ),
+            "quarantine_file" => (
+                "restore_quarantined_file",
+                serde_json::json!({ "file": target }),
+                Some(now + Duration::hours(48)),
+            ),
+            _ => return None,
+        };
+
+        Some(Self::reversible(
+            action_id,
+            rollback_action,
+            rollback_payload,
+            rollback_deadline,
+        ))
     }
 }
 
@@ -96,5 +135,18 @@ mod tests {
             registry.get(action_id).map(|v| v.rollback_status),
             Some(RollbackStatus::Executed)
         );
+    }
+
+    #[test]
+    fn test_derive_rollback_for_supported_action() {
+        let action_id = Uuid::new_v4();
+        let now = Utc::now();
+        let rollback =
+            ActionRollbackInfo::from_executed_action(action_id, "isolate_host", "srv-1", now);
+        assert!(rollback.is_some());
+        let info = rollback.unwrap_or_else(|| {
+            ActionRollbackInfo::reversible(action_id, "fallback", serde_json::json!({}), None)
+        });
+        assert_eq!(info.rollback_action.as_deref(), Some("unisolate_host"));
     }
 }
