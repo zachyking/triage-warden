@@ -31,6 +31,12 @@ Implemented:
 - SoD rules + enforcement/warn/audit behavior on assignment.
 - Access review campaign model and API workflow.
 - Reminder and attestation decision recording with optional role revocation application.
+- Route-level RBAC middleware enforced on Stage 6 APIs:
+  - `/api(/v1)/roles` -> `role:manage`
+  - `/api(/v1)/audit` -> `audit_log:read`
+  - `/api(/v1)/compliance` -> `compliance:read`
+  - `/api(/v1)/privacy` -> `privacy:read`
+  - `/api(/v1)/guardrails` -> `guardrail:read`
 
 ## AI Privacy (6.3)
 

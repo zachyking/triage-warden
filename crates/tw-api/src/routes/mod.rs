@@ -78,8 +78,32 @@ fn api_routes(state: AppState) -> Router<AppState> {
             )),
         )
         .nest("/connectors", connectors::routes())
-        .nest("/audit", audit::routes())
-        .nest("/compliance", compliance::routes())
+        .nest(
+            "/audit",
+            audit::routes().route_layer(from_fn_with_state(
+                AuthorizationState {
+                    app_state: state.clone(),
+                    requirement: PermissionRequirement::new(
+                        RbacResource::AuditLog,
+                        RbacAction::Read,
+                    ),
+                },
+                crate::middleware::require_permission_middleware,
+            )),
+        )
+        .nest(
+            "/compliance",
+            compliance::routes().route_layer(from_fn_with_state(
+                AuthorizationState {
+                    app_state: state.clone(),
+                    requirement: PermissionRequirement::new(
+                        RbacResource::Compliance,
+                        RbacAction::Read,
+                    ),
+                },
+                crate::middleware::require_permission_middleware,
+            )),
+        )
         .nest("/feedback", feedback::routes())
         .nest("/incidents", incidents::routes())
         .nest(
@@ -87,7 +111,19 @@ fn api_routes(state: AppState) -> Router<AppState> {
             feedback::incident_feedback_routes(),
         )
         .nest("/kill-switch", kill_switch::routes())
-        .nest("/guardrails", guardrails::routes())
+        .nest(
+            "/guardrails",
+            guardrails::routes().route_layer(from_fn_with_state(
+                AuthorizationState {
+                    app_state: state.clone(),
+                    requirement: PermissionRequirement::new(
+                        RbacResource::Guardrail,
+                        RbacAction::Read,
+                    ),
+                },
+                crate::middleware::require_permission_middleware,
+            )),
+        )
         .nest(
             "/notifications",
             notifications::routes().route_layer(from_fn_with_state(
@@ -98,9 +134,24 @@ fn api_routes(state: AppState) -> Router<AppState> {
         .nest("/playbooks", playbooks::routes())
         .nest(
             "/policies",
-            policies::routes().route_layer(from_fn_with_state(state, require_analyst_middleware)),
+            policies::routes().route_layer(from_fn_with_state(
+                state.clone(),
+                require_analyst_middleware,
+            )),
         )
-        .nest("/privacy", privacy::routes())
+        .nest(
+            "/privacy",
+            privacy::routes().route_layer(from_fn_with_state(
+                AuthorizationState {
+                    app_state: state,
+                    requirement: PermissionRequirement::new(
+                        RbacResource::Privacy,
+                        RbacAction::Read,
+                    ),
+                },
+                crate::middleware::require_permission_middleware,
+            )),
+        )
         .nest("/settings", settings::routes())
         .nest("/training", training::routes())
         .nest("/knowledge", knowledge::routes())

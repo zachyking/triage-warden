@@ -53,6 +53,14 @@ pub struct ActionGuardrail {
 impl ActionGuardrail {
     /// Evaluates this guardrail against action context.
     pub fn evaluate(&self, context: &GuardrailCheckContext) -> GuardrailResult {
+        if self
+            .exceptions
+            .iter()
+            .any(|exception| exception_matches(exception, context))
+        {
+            return GuardrailResult::Allowed;
+        }
+
         let violated = match &self.guardrail_type {
             GuardrailType::ProtectedAsset { asset_ids } => asset_ids.contains(&context.target),
             GuardrailType::ProtectedUser { user_ids } => user_ids.contains(&context.target),
@@ -96,6 +104,18 @@ impl ActionGuardrail {
                 reason: format!("Guardrail '{}' warning", self.name),
             },
         }
+    }
+}
+
+fn exception_matches(exception: &GuardrailException, context: &GuardrailCheckContext) -> bool {
+    // Fail-closed for actor-specific exceptions until actor identity is available in context.
+    if exception.actor.is_some() {
+        return false;
+    }
+
+    match exception.incident_id {
+        Some(incident_id) => incident_id == context.incident_id,
+        None => true,
     }
 }
 
@@ -179,6 +199,39 @@ mod tests {
         assert!(matches!(
             guardrail.evaluate(&context),
             GuardrailResult::Blocked { .. }
+        ));
+    }
+
+    #[test]
+    fn test_exception_bypasses_guardrail_for_incident() {
+        let incident_id = Uuid::new_v4();
+        let guardrail = ActionGuardrail {
+            id: Uuid::new_v4(),
+            name: "protected-asset".to_string(),
+            guardrail_type: GuardrailType::ProtectedAsset {
+                asset_ids: vec!["host-1".to_string()],
+            },
+            enforcement: Enforcement::Block,
+            exceptions: vec![GuardrailException {
+                actor: None,
+                incident_id: Some(incident_id),
+                reason: "approved by change window".to_string(),
+            }],
+        };
+        let context = GuardrailCheckContext {
+            incident_id,
+            action_type: "isolate_host".to_string(),
+            target: "host-1".to_string(),
+            actions_taken_count: 0,
+            actions_taken_this_hour: 0,
+            affected_assets: Vec::new(),
+            timestamp: Utc::now(),
+            previous_actions: Vec::new(),
+        };
+
+        assert!(matches!(
+            guardrail.evaluate(&context),
+            GuardrailResult::Allowed
         ));
     }
 }
