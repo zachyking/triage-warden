@@ -4,10 +4,14 @@
 //! assets, user identities, and their relationships.
 
 pub mod asset;
+pub mod auth_config;
 pub mod identity;
 pub mod relationship;
 
 pub use asset::{Asset, AssetIdentifier, AssetType, Criticality, Environment, IdentifierType};
+pub use auth_config::{
+    AttributeMapping, AuthProviderConfig, AuthProviderType, ClaimsMapping, OidcConfig, SamlConfig,
+};
 pub use identity::{Identity, IdentityStatus, IdentityType};
 pub use relationship::{
     EntityRef, EntityRelationship, EntityType, RelationshipQuery, RelationshipType,

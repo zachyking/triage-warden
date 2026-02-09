@@ -539,6 +539,24 @@ pub struct SessionData {
     pub username: String,
     /// User role.
     pub role: Role,
+    /// Authentication source for this session.
+    #[serde(default)]
+    pub auth_source: AuthSource,
+    /// Optional external provider name (for SSO sessions).
+    #[serde(default)]
+    pub auth_provider: Option<String>,
+    /// Optional external subject identifier.
+    #[serde(default)]
+    pub external_subject: Option<String>,
+    /// Whether MFA was verified by the identity provider.
+    #[serde(default)]
+    pub mfa_verified: bool,
+    /// Timestamp when MFA assurance was observed.
+    #[serde(default)]
+    pub mfa_verified_at: Option<DateTime<Utc>>,
+    /// Optional IdP session ID for coordinated logout.
+    #[serde(default)]
+    pub idp_session_id: Option<String>,
     /// CSRF token for form protection.
     pub csrf_token: String,
 }
@@ -562,9 +580,46 @@ impl SessionData {
             user_id: user.id,
             username: user.username.clone(),
             role: user.role,
+            auth_source: AuthSource::Local,
+            auth_provider: None,
+            external_subject: None,
+            mfa_verified: false,
+            mfa_verified_at: None,
+            idp_session_id: None,
             csrf_token,
         }
     }
+
+    /// Creates session data for federated SSO login.
+    pub fn new_sso(
+        user: &User,
+        provider: impl Into<String>,
+        subject: impl Into<String>,
+        mfa_verified: bool,
+        idp_session_id: Option<String>,
+    ) -> Self {
+        let mut session = Self::new(user);
+        session.auth_source = AuthSource::Sso;
+        session.auth_provider = Some(provider.into());
+        session.external_subject = Some(subject.into());
+        session.mfa_verified = mfa_verified;
+        session.mfa_verified_at = if mfa_verified { Some(Utc::now()) } else { None };
+        session.idp_session_id = idp_session_id;
+        session
+    }
+}
+
+/// Source of authentication for the session.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthSource {
+    /// Username/password authenticated session.
+    #[default]
+    Local,
+    /// Federated SSO authenticated session.
+    Sso,
+    /// API key authenticated context.
+    ApiKey,
 }
 
 #[cfg(test)]

@@ -89,8 +89,8 @@ pub use auth::password::{
     hash_password, validate_password_strength, verify_password, PasswordError,
 };
 pub use auth::{
-    is_destructive_action, ApiKey, AuthorizationContext, AuthorizationError, Permission, Role,
-    SessionData, User, UserFilter, UserUpdate, DESTRUCTIVE_ACTIONS,
+    is_destructive_action, ApiKey, AuthSource, AuthorizationContext, AuthorizationError,
+    Permission, Role, SessionData, User, UserFilter, UserUpdate, DESTRUCTIVE_ACTIONS,
 };
 
 // Crypto exports
@@ -192,9 +192,10 @@ pub use asset_store::{
     RelationshipStore,
 };
 pub use models::{
-    Asset, AssetIdentifier, AssetType, Criticality, EntityRef, EntityRelationship, EntityType,
-    Environment, IdentifierType, Identity, IdentityStatus, IdentityType, RelationshipQuery,
-    RelationshipType,
+    Asset, AssetIdentifier, AssetType, AttributeMapping, AuthProviderConfig, AuthProviderType,
+    ClaimsMapping, Criticality, EntityRef, EntityRelationship, EntityType, Environment,
+    IdentifierType, Identity, IdentityStatus, IdentityType, OidcConfig, RelationshipQuery,
+    RelationshipType, SamlConfig,
 };
 
 // Custom IoC exports

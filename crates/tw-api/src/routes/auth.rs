@@ -42,6 +42,8 @@ pub fn routes() -> Router<AppState> {
         .route("/login", get(login_page))
         .route("/login", post(login_submit))
         .route("/logout", post(logout))
+        .nest("/auth/oidc", crate::auth::oidc::routes())
+        .nest("/auth/saml", crate::auth::saml::routes())
 }
 
 /// Renders the login page.

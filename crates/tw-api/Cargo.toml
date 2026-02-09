@@ -53,6 +53,7 @@ tower-sessions-sqlx-store = { version = "0.14.1", features = ["sqlite"] }
 subtle = "2.5"
 rand = "0.8"
 time = "0.3"
+base64 = "0.22"
 
 # Metrics
 metrics.workspace = true

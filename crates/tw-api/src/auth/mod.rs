@@ -8,6 +8,9 @@
 
 pub mod csrf;
 pub mod extractors;
+pub mod oidc;
+pub mod provisioning;
+pub mod saml;
 
 pub use csrf::{generate_csrf_token, validate_csrf_token, CsrfToken};
 pub use extractors::{AuthenticatedUser, OptionalUser, RequireAdmin, RequireAnalyst};
