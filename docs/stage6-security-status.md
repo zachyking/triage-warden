@@ -63,10 +63,14 @@ Implemented:
 
 Implemented:
 - Immutable audit chain export/anchor/verify endpoints.
+- Immutable verification job with persisted integrity alerts:
+  - `POST /api(/v1)/audit/immutable/verify/job`
+  - `GET /api(/v1)/audit/immutable/verify/alerts`
 - Immutable archive snapshots with index and latest retrieval:
   - `POST /api(/v1)/audit/immutable/archive`
   - `GET /api(/v1)/audit/immutable/archive/index`
   - `GET /api(/v1)/audit/immutable/archive/latest`
+  - Optional external filesystem archive when `TW_IMMUTABLE_ARCHIVE_DIR` is configured.
 - Compliance report generation, retrieval, listing, and checksum verification:
   - `GET /api(/v1)/compliance/reports`
   - `POST /api(/v1)/compliance/reports/generate`
