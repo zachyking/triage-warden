@@ -2,6 +2,12 @@ target/
 python/.venv/
 tw-bridge/.venv/
 node_modules/
-docs-site/book/
+docs-site/
 .git/
+.github/
+deploy/
+tests/
 *.log
+*.md
+!README.md
+!LICENSE
