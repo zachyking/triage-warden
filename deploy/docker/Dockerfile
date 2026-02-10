@@ -1,8 +1,8 @@
 # Triage Warden Dockerfile
-# Multi-stage build for minimal production image
+# Multi-stage build: Rust binary + Python AI in a single image
 
-# Stage 1: Build
-FROM rust:1.75-bookworm as builder
+# ── Stage 1: Rust build ───────────────────────────────────────────
+FROM rust:1-bookworm AS builder
 
 WORKDIR /app
 
@@ -20,14 +20,21 @@ COPY crates/tw-cli/Cargo.toml crates/tw-cli/
 COPY crates/tw-policy/Cargo.toml crates/tw-policy/
 COPY crates/tw-connectors/Cargo.toml crates/tw-connectors/
 COPY crates/tw-actions/Cargo.toml crates/tw-actions/
+COPY crates/tw-observability/Cargo.toml crates/tw-observability/
+COPY tw-bridge/Cargo.toml tw-bridge/
+
+# Patched vendor crates required by [patch.crates-io]
+COPY vendor/ vendor/
 
 # Create dummy source files for dependency compilation
 RUN mkdir -p crates/tw-core/src crates/tw-api/src crates/tw-cli/src \
-    crates/tw-policy/src crates/tw-connectors/src crates/tw-actions/src && \
+    crates/tw-policy/src crates/tw-connectors/src crates/tw-actions/src \
+    crates/tw-observability/src tw-bridge/src && \
     echo "fn main() {}" > crates/tw-cli/src/main.rs && \
     touch crates/tw-core/src/lib.rs crates/tw-api/src/lib.rs \
     crates/tw-policy/src/lib.rs crates/tw-connectors/src/lib.rs \
-    crates/tw-actions/src/lib.rs
+    crates/tw-actions/src/lib.rs crates/tw-observability/src/lib.rs \
+    tw-bridge/src/lib.rs
 
 # Build dependencies only (cached layer)
 RUN cargo build --release --bin triage-warden && \
@@ -42,17 +49,32 @@ RUN touch crates/*/src/*.rs crates/*/src/**/*.rs 2>/dev/null || true
 # Build the actual application
 RUN cargo build --release --bin triage-warden
 
-# Stage 2: Runtime
+# ── Stage 2: Runtime ──────────────────────────────────────────────
 FROM debian:bookworm-slim
 
 WORKDIR /app
 
-# Install runtime dependencies
+# Install runtime dependencies (including Python for AI components)
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
     curl \
+    python3 \
+    python3-pip \
+    python3-venv \
     && rm -rf /var/lib/apt/lists/*
+
+# Create Python venv
+RUN python3 -m venv /app/venv
+ENV PATH="/app/venv/bin:$PATH"
+
+# Install tw_ai Python package
+COPY python/ /tmp/python/
+RUN pip install --no-cache-dir /tmp/python/ && rm -rf /tmp/python/
+
+# Install tw_bridge wheel (pre-built by CI, placed in dist/)
+COPY dist/tw_bridge-*.whl /tmp/
+RUN pip install --no-cache-dir /tmp/tw_bridge-*.whl && rm -f /tmp/tw_bridge-*.whl
 
 # Create non-root user
 RUN useradd -r -s /bin/false -U triage

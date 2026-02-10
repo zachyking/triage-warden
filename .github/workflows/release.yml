@@ -1,0 +1,247 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Job 1: Validate version consistency ──────────────────────────
+  validate:
+    name: Validate versions
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: meta
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Tag: $TAG  Version: $VERSION"
+
+      - name: Check Cargo.toml
+        run: |
+          CARGO_VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')
+          if [ "$CARGO_VERSION" != "${{ steps.meta.outputs.version }}" ]; then
+            echo "::error::Cargo.toml version ($CARGO_VERSION) does not match tag (${{ steps.meta.outputs.version }})"
+            exit 1
+          fi
+
+      - name: Check python/pyproject.toml
+        run: |
+          PY_VERSION=$(grep -m1 '^version' python/pyproject.toml | sed 's/.*"\(.*\)"/\1/')
+          if [ "$PY_VERSION" != "${{ steps.meta.outputs.version }}" ]; then
+            echo "::error::python/pyproject.toml version ($PY_VERSION) does not match tag (${{ steps.meta.outputs.version }})"
+            exit 1
+          fi
+
+      - name: Check tw-bridge/pyproject.toml
+        run: |
+          BRIDGE_VERSION=$(grep -m1 '^version' tw-bridge/pyproject.toml | sed 's/.*"\(.*\)"/\1/')
+          if [ "$BRIDGE_VERSION" != "${{ steps.meta.outputs.version }}" ]; then
+            echo "::error::tw-bridge/pyproject.toml version ($BRIDGE_VERSION) does not match tag (${{ steps.meta.outputs.version }})"
+            exit 1
+          fi
+
+      - name: Check deploy/helm/Chart.yaml
+        run: |
+          APP_VERSION=$(grep '^appVersion' deploy/helm/Chart.yaml | sed 's/.*"\(.*\)"/\1/')
+          if [ "$APP_VERSION" != "${{ steps.meta.outputs.version }}" ]; then
+            echo "::error::Chart.yaml appVersion ($APP_VERSION) does not match tag (${{ steps.meta.outputs.version }})"
+            exit 1
+          fi
+
+  # ── Job 2: Build Linux x86_64 binary ────────────────────────────
+  build-binary:
+    name: Build Linux binary
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
+
+      - name: Build release binary
+        run: cargo build --release --bin triage-warden
+
+      - name: Create tarball
+        run: |
+          ARCHIVE="triage-warden-${{ needs.validate.outputs.tag }}-x86_64-unknown-linux-gnu"
+          mkdir -p "$ARCHIVE"
+          cp target/release/triage-warden "$ARCHIVE/"
+          cp LICENSE README.md "$ARCHIVE/"
+          cp -r config/ "$ARCHIVE/config/"
+          tar czf "$ARCHIVE.tar.gz" "$ARCHIVE"
+          sha256sum "$ARCHIVE.tar.gz" > "$ARCHIVE.tar.gz.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-linux-x86_64
+          path: |
+            triage-warden-*.tar.gz
+            triage-warden-*.tar.gz.sha256
+
+  # ── Job 3: Build Python wheels ──────────────────────────────────
+  build-python:
+    name: Build Python wheels
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tools
+        run: pip install build maturin
+
+      - name: Build tw_ai wheel
+        working-directory: python
+        run: python -m build --wheel --outdir ../dist/
+
+      - name: Build tw_bridge wheel
+        working-directory: tw-bridge
+        run: maturin build --release --out ../dist/
+
+      - name: Generate checksums
+        working-directory: dist
+        run: |
+          for f in *.whl; do
+            sha256sum "$f" > "$f.sha256"
+          done
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-wheels
+          path: dist/
+
+  # ── Job 4: Docker image ─────────────────────────────────────────
+  docker:
+    name: Docker image
+    needs: [validate, build-python]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Python wheels
+        uses: actions/download-artifact@v4
+        with:
+          name: python-wheels
+          path: dist/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: docker-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/zachyking/triage-warden
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          push: true
+          tags: ${{ steps.docker-meta.outputs.tags }}
+          labels: ${{ steps.docker-meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Job 5: GitHub Release ───────────────────────────────────────
+  release:
+    name: GitHub Release
+    needs: [validate, build-binary, build-python, docker]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-linux-x86_64
+          path: artifacts/
+
+      - name: Download Python wheels
+        uses: actions/download-artifact@v4
+        with:
+          name: python-wheels
+          path: artifacts/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.validate.outputs.tag }}
+          name: Triage Warden ${{ needs.validate.outputs.tag }}
+          generate_release_notes: true
+          body: |
+            ## Installation
+
+            ### Docker (recommended)
+
+            ```bash
+            docker pull ghcr.io/zachyking/triage-warden:${{ needs.validate.outputs.version }}
+            docker run -p 8080:8080 ghcr.io/zachyking/triage-warden:${{ needs.validate.outputs.version }}
+            ```
+
+            ### Binary (Linux x86_64, Rust runtime only)
+
+            ```bash
+            curl -LO https://github.com/zachyking/triage-warden/releases/download/${{ needs.validate.outputs.tag }}/triage-warden-${{ needs.validate.outputs.tag }}-x86_64-unknown-linux-gnu.tar.gz
+            tar xzf triage-warden-*.tar.gz
+            ./triage-warden-*/triage-warden serve
+            ```
+
+            > Install the AI components separately: `pip install tw_ai`
+
+            ### Python Wheels
+
+            ```bash
+            pip install tw_ai-${{ needs.validate.outputs.version }}-py3-none-any.whl
+            ```
+          files: |
+            artifacts/*

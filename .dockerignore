@@ -1,0 +1,7 @@
+target/
+python/.venv/
+tw-bridge/.venv/
+node_modules/
+docs-site/book/
+.git/
+*.log
