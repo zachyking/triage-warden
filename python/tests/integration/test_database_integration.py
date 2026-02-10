@@ -207,15 +207,14 @@ class TestRAGWithRealVectorStore:
     """Integration tests for RAG with real Qdrant."""
 
     def test_rag_config_with_qdrant(self, qdrant_http_url: str):
-        """Test RAG configuration with real Qdrant."""
+        """Test RAG configuration validates alongside a real Qdrant instance."""
         from tw_ai.rag.config import RAGConfig
 
         config = RAGConfig(
-            qdrant_url=qdrant_http_url,
-            collection_name="test_rag_collection",
             embedding_model="all-MiniLM-L6-v2",
             embedding_dimension=384,
+            incidents_collection="test_rag_collection",
         )
 
-        assert config.qdrant_url == qdrant_http_url
-        assert config.collection_name == "test_rag_collection"
+        assert config.embedding_model == "all-MiniLM-L6-v2"
+        assert config.incidents_collection == "test_rag_collection"

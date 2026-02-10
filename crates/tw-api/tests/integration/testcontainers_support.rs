@@ -332,7 +332,7 @@ impl QdrantContainer {
 /// Starts a Qdrant container for testing.
 pub async fn start_qdrant() -> QdrantContainer {
     // Note: with_exposed_port must be called before ImageExt methods
-    let image = GenericImage::new("qdrant/qdrant", "v1.12.4")
+    let image = GenericImage::new("qdrant/qdrant", "v1.15.1")
         .with_exposed_port(6333.tcp())
         .with_exposed_port(6334.tcp())
         .with_wait_for(WaitFor::message_on_stdout("Qdrant gRPC listening on"));

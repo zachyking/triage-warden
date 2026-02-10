@@ -118,15 +118,26 @@ def _create_qdrant_container() -> QdrantTestContainer:
     _skip_if_no_docker()
 
     from testcontainers.core.container import DockerContainer
-    from testcontainers.core.waiting_utils import wait_for_logs
 
-    container = DockerContainer(image="qdrant/qdrant:v1.12.4")
+    container = DockerContainer(image="qdrant/qdrant:v1.15.1")
     container.with_exposed_ports(6333, 6334)
     container.start()
 
-    # Wait for Qdrant to be ready
-    wait_for_logs(container, "Qdrant gRPC listening on", timeout=30)
-    time.sleep(1)
+    # Wait for Qdrant to be ready using health endpoint
+    host = container.get_container_host_ip()
+    http_port = int(container.get_exposed_port(6333))
+    import httpx
+
+    for _ in range(30):
+        try:
+            resp = httpx.get(f"http://{host}:{http_port}/healthz", timeout=2)
+            if resp.status_code == 200:
+                break
+        except httpx.ConnectError:
+            pass
+        time.sleep(1)
+    else:
+        raise RuntimeError("Qdrant did not become ready within 30 seconds")
 
     host = container.get_container_host_ip()
     http_port = int(container.get_exposed_port(6333))
