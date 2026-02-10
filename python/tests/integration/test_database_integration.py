@@ -186,11 +186,12 @@ class TestQdrantIntegration:
         client.upsert(collection_name=collection_name, points=points)
 
         # Search for similar vectors
-        results = client.search(
+        response = client.query_points(
             collection_name=collection_name,
-            query_vector=[0.1, 0.2, 0.3, 0.4],
+            query=[0.1, 0.2, 0.3, 0.4],
             limit=2,
         )
+        results = response.points
 
         # Should find the two phishing incidents as most similar
         assert len(results) == 2
