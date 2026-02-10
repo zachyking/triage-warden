@@ -435,20 +435,11 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use tw_core::db::create_pool;
-    use tw_core::{EventBus, FeatureFlagStore, FeatureFlags, InMemoryFeatureFlagStore};
+    use crate::test_helpers::create_test_state;
 
     #[tokio::test]
     async fn test_router_creation() {
-        // Create in-memory SQLite for testing
-        let pool = create_pool("sqlite::memory:").await.unwrap();
-        let event_bus = EventBus::new(100);
-        let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
-        let feature_flags = FeatureFlags::new(store);
-        let state =
-            AppState::new(pool, event_bus, feature_flags).expect("Failed to initialize AppState");
-
+        let state = create_test_state().await;
         let server = ApiServer::with_state(state);
         let _router = server.router();
 
