@@ -1,6 +1,6 @@
 # Kubernetes Deployment Guide
 
-This guide covers deploying Triage Warden to Kubernetes using Helm or raw manifests.
+This guide covers deploying Triage Warden to Kubernetes using raw manifests. For the recommended Helm-based approach, see the [Helm Chart](./helm.md) guide.
 
 ## Prerequisites
 
@@ -8,7 +8,7 @@ Before deploying, ensure you have:
 
 - **Kubernetes cluster** version 1.25 or later
 - **kubectl** configured with cluster access
-- **Helm 3.x** (if using Helm deployment)
+- **Helm 3.8+** (see [Helm Chart](./helm.md) for Helm-based deployment)
 - **Container registry access** to pull Triage Warden images
 - **PostgreSQL database** (managed or self-hosted)
 - **Redis** (optional, required for HA deployments)

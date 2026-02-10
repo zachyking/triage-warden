@@ -568,4 +568,5 @@ deploy:
 - [Set up notifications](../configuration/notifications-setup.md)
 - [Create playbooks](../configuration/playbooks-guide.md)
 - [Set up monitoring](../operations/monitoring.md)
-- [Deploy to Kubernetes](./kubernetes.md) for production HA
+- [Deploy to Kubernetes](./kubernetes.md) using raw manifests
+- [Deploy with Helm](./helm.md) for templated Kubernetes deployments

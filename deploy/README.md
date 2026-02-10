@@ -1,6 +1,6 @@
 # Triage Warden Deployment
 
-Deployment configurations for Triage Warden.
+All deployment configurations for Triage Warden live under this directory.
 
 ## Directory Structure
 
@@ -9,18 +9,33 @@ deploy/
 ├── docker/                    # Docker deployment files
 │   ├── Dockerfile             # Multi-stage build
 │   ├── docker-compose.yml     # Development compose
+│   ├── docker-compose.dev.yml # Development with hot reload
 │   ├── docker-compose.prod.yml # Production compose
-│   └── .env.example           # Environment template
+│   ├── docker-compose.ha.yml  # High-availability compose
+│   ├── docker-compose.test.yml # Testing compose
+│   ├── .env.example           # Environment template
+│   ├── prometheus.yml         # Prometheus config
+│   └── grafana/               # Grafana dashboards & provisioning
 │
-└── kubernetes/                # Kubernetes manifests
-    ├── namespace.yaml         # Namespace definition
-    ├── configmap.yaml         # Non-sensitive config
-    ├── secret.yaml            # Secrets template
-    ├── deployment.yaml        # Deployment + ServiceAccount + PDB
-    ├── service.yaml           # ClusterIP service
-    ├── ingress.yaml           # Ingress + NetworkPolicy
-    ├── servicemonitor.yaml    # Prometheus monitoring
-    └── hpa.yaml               # Horizontal Pod Autoscaler
+├── kubernetes/                # Raw Kubernetes manifests
+│   ├── namespace.yaml         # Namespace definition
+│   ├── configmap.yaml         # Non-sensitive config
+│   ├── secret.yaml            # Secrets template
+│   ├── deployment.yaml        # Deployment + ServiceAccount + PDB
+│   ├── service.yaml           # ClusterIP service
+│   ├── ingress.yaml           # Ingress + NetworkPolicy
+│   ├── servicemonitor.yaml    # Prometheus monitoring
+│   ├── hpa.yaml               # Horizontal Pod Autoscaler
+│   └── qdrant.yaml            # Qdrant vector DB StatefulSet
+│
+└── helm/                      # Helm chart
+    ├── Chart.yaml             # Chart metadata
+    ├── values.yaml            # Default values
+    ├── values-dev.yaml        # Development overrides
+    ├── values-prod.yaml       # Production overrides
+    ├── values-ha.yaml         # High-availability overrides
+    ├── README.md              # Helm chart documentation
+    └── templates/             # Kubernetes resource templates
 ```
 
 ## Quick Start
@@ -53,7 +68,7 @@ cp .env.example .env
 docker-compose -f docker-compose.prod.yml up -d
 ```
 
-### Kubernetes
+### Kubernetes (Raw Manifests)
 
 ```bash
 cd deploy/kubernetes
@@ -75,6 +90,22 @@ kubectl apply -f servicemonitor.yaml
 kubectl apply -f hpa.yaml
 ```
 
+### Kubernetes (Helm)
+
+```bash
+# Install with default values
+helm install triage-warden ./deploy/helm \
+  --namespace triage-warden \
+  --create-namespace
+
+# Install with production values
+helm install triage-warden ./deploy/helm \
+  --namespace triage-warden \
+  -f deploy/helm/values-prod.yaml
+
+# See deploy/helm/README.md for full Helm documentation
+```
+
 ## Prerequisites
 
 ### Docker
@@ -85,6 +116,7 @@ kubectl apply -f hpa.yaml
 ### Kubernetes
 - Kubernetes 1.25+
 - kubectl configured
+- Helm 3.8+ (for Helm deployments)
 - Ingress controller (nginx recommended)
 - cert-manager (for TLS)
 - Prometheus Operator (for monitoring)

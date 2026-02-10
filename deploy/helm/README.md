@@ -55,7 +55,7 @@ config:
 EOF
 
 # Install the chart
-helm install triage-warden ./helm/triage-warden -f my-values.yaml
+helm install triage-warden ./deploy/helm -f my-values.yaml
 ```
 
 ### Production Installation
@@ -135,7 +135,7 @@ serviceMonitor:
 EOF
 
 # Install
-helm install triage-warden ./helm/triage-warden \
+helm install triage-warden ./deploy/helm \
   --namespace triage-warden \
   -f production-values.yaml
 ```
@@ -370,7 +370,7 @@ prometheusRules:
 ## Upgrading
 
 ```bash
-helm upgrade triage-warden ./helm/triage-warden \
+helm upgrade triage-warden ./deploy/helm \
   --namespace triage-warden \
   -f production-values.yaml
 ```

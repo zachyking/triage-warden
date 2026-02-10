@@ -104,6 +104,6 @@ WARNING: HPA minReplicas is less than 2.
 {{- end }}
 
 For more information, see:
-  https://github.com/triage-warden/triage-warden/blob/main/helm/triage-warden/README.md
+  https://github.com/triage-warden/triage-warden/blob/main/deploy/helm/README.md
 
 ==============================================================================

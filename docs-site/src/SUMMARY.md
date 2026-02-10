@@ -99,6 +99,7 @@
   - [Production Checklist](./deployment/production-checklist.md)
   - [Docker Deployment](./deployment/docker.md)
   - [Kubernetes Deployment](./deployment/kubernetes.md)
+  - [Helm Chart](./deployment/helm.md)
   - [Configuration Reference](./deployment/configuration.md)
 
 # Operations

@@ -9,7 +9,7 @@
 # 4. Configure ingress with TLS certificates
 #
 # Usage:
-#   helm install triage-warden ./helm/triage-warden \
+#   helm install triage-warden ./deploy/helm \
 #     --namespace triage-warden \
 #     -f values-prod.yaml \
 #     -f values-prod-secrets.yaml  # Your own secrets file (don't commit!)

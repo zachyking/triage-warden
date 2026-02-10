@@ -7,7 +7,8 @@ This section covers deploying Triage Warden in production environments.
 Triage Warden can be deployed in several ways:
 
 - **[Docker](./docker.md)** - Recommended for most deployments. Quick setup with Docker Compose.
-- **[Kubernetes](./kubernetes.md)** - For orchestrated, scalable deployments.
+- **[Kubernetes](./kubernetes.md)** - For orchestrated, scalable deployments using raw manifests.
+- **[Helm Chart](./helm.md)** - Recommended for Kubernetes. Templated deployment with environment-specific values.
 - **[Binary](./binary.md)** - Direct binary installation on Linux servers.
 
 ## Before You Deploy
