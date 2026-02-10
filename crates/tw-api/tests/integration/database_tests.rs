@@ -52,7 +52,7 @@ async fn test_incident_crud_postgres() {
     .expect("Failed to create incident");
 
     // Retrieve the incident
-    let row = sqlx::query("SELECT id, source, status FROM incidents WHERE id = $1")
+    let row = sqlx::query("SELECT id, source, status::text FROM incidents WHERE id = $1")
         .bind(incident_id)
         .fetch_one(&pool)
         .await
