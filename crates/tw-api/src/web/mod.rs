@@ -32,7 +32,7 @@ use tw_core::privacy::RetentionManager;
 use tw_core::rbac::{AccessReview, ReviewStatus};
 use tw_core::{CommentType, IncidentComment, UserFilter};
 
-use crate::auth::AuthenticatedUser;
+use crate::auth::{generate_csrf_token, AuthenticatedUser};
 use crate::error::ApiError;
 use crate::state::AppState;
 use templates::*;
@@ -179,6 +179,7 @@ async fn dashboard(
         approval_count,
         system_healthy: true,
         current_user: Some(user_to_current_info(&user)),
+        csrf_token: generate_csrf_token(),
         metrics,
         recent_incidents,
     };
@@ -278,6 +279,7 @@ async fn incidents_list(
         approval_count: nav.approval_count,
         system_healthy: true,
         current_user: Some(user_to_current_info(&user)),
+        csrf_token: generate_csrf_token(),
         incidents,
         total_count,
         severity_filter: query.severity,
@@ -328,6 +330,7 @@ async fn incident_detail(
                 approval_count: nav.approval_count,
                 system_healthy: true,
                 current_user: Some(user_to_current_info(&user)),
+                csrf_token: generate_csrf_token(),
                 incident: detail,
             };
 
@@ -390,6 +393,7 @@ async fn approvals(
         approval_count: pending_actions.len() as u32,
         system_healthy: true,
         current_user: Some(user_to_current_info(&user)),
+        csrf_token: generate_csrf_token(),
         pending_actions,
         recent_approvals: vec![],
     };
@@ -441,6 +445,7 @@ async fn playbooks(
         approval_count: nav.approval_count,
         system_healthy: true,
         current_user: Some(user_to_current_info(&user)),
+        csrf_token: generate_csrf_token(),
         playbooks: playbooks_list,
     };
 
@@ -513,6 +518,7 @@ async fn playbook_detail(
                 approval_count: nav.approval_count,
                 system_healthy: true,
                 current_user: Some(user_to_current_info(&user)),
+                csrf_token: generate_csrf_token(),
                 playbook: detail,
             };
 
@@ -965,6 +971,7 @@ async fn settings(
         approval_count: nav.approval_count,
         system_healthy: true,
         current_user: Some(user_to_current_info(&user)),
+        csrf_token: generate_csrf_token(),
         tab: query.tab,
         settings: settings_data,
         connectors,
@@ -1940,6 +1947,7 @@ async fn knowledge_list(
         approval_count: nav.approval_count,
         system_healthy: true,
         current_user: Some(user_to_current_info(&user)),
+        csrf_token: generate_csrf_token(),
         articles,
         query: query.q,
         type_filter: query.type_filter,
@@ -1976,6 +1984,7 @@ async fn knowledge_detail(
         approval_count: nav.approval_count,
         system_healthy: true,
         current_user: Some(user_to_current_info(&user)),
+        csrf_token: generate_csrf_token(),
         article,
     };
 
@@ -2128,6 +2137,7 @@ async fn analytics(
         approval_count: nav.approval_count,
         system_healthy: true,
         current_user: Some(user_to_current_info(&user)),
+        csrf_token: generate_csrf_token(),
         kpis,
         top_techniques,
         analyst_workload: vec![],

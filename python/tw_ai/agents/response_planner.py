@@ -332,7 +332,7 @@ class ResponsePlanningAgent:
                 plan.estimated_duration_secs = sum(s.estimated_duration_secs for s in plan.steps)
                 plan.requires_human_review = any(s.requires_approval for s in plan.steps)
                 return plan
-            except Exception:
+            except (ValueError, RuntimeError, ConnectionError, TimeoutError):
                 logger.warning(
                     "LLM planning failed, falling back to default plan",
                     incident_type=incident_type,

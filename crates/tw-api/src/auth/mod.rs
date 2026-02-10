@@ -13,7 +13,9 @@ pub mod provisioning;
 pub mod saml;
 
 pub use csrf::{generate_csrf_token, validate_csrf_token, CsrfToken};
-pub use extractors::{AuthenticatedUser, OptionalUser, RequireAdmin, RequireAnalyst};
+pub use extractors::{
+    AuthenticatedUser, CurrentSession, OptionalUser, RequireAdmin, RequireAnalyst,
+};
 
 #[cfg(test)]
 pub mod test_helpers;

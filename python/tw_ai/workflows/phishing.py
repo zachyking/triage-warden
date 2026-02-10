@@ -753,7 +753,7 @@ class PhishingTriageWorkflow:
         """Get threat-intel bridge if available."""
         try:
             from tw_ai.agents.tools import get_threat_intel_bridge
-        except Exception:
+        except (ImportError, RuntimeError):
             return None
         try:
             return get_threat_intel_bridge()

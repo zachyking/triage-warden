@@ -267,7 +267,8 @@ ingress:
 # NOTE: This chart does NOT bundle PostgreSQL. Configure connection to your
 # existing PostgreSQL instance here.
 postgresql:
-  # -- PostgreSQL host (required)
+  # -- PostgreSQL host (REQUIRED - deployment will fail without this)
+  # Example: postgres.example.com or your RDS/Cloud SQL endpoint
   host: ""
   # -- PostgreSQL port
   port: 5432
@@ -278,6 +279,10 @@ postgresql:
   # -- Existing secret with PostgreSQL password (key: postgresql-password)
   existingSecret: ""
   # -- Password (only used if existingSecret is not set, not recommended)
+  # WARNING: Do NOT use plaintext passwords in production!
+  # SECURITY RISK: This value may be stored in version control or visible in helm history
+  # RECOMMENDED: Use existingSecret instead to reference a secret managed by your secrets manager
+  # This field is provided for dev/test environments only
   password: ""
   # -- SSL mode (disable, require, verify-ca, verify-full)
   sslMode: "require"

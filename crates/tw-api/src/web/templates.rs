@@ -28,6 +28,7 @@ pub struct DashboardTemplate {
     pub approval_count: u32,
     pub system_healthy: bool,
     pub current_user: Option<CurrentUserInfo>,
+    pub csrf_token: String,
     pub metrics: DashboardMetrics,
     pub recent_incidents: Vec<IncidentRow>,
 }
@@ -58,6 +59,7 @@ pub struct IncidentsListTemplate {
     pub approval_count: u32,
     pub system_healthy: bool,
     pub current_user: Option<CurrentUserInfo>,
+    pub csrf_token: String,
     pub incidents: Vec<IncidentRow>,
     pub total_count: u32,
     pub severity_filter: String,
@@ -91,6 +93,7 @@ pub struct IncidentDetailTemplate {
     pub approval_count: u32,
     pub system_healthy: bool,
     pub current_user: Option<CurrentUserInfo>,
+    pub csrf_token: String,
     pub incident: IncidentDetail,
 }
 
@@ -165,6 +168,7 @@ pub struct ApprovalsTemplate {
     pub approval_count: u32,
     pub system_healthy: bool,
     pub current_user: Option<CurrentUserInfo>,
+    pub csrf_token: String,
     pub pending_actions: Vec<PendingAction>,
     pub recent_approvals: Vec<RecentApproval>,
 }
@@ -203,6 +207,7 @@ pub struct PlaybooksTemplate {
     pub approval_count: u32,
     pub system_healthy: bool,
     pub current_user: Option<CurrentUserInfo>,
+    pub csrf_token: String,
     pub playbooks: Vec<PlaybookData>,
 }
 
@@ -225,6 +230,7 @@ pub struct PlaybookDetailTemplate {
     pub approval_count: u32,
     pub system_healthy: bool,
     pub current_user: Option<CurrentUserInfo>,
+    pub csrf_token: String,
     pub playbook: PlaybookDetailData,
 }
 
@@ -312,6 +318,7 @@ pub struct SettingsTemplate {
     pub approval_count: u32,
     pub system_healthy: bool,
     pub current_user: Option<CurrentUserInfo>,
+    pub csrf_token: String,
     pub tab: String,
     pub settings: SettingsData,
     pub connectors: Vec<ConnectorData>,
@@ -837,6 +844,7 @@ pub struct KnowledgeListTemplate {
     pub approval_count: u32,
     pub system_healthy: bool,
     pub current_user: Option<CurrentUserInfo>,
+    pub csrf_token: String,
     pub articles: Vec<KnowledgeArticle>,
     pub query: String,
     pub type_filter: String,
@@ -861,6 +869,7 @@ pub struct KnowledgeDetailTemplate {
     pub approval_count: u32,
     pub system_healthy: bool,
     pub current_user: Option<CurrentUserInfo>,
+    pub csrf_token: String,
     pub article: KnowledgeArticleDetail,
 }
 
@@ -888,6 +897,7 @@ pub struct AnalyticsTemplate {
     pub approval_count: u32,
     pub system_healthy: bool,
     pub current_user: Option<CurrentUserInfo>,
+    pub csrf_token: String,
     pub kpis: AnalyticsKpis,
     pub top_techniques: Vec<TopTechnique>,
     pub analyst_workload: Vec<AnalystWorkload>,

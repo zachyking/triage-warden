@@ -10,7 +10,7 @@ version: '3.8'
 
 services:
   app:
-    image: ghcr.io/your-org/triage-warden:latest
+    image: ghcr.io/${TW_REGISTRY_ORG:-your-org}/triage-warden:${TW_VERSION:?Set TW_VERSION}
     ports:
       - "8080:8080"
     environment:

@@ -21,7 +21,9 @@ metadata:
     app.kubernetes.io/part-of: triage-warden
 spec:
   serviceName: qdrant-headless
-  replicas: 1
+  # For production, use 3 replicas for high availability
+  # Single replica is acceptable for dev/test environments
+  replicas: 3
   selector:
     matchLabels:
       app.kubernetes.io/name: qdrant
@@ -63,13 +65,13 @@ spec:
               value: "/qdrant/storage"
             - name: QDRANT__STORAGE__ON_DISK_PAYLOAD
               value: "true"
-            # API key from secret (optional but recommended for production)
+            # API key from secret (required for security)
             - name: QDRANT__SERVICE__API_KEY
               valueFrom:
                 secretKeyRef:
                   name: qdrant-secrets
                   key: api-key
-                  optional: true
+                  optional: false
 
           resources:
             requests:
@@ -202,7 +204,7 @@ metadata:
   labels:
     app.kubernetes.io/name: qdrant
 spec:
-  minAvailable: 0  # Allow disruption for single-replica setup
+  minAvailable: 1  # Ensure at least 1 replica remains during updates
   selector:
     matchLabels:
       app.kubernetes.io/name: qdrant

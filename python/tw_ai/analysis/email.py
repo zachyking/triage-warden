@@ -353,7 +353,7 @@ def extract_urls_from_html(html: str) -> list[ExtractedURL]:
     parser = _HTMLLinkExtractor()
     try:
         parser.feed(html)
-    except Exception:
+    except (ValueError, RuntimeError):
         # If HTML parsing fails, ignore partial link extraction and rely on regex fallback.
         parser.links = []
 

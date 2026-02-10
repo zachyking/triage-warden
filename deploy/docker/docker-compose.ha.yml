@@ -39,7 +39,7 @@
 version: '3.8'
 
 x-triage-warden-common: &tw-common
-  image: triage-warden:latest
+  image: triage-warden:${TW_VERSION:-latest}
   build:
     context: ../..
     dockerfile: deploy/docker/Dockerfile
@@ -81,7 +81,7 @@ x-triage-warden-common: &tw-common
     TW_METRICS_PATH: /metrics
 
     # Security settings
-    TW_COOKIE_SECURE: "false"
+    TW_COOKIE_SECURE: "true"
     TW_COOKIE_SAME_SITE: lax
     TW_CSRF_ENABLED: "true"
 
@@ -304,9 +304,6 @@ services:
       # Enable key expiration notifications (for leader election)
       - --notify-keyspace-events
       - "Ex"
-    ports:
-      # Expose for debugging (remove in production)
-      - "6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -363,9 +360,6 @@ services:
       - log_statement=none
       - -c
       - log_min_duration_statement=1000
-    ports:
-      # Expose for debugging (remove in production)
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

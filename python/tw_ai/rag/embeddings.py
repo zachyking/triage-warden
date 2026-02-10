@@ -91,7 +91,7 @@ class EmbeddingService:
             )
 
             return model
-        except Exception as e:
+        except (RuntimeError, ValueError, OSError) as e:
             logger.error(
                 "load_model_failed",
                 model=self._config.embedding_model,
@@ -112,7 +112,7 @@ class EmbeddingService:
         try:
             embedding = self.model.encode(text, convert_to_numpy=True)
             return list(embedding.tolist())
-        except Exception as e:
+        except (RuntimeError, ValueError, OSError) as e:
             logger.error(
                 "embed_failed",
                 text_length=len(text),
@@ -142,7 +142,7 @@ class EmbeddingService:
             )
 
             return [emb.tolist() for emb in embeddings]
-        except Exception as e:
+        except (RuntimeError, ValueError, OSError) as e:
             logger.error(
                 "embed_batch_failed",
                 text_count=len(texts),

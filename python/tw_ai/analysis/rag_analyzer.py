@@ -587,7 +587,7 @@ class RAGEnhancedAnalyzer:
                 context.similar_incidents = await self._retrieve_similar_incidents(
                     description, alert_type
                 )
-            except Exception as e:
+            except (ConnectionError, TimeoutError, ValueError, RuntimeError) as e:
                 error_msg = f"Failed to retrieve similar incidents: {e}"
                 errors.append(error_msg)
                 logger.warning("rag_retrieval_error", source="incidents", error=str(e))
@@ -596,7 +596,7 @@ class RAGEnhancedAnalyzer:
         if self._config.enable_playbooks:
             try:
                 context.playbooks = await self._retrieve_playbooks(description, alert_type)
-            except Exception as e:
+            except (ConnectionError, TimeoutError, ValueError, RuntimeError) as e:
                 error_msg = f"Failed to retrieve playbooks: {e}"
                 errors.append(error_msg)
                 logger.warning("rag_retrieval_error", source="playbooks", error=str(e))
@@ -605,7 +605,7 @@ class RAGEnhancedAnalyzer:
         if self._config.enable_mitre_techniques:
             try:
                 context.mitre_techniques = await self._retrieve_mitre_techniques(description)
-            except Exception as e:
+            except (ConnectionError, TimeoutError, ValueError, RuntimeError) as e:
                 error_msg = f"Failed to retrieve MITRE techniques: {e}"
                 errors.append(error_msg)
                 logger.warning("rag_retrieval_error", source="mitre", error=str(e))
@@ -614,7 +614,7 @@ class RAGEnhancedAnalyzer:
         if self._config.enable_threat_intel:
             try:
                 context.threat_intel = await self._retrieve_threat_intel(description)
-            except Exception as e:
+            except (ConnectionError, TimeoutError, ValueError, RuntimeError) as e:
                 error_msg = f"Failed to retrieve threat intel: {e}"
                 errors.append(error_msg)
                 logger.warning("rag_retrieval_error", source="threat_intel", error=str(e))

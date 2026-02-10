@@ -510,7 +510,7 @@ def _extract_domain_from_url(url: str) -> str | None:
         if "/" in url:
             return url.split("/")[0].lower()
         return url.lower() if "." in url else None
-    except Exception:
+    except (ValueError, AttributeError):
         return None
 
 

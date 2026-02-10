@@ -35,8 +35,10 @@ spec:
 
       containers:
         - name: triage-warden
+          # IMPORTANT: Replace :latest with a specific version tag (e.g., v1.0.0)
+          # Using :latest in production can lead to unpredictable behavior
           image: ghcr.io/your-org/triage-warden:latest
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
 
           ports:
             - name: http

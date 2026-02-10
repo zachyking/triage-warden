@@ -52,8 +52,10 @@ class ActionRiskLevel(str, Enum):
     # Critical - potentially catastrophic, irreversible
     CRITICAL = "critical"
 
-    def __lt__(self, other: ActionRiskLevel) -> bool:  # type: ignore[override]
+    def __lt__(self, other: object) -> bool:
         """Compare risk levels for ordering."""
+        if not isinstance(other, ActionRiskLevel):
+            return NotImplemented
         order = {
             ActionRiskLevel.INFO: 0,
             ActionRiskLevel.LOW: 1,
@@ -63,17 +65,44 @@ class ActionRiskLevel(str, Enum):
         }
         return order[self] < order[other]
 
-    def __le__(self, other: ActionRiskLevel) -> bool:  # type: ignore[override]
+    def __le__(self, other: object) -> bool:
         """Compare risk levels for ordering."""
-        return self < other or self == other
+        if not isinstance(other, ActionRiskLevel):
+            return NotImplemented
+        order = {
+            ActionRiskLevel.INFO: 0,
+            ActionRiskLevel.LOW: 1,
+            ActionRiskLevel.MEDIUM: 2,
+            ActionRiskLevel.HIGH: 3,
+            ActionRiskLevel.CRITICAL: 4,
+        }
+        return order[self] <= order[other]
 
-    def __gt__(self, other: ActionRiskLevel) -> bool:  # type: ignore[override]
+    def __gt__(self, other: object) -> bool:
         """Compare risk levels for ordering."""
-        return not self <= other
+        if not isinstance(other, ActionRiskLevel):
+            return NotImplemented
+        order = {
+            ActionRiskLevel.INFO: 0,
+            ActionRiskLevel.LOW: 1,
+            ActionRiskLevel.MEDIUM: 2,
+            ActionRiskLevel.HIGH: 3,
+            ActionRiskLevel.CRITICAL: 4,
+        }
+        return order[self] > order[other]
 
-    def __ge__(self, other: ActionRiskLevel) -> bool:  # type: ignore[override]
+    def __ge__(self, other: object) -> bool:
         """Compare risk levels for ordering."""
-        return not self < other
+        if not isinstance(other, ActionRiskLevel):
+            return NotImplemented
+        order = {
+            ActionRiskLevel.INFO: 0,
+            ActionRiskLevel.LOW: 1,
+            ActionRiskLevel.MEDIUM: 2,
+            ActionRiskLevel.HIGH: 3,
+            ActionRiskLevel.CRITICAL: 4,
+        }
+        return order[self] >= order[other]
 
     @classmethod
     def from_severity(cls, severity: str) -> ActionRiskLevel:

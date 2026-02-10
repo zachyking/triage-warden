@@ -516,7 +516,7 @@ class TestRAGEnhancedAnalyzer:
         from tw_ai.agents.react import AgentResult
 
         # Make retrieval raise an exception
-        mock_rag_service.retrieval.search_similar_incidents.side_effect = Exception(
+        mock_rag_service.retrieval.search_similar_incidents.side_effect = ConnectionError(
             "Connection error"
         )
 

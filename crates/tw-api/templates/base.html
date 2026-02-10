@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="{{ csrf_token }}">
   <title>{% block title %}Triage Warden{% endblock %}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -109,6 +110,19 @@
 
   <!-- Toast & Modal Scripts -->
   <script>
+    // CSRF token for HTMX requests
+    document.addEventListener('DOMContentLoaded', function() {
+      document.body.addEventListener('htmx:configRequest', function(event) {
+        // Add CSRF token to all non-GET HTMX requests
+        if (event.detail.verb !== 'get') {
+          var token = document.querySelector('meta[name="csrf-token"]');
+          if (token) {
+            event.detail.headers['X-CSRF-Token'] = token.getAttribute('content');
+          }
+        }
+      });
+    });
+
     // Toast management
     window.showToast = function(type, title, message, duration = 5000) {
       const container = document.getElementById('toast-container');
