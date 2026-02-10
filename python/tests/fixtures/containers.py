@@ -91,7 +91,7 @@ def _create_postgres_container() -> PostgresTestContainer:
 
     container = PostgresContainer(
         image="postgres:16-alpine",
-        user="test",
+        username="test",
         password="test",
         dbname="triage_warden_test",
     )
