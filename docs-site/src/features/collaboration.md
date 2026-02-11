@@ -16,15 +16,12 @@ The collaboration module (Stage 4.3) adds team workflow features to incident man
 
 ### Manual Assignment
 
-Assign an incident to an analyst via the API:
+Assign an incident to an analyst through the web UI's assignment picker, or via the web endpoint:
 
 ```bash
-curl -X PUT http://localhost:8080/api/incidents/{id}/assignment \
-  -H "Content-Type: application/json" \
-  -d '{
-    "assignee_id": "analyst-uuid",
-    "reason": "Specialist in lateral movement investigations"
-  }'
+curl -X POST http://localhost:8080/web/incidents/{id}/assign \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d 'assignee_id=analyst-uuid'
 ```
 
 ### Auto-Assignment Rules
@@ -123,7 +120,7 @@ Filter the activity feed by incident, user, or activity type.
 Generate structured handoff reports at shift transitions:
 
 ```bash
-curl -X POST http://localhost:8080/api/handoff \
+curl -X POST http://localhost:8080/api/v1/handoffs \
   -H "Content-Type: application/json" \
   -d '{
     "outgoing_shift": "Day Shift",

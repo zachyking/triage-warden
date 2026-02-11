@@ -50,9 +50,8 @@ translator = NLQueryTranslator()
 result = translator.translate(
     "show me failed logins from 10.0.0.50 in the last hour"
 )
-# result.intent = QueryIntent.SEARCH_LOGS
-# result.query_type = "log_search"
-# result.structured_query contains the backend-specific query
+# result.intent.intent = QueryIntent.SEARCH_LOGS
+# result.structured_query returns the backend-specific query
 ```
 
 ### Backend Adapters
@@ -73,9 +72,9 @@ Multi-turn conversations are supported via `ConversationContext`. When an analys
 from tw_ai.nl_query import ConversationContext
 
 ctx = ConversationContext()
-ctx.add_turn("show me incidents from 10.0.0.50")
-ctx.add_turn("now filter to critical only")
-# Second turn inherits the IP from the first
+ctx.update("show me incidents from 10.0.0.50", entities=[...])
+ctx.update("now filter to critical only", entities=[...])
+# Second turn inherits the IP entity from the first
 ```
 
 ## Security and Audit
@@ -94,7 +93,7 @@ Every query is logged to the `QueryAuditLog` with:
 When FastAPI is available, the NL query service exposes a REST endpoint:
 
 ```bash
-curl -X POST http://localhost:8000/api/nl-query \
+curl -X POST http://localhost:8080/api/v1/nl/query \
   -H "Content-Type: application/json" \
   -d '{"query": "show me critical incidents from the last 24 hours"}'
 ```
