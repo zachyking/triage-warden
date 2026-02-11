@@ -285,7 +285,7 @@
         config: config,
         enabled: enabled ? enabled.checked : true
       };
-      fetch('/api/connectors/' + connectorId, {
+      csrfFetch('/api/connectors/' + connectorId, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)

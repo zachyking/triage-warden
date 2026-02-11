@@ -126,6 +126,17 @@
       });
     });
 
+    // CSRF-aware fetch wrapper for non-HTMX requests
+    window.csrfFetch = function(url, options) {
+      options = options || {};
+      options.headers = options.headers || {};
+      var token = document.querySelector('meta[name="csrf-token"]');
+      if (token) {
+        options.headers['X-CSRF-Token'] = token.getAttribute('content');
+      }
+      return fetch(url, options);
+    };
+
     // Escape HTML to prevent XSS in toast messages from server error text
     function escapeHtml(s) {
       if (!s) return '';

@@ -98,7 +98,7 @@ function submitCreateApiKey(e) {
   if (expiresSelect && expiresSelect.value) {
     body.expires_in_days = parseInt(expiresSelect.value, 10);
   }
-  fetch('/api/api-keys', {
+  csrfFetch('/api/api-keys', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)

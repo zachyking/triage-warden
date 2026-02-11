@@ -45,7 +45,7 @@
       const ta = document.getElementById('pkg-json');
       try {
         const body = JSON.parse(ta.value);
-        fetch('/api/v1/packages/import', {
+        csrfFetch('/api/v1/packages/import', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(body)

@@ -617,7 +617,7 @@ function updateModelOptions() {
           {% endif %}
         </div>
         <button class="btn btn-success"
-                onclick="if(confirm('Are you sure you want to re-enable automation? All playbooks and automated actions will resume.')) { fetch('/api/kill-switch/deactivate', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({reason:''}) }).then(function(r){ if(r.ok){ showToast('success','Automation Resumed','The kill switch has been deactivated.'); location.reload(); } else { showToast('error','Failed','Could not deactivate the kill switch.'); } }).catch(function(e){ showToast('error','Failed',e.message); }); }">
+                onclick="if(confirm('Are you sure you want to re-enable automation? All playbooks and automated actions will resume.')) { csrfFetch('/api/kill-switch/deactivate', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({reason:''}) }).then(function(r){ if(r.ok){ showToast('success','Automation Resumed','The kill switch has been deactivated.'); location.reload(); } else { showToast('error','Failed','Could not deactivate the kill switch.'); } }).catch(function(e){ showToast('error','Failed',e.message); }); }">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1" aria-hidden="true">
             <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
             <polyline points="22 4 12 14.01 9 11.01"/>
@@ -656,7 +656,7 @@ function updateModelOptions() {
       {% else %}
       <div class="flex gap-4">
         <button class="btn btn-danger"
-                onclick="if(confirm('WARNING: This will immediately halt ALL automated actions including playbooks, containment actions, and AI analysis. Are you sure?')) { fetch('/api/kill-switch/activate', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({reason:''}) }).then(function(r){ if(r.ok){ showToast('warning','Kill Switch Activated','All automation has been halted.'); location.reload(); } else { showToast('error','Failed','Could not activate the kill switch.'); } }).catch(function(e){ showToast('error','Failed',e.message); }); }">
+                onclick="if(confirm('WARNING: This will immediately halt ALL automated actions including playbooks, containment actions, and AI analysis. Are you sure?')) { csrfFetch('/api/kill-switch/activate', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({reason:''}) }).then(function(r){ if(r.ok){ showToast('warning','Kill Switch Activated','All automation has been halted.'); location.reload(); } else { showToast('error','Failed','Could not activate the kill switch.'); } }).catch(function(e){ showToast('error','Failed',e.message); }); }">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1" aria-hidden="true">
             <circle cx="12" cy="12" r="10"/>
             <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
@@ -998,7 +998,7 @@ function updateModelOptions() {
       e.preventDefault();
       const selected = document.querySelector('#autonomy-form input[name="level"]:checked');
       if (!selected) { showToast('error', 'No Selection', 'Please select an autonomy level.'); return; }
-      fetch('/api/v1/autonomy/config', {
+      csrfFetch('/api/v1/autonomy/config', {
         method: 'PUT',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ default_level: selected.value })

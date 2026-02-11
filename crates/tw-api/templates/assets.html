@@ -121,17 +121,19 @@
   <span class="text-muted text-sm">Page {{ page }} of {{ total_pages }}</span>
   <div class="flex gap-2">
     {% if page > 1 %}
-    <a href="/assets?page={{ page - 1 }}&asset_type={{ type_filter }}&criticality={{ criticality_filter }}&q={{ query }}"
+    {% let encoded_q = query.replace("&", "%26").replace("=", "%3D").replace("#", "%23") %}
+    <a href="/assets?page={{ page - 1 }}&asset_type={{ type_filter }}&criticality={{ criticality_filter }}&q={{ encoded_q }}"
        class="btn btn-secondary"
-       hx-get="/assets?page={{ page - 1 }}&asset_type={{ type_filter }}&criticality={{ criticality_filter }}&q={{ query }}"
+       hx-get="/assets?page={{ page - 1 }}&asset_type={{ type_filter }}&criticality={{ criticality_filter }}&q={{ encoded_q }}"
        hx-target="#assets-content"
        hx-select="#assets-content"
        hx-push-url="true">Previous</a>
     {% endif %}
     {% if page < total_pages %}
-    <a href="/assets?page={{ page + 1 }}&asset_type={{ type_filter }}&criticality={{ criticality_filter }}&q={{ query }}"
+    {% let encoded_q = query.replace("&", "%26").replace("=", "%3D").replace("#", "%23") %}
+    <a href="/assets?page={{ page + 1 }}&asset_type={{ type_filter }}&criticality={{ criticality_filter }}&q={{ encoded_q }}"
        class="btn btn-secondary"
-       hx-get="/assets?page={{ page + 1 }}&asset_type={{ type_filter }}&criticality={{ criticality_filter }}&q={{ query }}"
+       hx-get="/assets?page={{ page + 1 }}&asset_type={{ type_filter }}&criticality={{ criticality_filter }}&q={{ encoded_q }}"
        hx-target="#assets-content"
        hx-select="#assets-content"
        hx-push-url="true">Next</a>

@@ -79,7 +79,7 @@
       const tags = form.querySelector('#hunt-tags').value;
       if (tags) body.tags = tags.split(',').map(s => s.trim()).filter(Boolean);
       body.enabled = form.querySelector('#hunt-enabled').checked;
-      fetch('/api/v1/hunts', {
+      csrfFetch('/api/v1/hunts', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(body)

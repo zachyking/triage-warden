@@ -90,7 +90,7 @@
       if (mitre) body.mitre_techniques = mitre.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
       var tags = form.querySelector('#edit-hunt-tags').value;
       if (tags) body.tags = tags.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-      fetch('/api/v1/hunts/' + huntId, {
+      csrfFetch('/api/v1/hunts/' + huntId, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)

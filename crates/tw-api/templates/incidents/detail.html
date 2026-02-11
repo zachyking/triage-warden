@@ -182,7 +182,7 @@
           if (severity) body.corrected_severity = severity;
           const notes = form.querySelector('[name="notes"]').value;
           if (notes) body.notes = notes;
-          fetch('/api/incidents/' + incidentId + '/feedback', {
+          csrfFetch('/api/incidents/' + incidentId + '/feedback', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(body)
@@ -393,7 +393,7 @@
             else if (actionType === 'create_ticket') target = { type: 'ticket', ticket_id: targetVal };
             else target = { type: 'host', hostname: targetVal };
           }
-          fetch('/api/incidents/' + incidentId + '/actions', {
+          csrfFetch('/api/incidents/' + incidentId + '/actions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action_type: actionType, target: target, reason: reason })
@@ -466,7 +466,7 @@
 function runAiTriage(incidentId) {
   var el = document.getElementById('action-result');
   if (el) el.innerHTML = '<p class="text-muted">Running AI triage...</p>';
-  fetch('/api/incidents/' + incidentId + '/actions', {
+  csrfFetch('/api/incidents/' + incidentId + '/actions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action: 'auto_triage' })

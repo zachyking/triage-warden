@@ -199,7 +199,7 @@ function submitUserForm(e, method, url) {
   if (enabledEl) {
     body.enabled = enabledEl.checked;
   }
-  fetch(url, {
+  csrfFetch(url, {
     method: method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
