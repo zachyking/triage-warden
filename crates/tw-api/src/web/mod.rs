@@ -22,8 +22,8 @@ use tw_core::db::{
     create_connector_repository, create_incident_repository, create_knowledge_repository,
     create_lesson_repository, create_notification_repository, create_playbook_repository,
     create_policy_repository, create_rbac_repository, create_settings_repository,
-    create_user_repository, GeneralSettings, IncidentFilter, IncidentRepository, LlmSettings,
-    Pagination, PlaybookFilter, PolicyRepository, RateLimits,
+    create_user_repository, GeneralSettings, IncidentFilter, IncidentRepository, Pagination,
+    PlaybookFilter, PolicyRepository, RateLimits,
 };
 use tw_core::hunting::{FindingSeverity, HuntStatus, HuntingHunt};
 use tw_core::incident::{ApprovalStatus, IncidentStatus, Severity};
@@ -324,7 +324,7 @@ async fn incident_detail(
             let audit_entries = audit_repo
                 .get_for_incident(user.tenant_id, id)
                 .await
-                .unwrap_or_default()
+                .unwrap_or_log("Failed to fetch audit log")
                 .into_iter()
                 .map(|e| AuditEntry {
                     timestamp: e.timestamp.format("%H:%M:%S").to_string(),
@@ -375,7 +375,10 @@ async fn approvals(
         per_page: 50,
     };
 
-    let pending_incidents = repo.list(&filter, &pagination).await.unwrap_or_default();
+    let pending_incidents = repo
+        .list(&filter, &pagination)
+        .await
+        .unwrap_or_log("Failed to fetch pending incidents");
 
     // Convert to pending actions
     let pending_actions: Vec<PendingAction> = pending_incidents
@@ -429,7 +432,10 @@ async fn playbooks(
         tenant_id: Some(user.tenant_id),
         ..Default::default()
     };
-    let db_playbooks = playbook_repo.list(&filter).await.unwrap_or_default();
+    let db_playbooks = playbook_repo
+        .list(&filter)
+        .await
+        .unwrap_or_log("Failed to fetch playbooks");
 
     // Convert to template data
     let playbooks_list: Vec<PlaybookData> = db_playbooks
@@ -640,7 +646,7 @@ async fn settings(
     let connectors: Vec<ConnectorData> = connector_repo
         .list_for_tenant(tenant_id)
         .await
-        .unwrap_or_default()
+        .unwrap_or_log("Failed to fetch connectors")
         .into_iter()
         .map(|c| ConnectorData {
             id: c.id,
@@ -659,10 +665,13 @@ async fn settings(
     let db_rate_limits = settings_repo
         .get_rate_limits(tenant_id)
         .await
-        .unwrap_or(RateLimits {
-            isolate_host_hour: 5,
-            disable_user_hour: 10,
-            block_ip_hour: 20,
+        .unwrap_or_else(|e| {
+            tracing::warn!("Failed to load rate limits: {e}");
+            RateLimits {
+                isolate_host_hour: 5,
+                disable_user_hour: 10,
+                block_ip_hour: 20,
+            }
         });
 
     // Use defaults if settings are zero (first run)
@@ -689,7 +698,7 @@ async fn settings(
     let notification_channels: Vec<NotificationChannel> = notification_repo
         .list_for_tenant(tenant_id)
         .await
-        .unwrap_or_default()
+        .unwrap_or_log("Failed to fetch notification channels")
         .into_iter()
         .map(|channel| NotificationChannel {
             id: channel.id,
@@ -704,7 +713,7 @@ async fn settings(
     let llm = settings_repo
         .get_llm(tenant_id)
         .await
-        .unwrap_or(LlmSettings::default());
+        .unwrap_or_log("Failed to load LLM settings");
     let llm_settings = LlmSettingsData {
         provider: llm.provider,
         model: llm.model,
@@ -720,7 +729,7 @@ async fn settings(
     let api_keys: Vec<ApiKeyData> = api_key_repo
         .list_by_user(user.id)
         .await
-        .unwrap_or_default()
+        .unwrap_or_log("Failed to fetch API keys")
         .into_iter()
         .map(|key| ApiKeyData {
             id: key.id,
@@ -803,7 +812,7 @@ async fn settings(
     let roles = rbac_repo
         .list_roles(tenant_id, true)
         .await
-        .unwrap_or_default();
+        .unwrap_or_log("Failed to fetch roles");
     let custom_roles_count = roles.iter().filter(|role| !role.is_system).count();
     let users = create_user_repository(&state.db)
         .list(&UserFilter {
@@ -811,22 +820,24 @@ async fn settings(
             ..Default::default()
         })
         .await
-        .unwrap_or_default();
+        .unwrap_or_log("Failed to fetch users");
     let mut assignments_count = 0usize;
     for listed_user in users {
         assignments_count += rbac_repo
             .list_user_assignments(tenant_id, listed_user.id)
             .await
             .map(|rows| rows.len())
-            .unwrap_or(0);
+            .unwrap_or_else(|e| {
+                tracing::warn!("Failed to fetch role assignments: {e}");
+                0
+            });
     }
-    let access_reviews: Vec<AccessReview> = settings_repo
-        .get_raw(tenant_id, ACCESS_REVIEWS_SETTINGS_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default();
+    let access_reviews: Vec<AccessReview> = load_settings_json(
+        settings_repo.as_ref(),
+        tenant_id,
+        ACCESS_REVIEWS_SETTINGS_KEY,
+    )
+    .await;
     let now = Utc::now();
     let access_reviews_total = access_reviews.len();
     let access_reviews_active = access_reviews
@@ -850,37 +861,36 @@ async fn settings(
     };
 
     // Stage 6: Privacy summary
-    let retention_policy_count = settings_repo
-        .get_raw(tenant_id, RETENTION_SETTINGS_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(&raw).ok())
-        .map(|policies| policies.len())
-        .unwrap_or_else(|| RetentionManager::default().all_policies().len());
-    let subject_access_records: Vec<SubjectAccessRecordSummary> = settings_repo
-        .get_raw(tenant_id, SUBJECT_ACCESS_REQUESTS_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default();
+    let retention_policy_count = load_settings_deser::<Vec<serde_json::Value>>(
+        settings_repo.as_ref(),
+        tenant_id,
+        RETENTION_SETTINGS_KEY,
+    )
+    .await
+    .map(|policies| policies.len())
+    .unwrap_or_else(|| RetentionManager::default().all_policies().len());
+    let subject_access_records: Vec<SubjectAccessRecordSummary> = load_settings_json(
+        settings_repo.as_ref(),
+        tenant_id,
+        SUBJECT_ACCESS_REQUESTS_KEY,
+    )
+    .await;
     let subject_access_pending = subject_access_records
         .iter()
         .filter(|record| record.status == "pending_action")
         .count();
-    let last_cleanup_job = settings_repo
-        .get_raw(tenant_id, PRIVACY_CLEANUP_SCHEDULER_LAST_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str::<CleanupSchedulerSummary>(&raw).ok())
-        .map(|summary| {
-            summary
-                .timestamp
-                .format("%Y-%m-%d %H:%M:%S UTC")
-                .to_string()
-        });
+    let last_cleanup_job = load_settings_deser::<CleanupSchedulerSummary>(
+        settings_repo.as_ref(),
+        tenant_id,
+        PRIVACY_CLEANUP_SCHEDULER_LAST_KEY,
+    )
+    .await
+    .map(|summary| {
+        summary
+            .timestamp
+            .format("%Y-%m-%d %H:%M:%S UTC")
+            .to_string()
+    });
     let privacy = PrivacySettingsData {
         retention_policy_count,
         subject_access_total: subject_access_records.len(),
@@ -889,20 +899,20 @@ async fn settings(
     };
 
     // Stage 6: Guardrails summary
-    let rollback_entries = settings_repo
-        .get_raw(tenant_id, GUARDRAIL_ROLLBACKS_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(&raw).ok())
-        .map(|entries| entries.len())
-        .unwrap_or(0);
-    let pause_state = settings_repo
-        .get_raw(tenant_id, GUARDRAIL_AUTOPAUSE_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str::<PauseStateSummary>(&raw).ok());
+    let rollback_entries = load_settings_deser::<Vec<serde_json::Value>>(
+        settings_repo.as_ref(),
+        tenant_id,
+        GUARDRAIL_ROLLBACKS_KEY,
+    )
+    .await
+    .map(|entries| entries.len())
+    .unwrap_or(0);
+    let pause_state = load_settings_deser::<PauseStateSummary>(
+        settings_repo.as_ref(),
+        tenant_id,
+        GUARDRAIL_AUTOPAUSE_KEY,
+    )
+    .await;
     let guardrails = GuardrailsSettingsData {
         rollback_entries,
         automation_paused: pause_state.as_ref().is_some_and(|state| state.paused),
@@ -916,56 +926,56 @@ async fn settings(
     };
 
     // Stage 6: Compliance + immutable audit summary
-    let reports_count = settings_repo
-        .get_raw(tenant_id, COMPLIANCE_REPORT_INDEX_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(&raw).ok())
-        .map(|entries| entries.len())
-        .unwrap_or(0);
-    let evidence_packages_count = settings_repo
-        .get_raw(tenant_id, EVIDENCE_PACKAGE_INDEX_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(&raw).ok())
-        .map(|entries| entries.len())
-        .unwrap_or(0);
-    let immutable_alerts_count = settings_repo
-        .get_raw(tenant_id, IMMUTABLE_VERIFY_ALERTS_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(&raw).ok())
-        .map(|entries| entries.len())
-        .unwrap_or(0);
-    let mut verify_summary = settings_repo
-        .get_raw(tenant_id, IMMUTABLE_VERIFY_SCHEDULER_LAST_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str::<VerifySummary>(&raw).ok());
+    let reports_count = load_settings_deser::<Vec<serde_json::Value>>(
+        settings_repo.as_ref(),
+        tenant_id,
+        COMPLIANCE_REPORT_INDEX_KEY,
+    )
+    .await
+    .map(|entries| entries.len())
+    .unwrap_or(0);
+    let evidence_packages_count = load_settings_deser::<Vec<serde_json::Value>>(
+        settings_repo.as_ref(),
+        tenant_id,
+        EVIDENCE_PACKAGE_INDEX_KEY,
+    )
+    .await
+    .map(|entries| entries.len())
+    .unwrap_or(0);
+    let immutable_alerts_count = load_settings_deser::<Vec<serde_json::Value>>(
+        settings_repo.as_ref(),
+        tenant_id,
+        IMMUTABLE_VERIFY_ALERTS_KEY,
+    )
+    .await
+    .map(|entries| entries.len())
+    .unwrap_or(0);
+    let mut verify_summary = load_settings_deser::<VerifySummary>(
+        settings_repo.as_ref(),
+        tenant_id,
+        IMMUTABLE_VERIFY_SCHEDULER_LAST_KEY,
+    )
+    .await;
     if verify_summary.is_none() {
-        verify_summary = settings_repo
-            .get_raw(tenant_id, IMMUTABLE_VERIFY_LAST_KEY)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|raw| serde_json::from_str::<VerifySummary>(&raw).ok());
+        verify_summary = load_settings_deser::<VerifySummary>(
+            settings_repo.as_ref(),
+            tenant_id,
+            IMMUTABLE_VERIFY_LAST_KEY,
+        )
+        .await;
     }
-    let latest_archive_location = settings_repo
-        .get_raw(tenant_id, IMMUTABLE_ARCHIVE_INDEX_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str::<Vec<ArchiveIndexSummary>>(&raw).ok())
-        .and_then(|mut entries| {
-            entries.sort_by(|a, b| b.archived_at.cmp(&a.archived_at));
-            entries
-                .into_iter()
-                .find_map(|entry| entry.external_archive_path)
-        });
+    let latest_archive_location = load_settings_deser::<Vec<ArchiveIndexSummary>>(
+        settings_repo.as_ref(),
+        tenant_id,
+        IMMUTABLE_ARCHIVE_INDEX_KEY,
+    )
+    .await
+    .and_then(|mut entries| {
+        entries.sort_by(|a, b| b.archived_at.cmp(&a.archived_at));
+        entries
+            .into_iter()
+            .find_map(|entry| entry.external_archive_path)
+    });
     let compliance = ComplianceSettingsData {
         reports_count,
         evidence_packages_count,
@@ -1132,7 +1142,7 @@ async fn partials_notifications(
     let notification_channels: Vec<NotificationChannel> = notification_repo
         .list_for_tenant(user.tenant_id)
         .await
-        .unwrap_or_default()
+        .unwrap_or_log("Failed to fetch notification channels")
         .into_iter()
         .map(|channel| NotificationChannel {
             id: channel.id,
@@ -1232,7 +1242,7 @@ async fn partials_connectors(
     let connectors: Vec<ConnectorData> = connector_repo
         .list_for_tenant(user.tenant_id)
         .await
-        .unwrap_or_default()
+        .unwrap_or_log("Failed to fetch connectors")
         .into_iter()
         .map(|c| ConnectorData {
             id: c.id,
@@ -1530,7 +1540,7 @@ async fn partials_incident_timeline(
     let entries = audit_repo
         .get_for_incident(user.tenant_id, id)
         .await
-        .unwrap_or_default();
+        .unwrap_or_log("Failed to fetch audit log");
 
     let events: Vec<TimelineEvent> = entries
         .into_iter()
@@ -1901,7 +1911,7 @@ async fn partials_activity_feed(
     let entries = audit_repo
         .get_recent_for_tenant(user.tenant_id, 20)
         .await
-        .unwrap_or_default();
+        .unwrap_or_log("Failed to fetch activity feed");
 
     let activities: Vec<ActivityData> = entries
         .into_iter()
@@ -2138,7 +2148,7 @@ async fn analytics(
     let recent_incidents = repo
         .list(&tenant_filter, &recent_pagination)
         .await
-        .unwrap_or_default();
+        .unwrap_or_log("Failed to fetch incidents");
 
     let mut technique_counts: std::collections::HashMap<(String, String), u32> =
         std::collections::HashMap::new();
@@ -2247,6 +2257,59 @@ fn action_target_str(target: &tw_core::incident::ActionTarget) -> String {
     }
 }
 
+/// Extension trait that unwraps a Result, logging the error before returning the default.
+trait UnwrapOrLog {
+    type Value;
+    fn unwrap_or_log(self, msg: &str) -> Self::Value;
+}
+
+impl<T: Default, E: std::fmt::Display> UnwrapOrLog for Result<T, E> {
+    type Value = T;
+    fn unwrap_or_log(self, msg: &str) -> T {
+        match self {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("{msg}: {e}");
+                T::default()
+            }
+        }
+    }
+}
+
+/// Deserialize a JSON value from settings, logging DB and parse errors.
+/// Returns `None` when the key is absent or any error occurs.
+async fn load_settings_deser<T: serde::de::DeserializeOwned>(
+    repo: &dyn tw_core::db::SettingsRepository,
+    tenant_id: Uuid,
+    key: &str,
+) -> Option<T> {
+    match repo.get_raw(tenant_id, key).await {
+        Ok(Some(raw)) => match serde_json::from_str(&raw) {
+            Ok(val) => Some(val),
+            Err(e) => {
+                tracing::warn!(settings_key = key, error = %e, "Failed to deserialize settings");
+                None
+            }
+        },
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!(settings_key = key, error = %e, "Failed to load settings");
+            None
+        }
+    }
+}
+
+/// Load a JSON value from settings, returning `T::default()` on any error.
+async fn load_settings_json<T: serde::de::DeserializeOwned + Default>(
+    repo: &dyn tw_core::db::SettingsRepository,
+    tenant_id: Uuid,
+    key: &str,
+) -> T {
+    load_settings_deser(repo, tenant_id, key)
+        .await
+        .unwrap_or_default()
+}
+
 /// Convert a HuntingHunt into a HuntRow for templates.
 fn hunt_to_row(h: &HuntingHunt) -> HuntRow {
     let status_color = match h.status {
@@ -2279,21 +2342,15 @@ async fn hunting(
     let nav = fetch_nav_counts(repo.as_ref(), user.tenant_id).await;
 
     let settings_repo = create_settings_repository(&state.db, state.encryptor.clone());
-    let hunts: Vec<HuntingHunt> = settings_repo
-        .get_raw(user.tenant_id, HUNTS_SETTINGS_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default();
+    let hunts: Vec<HuntingHunt> =
+        load_settings_json(settings_repo.as_ref(), user.tenant_id, HUNTS_SETTINGS_KEY).await;
 
-    let results: Vec<tw_core::hunting::HuntResult> = settings_repo
-        .get_raw(user.tenant_id, HUNT_RESULTS_SETTINGS_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default();
+    let results: Vec<tw_core::hunting::HuntResult> = load_settings_json(
+        settings_repo.as_ref(),
+        user.tenant_id,
+        HUNT_RESULTS_SETTINGS_KEY,
+    )
+    .await;
 
     let active_hunts = hunts
         .iter()
@@ -2342,26 +2399,20 @@ async fn hunting_detail(
     let nav = fetch_nav_counts(repo.as_ref(), user.tenant_id).await;
 
     let settings_repo = create_settings_repository(&state.db, state.encryptor.clone());
-    let hunts: Vec<HuntingHunt> = settings_repo
-        .get_raw(user.tenant_id, HUNTS_SETTINGS_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default();
+    let hunts: Vec<HuntingHunt> =
+        load_settings_json(settings_repo.as_ref(), user.tenant_id, HUNTS_SETTINGS_KEY).await;
 
     let hunt = hunts.iter().find(|h| h.id == hunt_id);
     let Some(hunt) = hunt else {
         return Err(ApiError::NotFound("Hunt not found".to_string()));
     };
 
-    let results: Vec<tw_core::hunting::HuntResult> = settings_repo
-        .get_raw(user.tenant_id, HUNT_RESULTS_SETTINGS_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default();
+    let results: Vec<tw_core::hunting::HuntResult> = load_settings_json(
+        settings_repo.as_ref(),
+        user.tenant_id,
+        HUNT_RESULTS_SETTINGS_KEY,
+    )
+    .await;
 
     let hunt_results: Vec<_> = results.iter().filter(|r| r.hunt_id == hunt_id).collect();
     let total_findings: u32 = hunt_results.iter().map(|r| r.findings.len() as u32).sum();
@@ -2415,13 +2466,8 @@ async fn partials_hunts(
     Query(query): Query<HuntsFilterQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let settings_repo = create_settings_repository(&state.db, state.encryptor.clone());
-    let hunts: Vec<HuntingHunt> = settings_repo
-        .get_raw(user.tenant_id, HUNTS_SETTINGS_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default();
+    let hunts: Vec<HuntingHunt> =
+        load_settings_json(settings_repo.as_ref(), user.tenant_id, HUNTS_SETTINGS_KEY).await;
 
     let hunt_rows: Vec<HuntRow> = hunts
         .iter()
@@ -2485,7 +2531,7 @@ async fn assets_list(
 
     let per_page = 20u32;
     let page = query.page.max(1);
-    let offset = ((page - 1) * per_page) as usize;
+    let offset = (page - 1).saturating_mul(per_page) as usize;
 
     let name_filter = if query.q.is_empty() {
         None
@@ -2505,7 +2551,8 @@ async fn assets_list(
         Some(query.criticality.clone())
     };
 
-    // Count total for pagination
+    // Count total for pagination (cap to avoid loading unbounded data)
+    const ASSET_COUNT_CAP: usize = 10_000;
     let all_matching = state
         .asset_store
         .search(
@@ -2516,12 +2563,12 @@ async fn assets_list(
                 criticality: crit_filter.as_deref().and_then(parse_criticality_opt),
                 environment: None,
                 tag: None,
-                limit: Some(usize::MAX),
+                limit: Some(ASSET_COUNT_CAP),
                 offset: None,
             },
         )
         .await
-        .unwrap_or_default();
+        .unwrap_or_log("Failed to count assets");
     let total_count = all_matching.len() as u32;
     let total_pages = if total_count == 0 {
         1
@@ -2544,7 +2591,7 @@ async fn assets_list(
             },
         )
         .await
-        .unwrap_or_default();
+        .unwrap_or_log("Failed to fetch assets");
 
     let asset_rows: Vec<AssetRow> = assets
         .into_iter()
@@ -2586,13 +2633,12 @@ async fn packages_list(
     let nav = fetch_nav_counts(repo.as_ref(), user.tenant_id).await;
 
     let settings_repo = create_settings_repository(&state.db, state.encryptor.clone());
-    let records: Vec<serde_json::Value> = settings_repo
-        .get_raw(user.tenant_id, PACKAGES_SETTINGS_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default();
+    let records: Vec<serde_json::Value> = load_settings_json(
+        settings_repo.as_ref(),
+        user.tenant_id,
+        PACKAGES_SETTINGS_KEY,
+    )
+    .await;
 
     let packages: Vec<PackageRow> = records
         .iter()
@@ -2873,7 +2919,7 @@ async fn fetch_incidents_with_filter(
     let incidents = repo
         .list(&tenant_scoped_filter, &pagination)
         .await
-        .unwrap_or_default();
+        .unwrap_or_log("Failed to fetch incidents");
 
     incidents
         .into_iter()
@@ -2896,7 +2942,10 @@ async fn fetch_incidents_with_filter(
 
 /// Fetches policies from the repository and converts them to template data.
 async fn fetch_policies(repo: &dyn PolicyRepository, tenant_id: Uuid) -> Vec<PolicyData> {
-    let policies = repo.list_for_tenant(tenant_id).await.unwrap_or_default();
+    let policies = repo
+        .list_for_tenant(tenant_id)
+        .await
+        .unwrap_or_log("Failed to fetch policies");
 
     policies
         .into_iter()
