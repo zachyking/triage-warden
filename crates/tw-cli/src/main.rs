@@ -1595,6 +1595,10 @@ async fn cmd_test(_config: AppConfig, alert_type: &str, dry_run: bool) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Mutex to serialize tests that modify environment variables.
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn parse_action_params_inferrs_host_target_and_parameters() {
@@ -1841,6 +1845,7 @@ mod tests {
 
     #[test]
     fn test_daemon_runtime_dir_env_override() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().to_str().unwrap().to_string();
         std::env::set_var(DAEMON_RUNTIME_DIR_ENV, &path);
@@ -1851,6 +1856,7 @@ mod tests {
 
     #[test]
     fn test_daemon_runtime_dir_env_empty_fallback() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         std::env::set_var(DAEMON_RUNTIME_DIR_ENV, "   ");
         let result = daemon_runtime_dir();
         std::env::remove_var(DAEMON_RUNTIME_DIR_ENV);

@@ -126,21 +126,31 @@
       });
     });
 
+    // Escape HTML to prevent XSS in toast messages from server error text
+    function escapeHtml(s) {
+      if (!s) return '';
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
     // Toast management
     window.showToast = function(type, title, message, duration = 5000) {
+      var validTypes = ['success', 'error', 'warning', 'info'];
+      var safeType = validTypes.indexOf(type) !== -1 ? type : 'info';
+      var safeTitle = escapeHtml(title);
+      var safeMessage = escapeHtml(message);
       const container = document.getElementById('toast-container');
       const toast = document.createElement('div');
       toast.className = 'toast';
       toast.innerHTML = `
-        <svg class="toast-icon ${type}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-          ${type === 'success' ? '<path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>' : ''}
-          ${type === 'error' ? '<path d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/>' : ''}
-          ${type === 'warning' ? '<path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>' : ''}
-          ${type === 'info' ? '<path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>' : ''}
+        <svg class="toast-icon ${safeType}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          ${safeType === 'success' ? '<path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>' : ''}
+          ${safeType === 'error' ? '<path d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/>' : ''}
+          ${safeType === 'warning' ? '<path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>' : ''}
+          ${safeType === 'info' ? '<path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>' : ''}
         </svg>
         <div class="toast-content">
-          <div class="toast-title">${title}</div>
-          ${message ? `<div class="toast-message">${message}</div>` : ''}
+          <div class="toast-title">${safeTitle}</div>
+          ${safeMessage ? `<div class="toast-message">${safeMessage}</div>` : ''}
         </div>
         <button class="toast-close" aria-label="Close" onclick="this.parentElement.classList.add('removing'); setTimeout(() => this.parentElement.remove(), 200);">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">

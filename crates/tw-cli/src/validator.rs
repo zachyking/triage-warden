@@ -337,6 +337,10 @@ mod tests {
     use super::*;
     use crate::config::ConnectorConfig;
     use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    /// Mutex to serialize tests that modify environment variables.
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     fn default_config() -> AppConfig {
         AppConfig::default()
@@ -604,6 +608,7 @@ mod tests {
 
     #[test]
     fn test_full_validate_with_default_config() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         // Set TW_ENV to non-production so encryption key is not required
         std::env::set_var("TW_ENV", "development");
         let config = default_config();

@@ -39,6 +39,21 @@ use crate::state::AppState;
 use templates::*;
 use tw_core::User;
 
+/// Converts a User to a UserRowData for admin table rendering.
+fn user_to_row(u: User, current_user_id: Uuid) -> UserRowData {
+    let display = u.display_name.as_deref().unwrap_or(&u.username).to_string();
+    UserRowData {
+        id: u.id,
+        username: u.username.clone(),
+        email: u.email,
+        display_name_or_username: display,
+        role: u.role.as_str().to_string(),
+        enabled: u.enabled,
+        last_login_at: u.last_login_at.map(format_time_ago),
+        is_current: u.id == current_user_id,
+    }
+}
+
 /// Converts a User to CurrentUserInfo for templates.
 fn user_to_current_info(user: &User) -> CurrentUserInfo {
     CurrentUserInfo {
@@ -2061,7 +2076,7 @@ fn knowledge_category(doc_type: KnowledgeType) -> &'static str {
 
 fn summarize_knowledge_content(content: &str, max_chars: usize) -> String {
     let normalized = content.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.len() <= max_chars {
+    if normalized.chars().count() <= max_chars {
         normalized
     } else {
         let boundary = normalized
@@ -3419,19 +3434,7 @@ async fn admin_users(
 
     let user_rows: Vec<UserRowData> = users
         .into_iter()
-        .map(|u| {
-            let display = u.display_name.as_deref().unwrap_or(&u.username).to_string();
-            UserRowData {
-                id: u.id,
-                username: u.username.clone(),
-                email: u.email,
-                display_name_or_username: display,
-                role: u.role.as_str().to_string(),
-                enabled: u.enabled,
-                last_login_at: u.last_login_at.map(format_time_ago),
-                is_current: u.id == admin.id,
-            }
-        })
+        .map(|u| user_to_row(u, admin.id))
         .collect();
 
     let template = AdminUsersTemplate {
@@ -3486,19 +3489,7 @@ pub(crate) async fn partials_users_table(
 
     let user_rows: Vec<UserRowData> = users
         .into_iter()
-        .map(|u| {
-            let display = u.display_name.as_deref().unwrap_or(&u.username).to_string();
-            UserRowData {
-                id: u.id,
-                username: u.username.clone(),
-                email: u.email,
-                display_name_or_username: display,
-                role: u.role.as_str().to_string(),
-                enabled: u.enabled,
-                last_login_at: u.last_login_at.map(format_time_ago),
-                is_current: u.id == admin.id,
-            }
-        })
+        .map(|u| user_to_row(u, admin.id))
         .collect();
 
     let template = UsersTablePartialTemplate { users: user_rows };
