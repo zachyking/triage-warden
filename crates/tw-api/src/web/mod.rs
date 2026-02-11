@@ -2311,7 +2311,7 @@ async fn assets_list(
                 criticality: crit_filter.as_deref().and_then(parse_criticality_opt),
                 environment: None,
                 tag: None,
-                limit: None,
+                limit: Some(usize::MAX),
                 offset: None,
             },
         )

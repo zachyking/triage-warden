@@ -965,7 +965,7 @@ function updateModelOptions() {
     </div>
   </div>
   <div class="card-body">
-    <form id="autonomy-form" hx-put="/api/autonomy" hx-swap="none"
+    <form id="autonomy-form" hx-put="/api/v1/autonomy/config" hx-swap="none"
           hx-on::after-request="if(event.detail.successful) showToast('success', 'Autonomy Updated', 'Autonomy settings have been saved.')">
       <div class="form-group mb-4">
         <label class="form-label">Autonomy Level</label>
@@ -1014,8 +1014,8 @@ function updateModelOptions() {
       Autonomy settings can also be managed via the REST API.
     </p>
     <div class="bg-surface p-4 rounded font-mono text-sm">
-      <div><span class="text-primary">GET</span> /api/autonomy</div>
-      <div><span class="text-primary">PUT</span> /api/autonomy</div>
+      <div><span class="text-primary">GET</span> /api/v1/autonomy/config</div>
+      <div><span class="text-primary">PUT</span> /api/v1/autonomy/config</div>
     </div>
   </div>
 </div>

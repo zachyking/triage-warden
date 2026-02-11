@@ -28,19 +28,37 @@
     <p class="text-sm text-muted mb-4">
       Paste the JSON content package below. Packages can include playbooks, hunting queries, and other content.
     </p>
-    <form hx-post="/api/packages/import" hx-swap="none"
+    <form id="pkg-import" hx-post="/api/v1/packages/import" hx-swap="none"
+          hx-ext="json-enc"
+          hx-on::before-request="try { const ta = document.getElementById('pkg-json'); const parsed = JSON.parse(ta.value); event.detail.requestConfig.headers['Content-Type'] = 'application/json'; event.detail.requestConfig.parameters = JSON.stringify(parsed); } catch(e) { event.preventDefault(); showToast('error', 'Invalid JSON', e.message); }"
           hx-on::after-request="if(event.detail.successful) { showToast('success', 'Package Imported', 'Content package has been imported successfully.'); location.reload(); } else { showToast('error', 'Import Failed', 'Could not import the package. Check the format and try again.'); }">
       <div class="form-group">
-        <label class="form-label">Package JSON</label>
-        <textarea name="package" class="form-input form-textarea" rows="8"
+        <label for="pkg-json" class="form-label">Package JSON</label>
+        <textarea id="pkg-json" name="package" class="form-input form-textarea" rows="8"
                   placeholder='{"package": {"manifest": {...}, "contents": [...]}, "conflict_resolution": "skip"}' required></textarea>
       </div>
       <div class="flex gap-2">
-        <button type="submit" class="btn btn-primary">Import</button>
+        <button type="button" class="btn btn-primary" onclick="submitPackageImport()">Import</button>
         <button type="button" class="btn btn-secondary"
                 onclick="document.getElementById('package-import-form').classList.add('hidden')">Cancel</button>
       </div>
     </form>
+    <script>
+    function submitPackageImport() {
+      const ta = document.getElementById('pkg-json');
+      try {
+        const body = JSON.parse(ta.value);
+        fetch('/api/v1/packages/import', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(body)
+        }).then(r => {
+          if (r.ok) { showToast('success', 'Package Imported', 'Content package has been imported successfully.'); location.reload(); }
+          else { r.text().then(t => showToast('error', 'Import Failed', t || 'Check the format and try again.')); }
+        }).catch(e => showToast('error', 'Import Failed', e.message));
+      } catch(e) { showToast('error', 'Invalid JSON', e.message); }
+    }
+    </script>
   </div>
 </div>
 
