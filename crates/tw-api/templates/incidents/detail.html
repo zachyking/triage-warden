@@ -125,12 +125,20 @@
             <label class="form-label">Do you agree with the AI verdict?</label>
             <div class="flex gap-4">
               <label class="flex items-center gap-2">
-                <input type="radio" name="feedback_type" value="confirmed_correct" required>
+                <input type="radio" name="feedback_type" value="correct" required>
                 <span class="text-sm">Agree</span>
               </label>
               <label class="flex items-center gap-2">
-                <input type="radio" name="feedback_type" value="corrected">
-                <span class="text-sm">Disagree</span>
+                <input type="radio" name="feedback_type" value="incorrect_verdict">
+                <span class="text-sm">Disagree — Wrong Verdict</span>
+              </label>
+              <label class="flex items-center gap-2">
+                <input type="radio" name="feedback_type" value="incorrect_severity">
+                <span class="text-sm">Disagree — Wrong Severity</span>
+              </label>
+              <label class="flex items-center gap-2">
+                <input type="radio" name="feedback_type" value="missing_context">
+                <span class="text-sm">Missing Context</span>
               </label>
             </div>
           </div>
@@ -140,9 +148,11 @@
             <select id="corrected-verdict-select" name="corrected_verdict" class="form-input form-select">
               <option value="">-- same as AI --</option>
               <option value="true_positive">True Positive</option>
-              <option value="false_positive">False Positive</option>
-              <option value="benign">Benign</option>
+              <option value="likely_true_positive">Likely True Positive</option>
               <option value="suspicious">Suspicious</option>
+              <option value="likely_false_positive">Likely False Positive</option>
+              <option value="false_positive">False Positive</option>
+              <option value="inconclusive">Inconclusive</option>
             </select>
           </div>
 
