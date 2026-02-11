@@ -130,6 +130,8 @@ pub fn create_web_router(state: AppState) -> Router {
         .route("/web/partials/lessons", get(partials_lessons))
         // Stage 5: Hunting, Assets, Packages
         .route("/hunting", get(hunting))
+        .route("/web/modals/add-hunt", get(modal_add_hunt))
+        .route("/web/partials/hunts", get(partials_hunts))
         .route("/assets", get(assets_list))
         .route("/packages", get(packages_list))
         .with_state(state)
@@ -2253,6 +2255,105 @@ async fn hunting(
         hunts: hunt_rows,
     };
 
+    Ok(HtmlTemplate(template))
+}
+
+/// Modal for creating a new hunt.
+async fn modal_add_hunt(
+    AuthenticatedUser(_user): AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(HtmlTemplate(AddHuntModalTemplate))
+}
+
+/// Query parameters for hunt filters (HTMX partial).
+#[derive(Debug, Deserialize)]
+struct HuntsFilterQuery {
+    #[serde(default, rename = "filter-status")]
+    status: String,
+    #[serde(default, rename = "filter-type")]
+    hunt_type: String,
+    #[serde(default, rename = "filter-category")]
+    category: String,
+}
+
+/// Partial handler: returns filtered hunt table rows.
+async fn partials_hunts(
+    State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
+    Query(query): Query<HuntsFilterQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let settings_repo = create_settings_repository(&state.db, state.encryptor.clone());
+    let hunts: Vec<HuntingHunt> = settings_repo
+        .get_raw(user.tenant_id, HUNTS_SETTINGS_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default();
+
+    let hunt_rows: Vec<HuntRow> = hunts
+        .iter()
+        .filter(|h| {
+            if !query.status.is_empty() {
+                let status_str = format!("{:?}", h.status).to_lowercase();
+                if status_str != query.status {
+                    return false;
+                }
+            }
+            if !query.hunt_type.is_empty() {
+                let type_str = format!("{:?}", h.hunt_type).to_lowercase();
+                if type_str != query.hunt_type {
+                    return false;
+                }
+            }
+            if !query.category.is_empty() {
+                let matches_category = h.mitre_techniques.iter().any(|t| {
+                    // Map MITRE technique prefixes to categories
+                    let cat = match t.split('.').next().unwrap_or("") {
+                        "T1078" | "T1190" | "T1566" => "initial_access",
+                        "T1087" | "T1082" | "T1083" => "discovery",
+                        "T1003" | "T1110" | "T1558" => "credential_access",
+                        "T1021" | "T1570" => "lateral_movement",
+                        "T1053" | "T1547" | "T1543" => "persistence",
+                        "T1041" | "T1048" | "T1567" => "exfiltration",
+                        "T1071" | "T1095" | "T1573" => "command_and_control",
+                        "T1068" | "T1548" | "T1134" => "privilege_escalation",
+                        _ => "",
+                    };
+                    cat == query.category
+                });
+                if !matches_category {
+                    return false;
+                }
+            }
+            true
+        })
+        .map(|h| {
+            let status_str = format!("{:?}", h.status).to_lowercase();
+            let status_color = match h.status {
+                HuntStatus::Active => "success".to_string(),
+                HuntStatus::Draft => "info".to_string(),
+                HuntStatus::Paused => "warning".to_string(),
+                HuntStatus::Completed => "accent".to_string(),
+                HuntStatus::Failed => "critical".to_string(),
+                HuntStatus::Archived => "info".to_string(),
+            };
+            let last_result_total = h.last_result.as_ref().map(|r| r.total_findings as u32);
+            HuntRow {
+                id: h.id,
+                name: h.name.clone(),
+                hypothesis: h.hypothesis.clone(),
+                hunt_type: format!("{:?}", h.hunt_type).to_lowercase(),
+                status: status_str,
+                status_color,
+                mitre_techniques: h.mitre_techniques.clone(),
+                last_run: h.last_run.map(format_time_ago),
+                last_result_total,
+            }
+        })
+        .collect();
+
+    let template = HuntsPartialTemplate { hunts: hunt_rows };
     Ok(HtmlTemplate(template))
 }
 

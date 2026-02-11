@@ -1040,3 +1040,38 @@ pub struct PackageRow {
     pub content_count: u32,
     pub imported_at: String,
 }
+
+// ============================================
+// Hunting Partials
+// ============================================
+
+/// Modal for creating a new hunt.
+#[derive(Template)]
+#[template(path = "partials/modal_add_hunt.html")]
+pub struct AddHuntModalTemplate;
+
+/// Partial rendering hunt table rows (filtered).
+#[derive(Template)]
+#[template(
+    source = r#"{% for hunt in hunts %}
+{% include "partials/hunt_row.html" %}
+{% endfor %}
+{% if hunts.is_empty() %}
+<tr>
+  <td colspan="7">
+    <div class="empty-state">
+      <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+        <circle cx="11" cy="11" r="8"/>
+        <path d="M21 21l-4.35-4.35"/>
+      </svg>
+      <div class="empty-state-title">No hunts match your filters</div>
+      <div class="empty-state-text">Try adjusting your filter criteria.</div>
+    </div>
+  </td>
+</tr>
+{% endif %}"#,
+    ext = "html"
+)]
+pub struct HuntsPartialTemplate {
+    pub hunts: Vec<HuntRow>,
+}
