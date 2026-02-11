@@ -7,6 +7,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 use validator::Validate;
 
@@ -58,7 +59,7 @@ pub struct ListCommentsQuery {
 }
 
 /// Request body for creating a comment.
-#[derive(Debug, Deserialize, Validate)]
+#[derive(Debug, Deserialize, Validate, ToSchema)]
 pub struct CreateCommentApiRequest {
     /// Incident this comment belongs to.
     pub incident_id: Uuid,
@@ -73,7 +74,7 @@ pub struct CreateCommentApiRequest {
 }
 
 /// Request body for updating a comment.
-#[derive(Debug, Deserialize, Validate)]
+#[derive(Debug, Deserialize, Validate, ToSchema)]
 pub struct UpdateCommentApiRequest {
     /// Updated content.
     #[validate(length(min = 1, max = 10000))]
@@ -83,7 +84,7 @@ pub struct UpdateCommentApiRequest {
 }
 
 /// Comment response DTO.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct CommentResponse {
     pub id: Uuid,
     pub incident_id: Uuid,
@@ -97,7 +98,7 @@ pub struct CommentResponse {
 }
 
 /// Paginated comments response.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct PaginatedCommentsResponse {
     pub data: Vec<CommentResponse>,
     pub page: u32,
@@ -110,6 +111,22 @@ pub struct PaginatedCommentsResponse {
 // ============================================================================
 
 /// List comments with optional filters.
+#[utoipa::path(
+    get,
+    path = "/api/v1/comments",
+    params(
+        ("incident_id" = Option<Uuid>, Query, description = "Filter by incident ID"),
+        ("comment_type" = Option<String>, Query, description = "Filter by comment type (note, analysis, action_taken, question, resolution)"),
+        ("author_id" = Option<Uuid>, Query, description = "Filter by author ID"),
+        ("page" = Option<u32>, Query, description = "Page number (1-indexed)"),
+        ("per_page" = Option<u32>, Query, description = "Items per page (max 200)")
+    ),
+    responses(
+        (status = 200, description = "Paginated list of comments", body = PaginatedCommentsResponse),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Comments"
+)]
 async fn list_comments(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -151,6 +168,18 @@ async fn list_comments(
 }
 
 /// Create a new comment on an incident.
+#[utoipa::path(
+    post,
+    path = "/api/v1/comments",
+    request_body = CreateCommentApiRequest,
+    responses(
+        (status = 201, description = "Comment created", body = CommentResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 404, description = "Incident not found"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Comments"
+)]
 async fn create_comment(
     State(state): State<AppState>,
     RequireAnalyst(user): RequireAnalyst,
@@ -182,6 +211,19 @@ async fn create_comment(
 }
 
 /// Get a specific comment by ID.
+#[utoipa::path(
+    get,
+    path = "/api/v1/comments/{id}",
+    params(
+        ("id" = Uuid, Path, description = "Comment ID")
+    ),
+    responses(
+        (status = 200, description = "Comment details", body = CommentResponse),
+        (status = 404, description = "Comment not found"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Comments"
+)]
 async fn get_comment(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -200,6 +242,22 @@ async fn get_comment(
 }
 
 /// Update a comment.
+#[utoipa::path(
+    put,
+    path = "/api/v1/comments/{id}",
+    params(
+        ("id" = Uuid, Path, description = "Comment ID")
+    ),
+    request_body = UpdateCommentApiRequest,
+    responses(
+        (status = 200, description = "Comment updated", body = CommentResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 403, description = "Not the comment author"),
+        (status = 404, description = "Comment not found"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Comments"
+)]
 async fn update_comment(
     State(state): State<AppState>,
     RequireAnalyst(user): RequireAnalyst,
@@ -248,6 +306,20 @@ async fn update_comment(
 }
 
 /// Delete a comment.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/comments/{id}",
+    params(
+        ("id" = Uuid, Path, description = "Comment ID")
+    ),
+    responses(
+        (status = 204, description = "Comment deleted"),
+        (status = 403, description = "Not the comment author"),
+        (status = 404, description = "Comment not found"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Comments"
+)]
 async fn delete_comment(
     State(state): State<AppState>,
     RequireAnalyst(user): RequireAnalyst,

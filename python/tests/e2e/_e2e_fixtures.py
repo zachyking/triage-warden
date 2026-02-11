@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sys
+import types
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -401,8 +402,16 @@ if _running_e2e:
     # Load sanitization module first (it has no dependencies on react.py)
     _sanitization = _load_module("tw_ai.sanitization", _base_path_sanitization / "sanitization.py")
 
-    # Mock the tw_ai package to prevent circular imports
-    sys.modules["tw_ai"] = MagicMock()
+    # Create a stub tw_ai package that still supports submodule imports.
+    # Using MagicMock() here would break "from tw_ai.workflows.phishing import ..."
+    # because MagicMock lacks __path__, so Python can't resolve subpackages.
+    # A types.ModuleType with __path__ pointing at the real tw_ai directory lets
+    # the import system find subpackages (workflows, analysis) on disk while
+    # avoiding the heavy tw_ai/__init__.py (RAG, embeddings, etc.).
+    _tw_ai_stub = types.ModuleType("tw_ai")
+    _tw_ai_stub.__path__ = [str(_base_path_sanitization)]
+    _tw_ai_stub.__package__ = "tw_ai"
+    sys.modules["tw_ai"] = _tw_ai_stub
 
     _react = _load_module("tw_ai.agents.react", _base_path / "react.py")
     ReActAgent = _react.ReActAgent

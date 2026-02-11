@@ -11,8 +11,8 @@
     <form hx-post="/api/connectors" hx-swap="none" hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); showToast('success', 'Connector Added', 'New connector has been configured.'); location.reload(); } else { showToast('error', 'Failed to Add Connector', 'Please check your configuration and try again.'); }">
       <div class="modal-body">
         <div class="form-group">
-          <label class="form-label">Connector Type</label>
-          <select name="connector_type" class="form-input form-select" required onchange="updateConnectorFields(this.value)">
+          <label for="connector-type" class="form-label">Connector Type</label>
+          <select id="connector-type" name="connector_type" class="form-input form-select" required onchange="updateConnectorFields(this.value)">
             <option value="">Select a connector type...</option>
             <optgroup label="SIEM">
               <option value="splunk">Splunk</option>
@@ -40,8 +40,8 @@
         </div>
 
         <div class="form-group">
-          <label class="form-label">Display Name</label>
-          <input type="text" name="name" class="form-input" placeholder="e.g., Production Splunk" required>
+          <label for="connector-name" class="form-label">Display Name</label>
+          <input type="text" id="connector-name" name="name" class="form-input" placeholder="e.g., Production Splunk" required>
         </div>
 
         <div id="connector-fields">

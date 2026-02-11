@@ -11,23 +11,23 @@
     <form hx-post="/api/v1/hunts" hx-swap="none" hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); showToast('success', 'Hunt Created', 'New threat hunt has been created.'); location.reload(); } else { showToast('error', 'Failed to Create Hunt', 'Please check your configuration.'); }">
       <div class="modal-body">
         <div class="form-group">
-          <label class="form-label">Hunt Name</label>
-          <input type="text" name="name" class="form-input" placeholder="e.g., Detect Kerberoasting" required>
+          <label for="hunt-name" class="form-label">Hunt Name</label>
+          <input type="text" id="hunt-name" name="name" class="form-input" placeholder="e.g., Detect Kerberoasting" required>
         </div>
 
         <div class="form-group">
-          <label class="form-label">Hypothesis</label>
-          <textarea name="hypothesis" class="form-input form-textarea" placeholder="What are you looking for and why?" rows="2" required></textarea>
+          <label for="hunt-hypothesis" class="form-label">Hypothesis</label>
+          <textarea id="hunt-hypothesis" name="hypothesis" class="form-input form-textarea" placeholder="What are you looking for and why?" rows="2" required></textarea>
         </div>
 
         <div class="form-group">
-          <label class="form-label">Description</label>
-          <textarea name="description" class="form-input form-textarea" placeholder="Detailed description of this hunt..." rows="3"></textarea>
+          <label for="hunt-description" class="form-label">Description</label>
+          <textarea id="hunt-description" name="description" class="form-input form-textarea" placeholder="Detailed description of this hunt..." rows="3"></textarea>
         </div>
 
         <div class="form-group">
-          <label class="form-label">Hunt Type</label>
-          <select name="hunt_type" class="form-input form-select">
+          <label for="hunt-type" class="form-label">Hunt Type</label>
+          <select id="hunt-type" name="hunt_type" class="form-input form-select">
             <option value="on_demand">On-Demand</option>
             <option value="scheduled">Scheduled</option>
             <option value="continuous">Continuous</option>
@@ -36,14 +36,14 @@
         </div>
 
         <div class="form-group">
-          <label class="form-label">MITRE ATT&amp;CK Techniques</label>
-          <input type="text" name="mitre_techniques" class="form-input" placeholder="e.g., T1558.003, T1003.001">
+          <label for="hunt-mitre" class="form-label">MITRE ATT&amp;CK Techniques</label>
+          <input type="text" id="hunt-mitre" name="mitre_techniques" class="form-input" placeholder="e.g., T1558.003, T1003.001">
           <p class="text-xs text-muted mt-1">Comma-separated technique IDs</p>
         </div>
 
         <div class="form-group">
-          <label class="form-label">Tags</label>
-          <input type="text" name="tags" class="form-input" placeholder="e.g., credential-access, high-priority">
+          <label for="hunt-tags" class="form-label">Tags</label>
+          <input type="text" id="hunt-tags" name="tags" class="form-input" placeholder="e.g., credential-access, high-priority">
           <p class="text-xs text-muted mt-1">Comma-separated tags</p>
         </div>
 

@@ -1475,6 +1475,292 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn test_log_login_attempt_success() {
+        let audit_log = AuditLog::without_tracing(100);
+        audit_log
+            .log_login_attempt("admin", "192.168.1.1", true)
+            .await;
+
+        let entries = audit_log.get_entries().await;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].event_type, AuditEventType::LoginSuccess);
+        assert_eq!(entries[0].actor, "admin");
+        assert_eq!(entries[0].result, AuditResult::Success);
+        assert!(entries[0].details["ip_address"] == "192.168.1.1");
+    }
+
+    #[tokio::test]
+    async fn test_log_login_attempt_failure() {
+        let audit_log = AuditLog::without_tracing(100);
+        audit_log
+            .log_login_attempt("hacker", "10.0.0.1", false)
+            .await;
+
+        let entries = audit_log.get_entries().await;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].event_type, AuditEventType::LoginFailure);
+        assert!(matches!(
+            &entries[0].result,
+            AuditResult::Failure(msg) if msg.contains("Invalid credentials")
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_log_rate_limit_exceeded() {
+        let audit_log = AuditLog::without_tracing(100);
+        audit_log
+            .log_rate_limit_exceeded("10.0.0.50", "/api/incidents")
+            .await;
+
+        let entries = audit_log.get_entries().await;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].event_type, AuditEventType::RateLimitExceeded);
+        assert!(matches!(
+            &entries[0].result,
+            AuditResult::Denied(msg) if msg.contains("Rate limit")
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_log_permission_denied() {
+        let audit_log = AuditLog::without_tracing(100);
+        audit_log
+            .log_permission_denied("viewer@company.com", "/api/admin/users", "admin:write")
+            .await;
+
+        let entries = audit_log.get_entries().await;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].event_type, AuditEventType::PermissionDenied);
+        assert!(entries[0].description.contains("admin:write"));
+    }
+
+    #[tokio::test]
+    async fn test_log_api_key_events() {
+        let audit_log = AuditLog::without_tracing(100);
+        let user_id = Uuid::new_v4();
+
+        audit_log
+            .log_api_key_event(
+                AuditEventType::ApiKeyCreated,
+                "admin",
+                "tw_abc",
+                Some(user_id),
+            )
+            .await;
+        audit_log
+            .log_api_key_event(
+                AuditEventType::ApiKeyRevoked,
+                "admin",
+                "tw_abc",
+                Some(user_id),
+            )
+            .await;
+
+        let entries = audit_log.get_entries().await;
+        assert_eq!(entries.len(), 2);
+        assert!(entries[0].description.contains("created"));
+        assert!(entries[1].description.contains("revoked"));
+    }
+
+    #[tokio::test]
+    async fn test_get_security_entries() {
+        let audit_log = AuditLog::without_tracing(100);
+
+        // Add a mix of security and non-security events
+        audit_log
+            .log_login_attempt("admin", "192.168.1.1", true)
+            .await;
+        audit_log
+            .log_event(
+                AuditEventType::IncidentCreated,
+                "system",
+                "Incident created",
+                AuditResult::Success,
+            )
+            .await;
+        audit_log
+            .log_rate_limit_exceeded("10.0.0.1", "/api/incidents")
+            .await;
+
+        let security = audit_log.get_security_entries().await;
+        assert_eq!(security.len(), 2); // LoginSuccess + RateLimitExceeded
+    }
+
+    #[tokio::test]
+    async fn test_get_entries_by_type() {
+        let audit_log = AuditLog::without_tracing(100);
+
+        audit_log
+            .log_event(
+                AuditEventType::ActionExecuted,
+                "system",
+                "Action 1",
+                AuditResult::Success,
+            )
+            .await;
+        audit_log
+            .log_event(
+                AuditEventType::ActionDenied,
+                "policy",
+                "Action denied",
+                AuditResult::Denied("policy".to_string()),
+            )
+            .await;
+        audit_log
+            .log_event(
+                AuditEventType::ActionExecuted,
+                "system",
+                "Action 2",
+                AuditResult::Success,
+            )
+            .await;
+
+        let executed = audit_log
+            .get_entries_by_type(AuditEventType::ActionExecuted)
+            .await;
+        assert_eq!(executed.len(), 2);
+
+        let denied = audit_log
+            .get_entries_by_type(AuditEventType::ActionDenied)
+            .await;
+        assert_eq!(denied.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_audit_log_clear() {
+        let audit_log = AuditLog::without_tracing(100);
+
+        audit_log
+            .log_event(
+                AuditEventType::SystemLifecycle,
+                "system",
+                "Started",
+                AuditResult::Success,
+            )
+            .await;
+
+        assert!(!audit_log.is_empty().await);
+        audit_log.clear().await;
+        assert!(audit_log.is_empty().await);
+        assert_eq!(audit_log.len().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_action_audit_log_by_action_name() {
+        let audit_log = ActionAuditLog::without_tracing(100);
+
+        let entry1 = ActionAuditEntry::builder(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "analyst@example.com",
+            "analyst",
+            "isolate_host",
+        )
+        .success("Done", 100);
+
+        let entry2 = ActionAuditEntry::builder(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "analyst@example.com",
+            "analyst",
+            "block_ip",
+        )
+        .success("Done", 50);
+
+        audit_log.log(entry1).await;
+        audit_log.log(entry2).await;
+
+        let isolate = audit_log.get_by_action_name("isolate_host").await;
+        assert_eq!(isolate.len(), 1);
+
+        let block = audit_log.get_by_action_name("block_ip").await;
+        assert_eq!(block.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_action_audit_log_by_incident_id() {
+        let audit_log = ActionAuditLog::without_tracing(100);
+        let incident_id = Uuid::new_v4();
+
+        let entry1 = ActionAuditEntry::builder(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "analyst@example.com",
+            "analyst",
+            "isolate_host",
+        )
+        .with_incident_id(incident_id)
+        .success("Done", 100);
+
+        let entry2 = ActionAuditEntry::builder(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "analyst@example.com",
+            "analyst",
+            "block_ip",
+        )
+        .success("Done", 50); // No incident_id
+
+        audit_log.log(entry1).await;
+        audit_log.log(entry2).await;
+
+        let by_incident = audit_log.get_by_incident_id(incident_id).await;
+        assert_eq!(by_incident.len(), 1);
+        assert_eq!(by_incident[0].action_name, "isolate_host");
+    }
+
+    #[tokio::test]
+    async fn test_action_audit_log_clear() {
+        let audit_log = ActionAuditLog::without_tracing(100);
+
+        let entry = ActionAuditEntry::builder(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "test",
+            "test",
+            "test_action",
+        )
+        .success("Done", 10);
+
+        audit_log.log(entry).await;
+        assert!(!audit_log.is_empty().await);
+
+        audit_log.clear().await;
+        assert!(audit_log.is_empty().await);
+    }
+
+    #[tokio::test]
+    async fn test_action_audit_log_default() {
+        let audit_log = ActionAuditLog::default();
+        assert!(audit_log.is_empty().await);
+    }
+
+    #[tokio::test]
+    async fn test_audit_log_default() {
+        let audit_log = AuditLog::default();
+        assert!(audit_log.is_empty().await);
+    }
+
+    #[test]
+    fn test_audit_result_serialization() {
+        let success = serde_json::to_string(&AuditResult::Success).unwrap();
+        assert!(success.contains("success"));
+
+        let failure = serde_json::to_string(&AuditResult::Failure("oops".to_string())).unwrap();
+        assert!(failure.contains("failure"));
+
+        let pending = serde_json::to_string(&AuditResult::Pending).unwrap();
+        assert!(pending.contains("pending"));
+    }
+
+    #[test]
+    fn test_action_audit_result_eq() {
+        assert_eq!(ActionAuditResult::Success, ActionAuditResult::Success);
+        assert_ne!(ActionAuditResult::Success, ActionAuditResult::Failure);
+        assert_ne!(ActionAuditResult::Denied, ActionAuditResult::Timeout);
+    }
+
     #[test]
     fn test_action_audit_entry_with_full_metadata() {
         let correlation_id = Uuid::new_v4();

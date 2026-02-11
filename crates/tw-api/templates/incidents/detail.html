@@ -13,7 +13,7 @@
 <!-- Header -->
 <div class="page-header">
   <div class="flex items-center gap-3">
-    <div class="severity-dot {{ incident.severity }}" style="width: 16px; height: 16px;"></div>
+    <div class="severity-dot {{ incident.severity }}" style="width: 16px; height: 16px;" aria-hidden="true"></div>
     <div>
       <h1 class="page-title">{{ incident.title }}</h1>
       <p class="page-subtitle">
@@ -36,14 +36,15 @@
             hx-vals='{"action": "auto_triage"}'
             hx-target="#action-result"
             hx-swap="innerHTML">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
         <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
       </svg>
       Run AI Triage
     </button>
     <button class="btn btn-success btn-lg"
             hx-post="/api/incidents/{{ incident.id }}/resolve"
-            hx-target="body">
+            hx-target="body"
+            hx-confirm="Are you sure you want to mark this incident as resolved?">
       Mark Resolved
     </button>
     {% endif %}
@@ -60,7 +61,7 @@
     <div class="card mb-4">
       <div class="card-header">
         <h3 class="card-title flex items-center gap-2">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
             <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
           </svg>
           AI Analysis
@@ -103,6 +104,70 @@
           </div>
         </div>
         {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Analyst Feedback -->
+    {% if let Some(analysis) = incident.analysis %}
+    <div class="card mb-4">
+      <div class="card-header">
+        <h3 class="card-title flex items-center gap-2">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+          </svg>
+          Analyst Feedback
+        </h3>
+      </div>
+      <div class="card-body" id="feedback-section">
+        <form hx-post="/api/incidents/{{ incident.id }}/feedback"
+              hx-swap="innerHTML"
+              hx-target="#feedback-section"
+              hx-on::after-request="if(event.detail.successful) showToast('success', 'Feedback Submitted', 'Thank you for your feedback on this analysis.')">
+          <div class="form-group">
+            <label class="form-label">Do you agree with the AI verdict?</label>
+            <div class="flex gap-4">
+              <label class="flex items-center gap-2">
+                <input type="radio" name="feedback_type" value="confirmed_correct" required>
+                <span class="text-sm">Agree</span>
+              </label>
+              <label class="flex items-center gap-2">
+                <input type="radio" name="feedback_type" value="corrected">
+                <span class="text-sm">Disagree</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="corrected-verdict-select" class="form-label">Corrected Verdict (if disagreeing)</label>
+            <select id="corrected-verdict-select" name="corrected_verdict" class="form-input form-select">
+              <option value="">-- same as AI --</option>
+              <option value="true_positive">True Positive</option>
+              <option value="false_positive">False Positive</option>
+              <option value="benign">Benign</option>
+              <option value="suspicious">Suspicious</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="corrected-severity-select" class="form-label">Corrected Severity (optional)</label>
+            <select id="corrected-severity-select" name="corrected_severity" class="form-input form-select">
+              <option value="">-- same as AI --</option>
+              <option value="critical">Critical</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="feedback-notes" class="form-label">Notes (optional)</label>
+            <textarea id="feedback-notes" name="notes" class="form-input form-textarea" rows="3"
+                      placeholder="Explain your reasoning or provide additional context..."></textarea>
+          </div>
+
+          <button type="submit" class="btn btn-primary">Submit Feedback</button>
+        </form>
       </div>
     </div>
     {% endif %}
@@ -177,9 +242,9 @@
         <table class="table">
           <thead>
             <tr>
-              <th>Type</th>
-              <th>Value</th>
-              <th>Threat Level</th>
+              <th scope="col">Type</th>
+              <th scope="col">Value</th>
+              <th scope="col">Threat Level</th>
             </tr>
           </thead>
           <tbody>
@@ -262,8 +327,8 @@
       <div class="card-body">
         <form hx-post="/api/incidents/{{ incident.id }}/actions" hx-target="#action-result" hx-swap="innerHTML">
           <div class="form-group">
-            <label class="form-label">Action Type</label>
-            <select name="action" class="form-input form-select" required>
+            <label for="action-type-select" class="form-label">Action Type</label>
+            <select id="action-type-select" name="action" class="form-input form-select" required>
               <option value="">Select action...</option>
               <option value="isolate_host">Isolate Host</option>
               <option value="disable_user">Disable User</option>
@@ -273,12 +338,12 @@
             </select>
           </div>
           <div class="form-group">
-            <label class="form-label">Target (optional)</label>
-            <input type="text" name="target" class="form-input" placeholder="e.g., hostname, username, IP">
+            <label for="action-target-input" class="form-label">Target (optional)</label>
+            <input type="text" id="action-target-input" name="target" class="form-input" placeholder="e.g., hostname, username, IP">
           </div>
           <div class="form-group">
-            <label class="form-label">Reason</label>
-            <textarea name="reason" class="form-input form-textarea" placeholder="Describe the reason for this action..." required></textarea>
+            <label for="action-reason-textarea" class="form-label">Reason</label>
+            <textarea id="action-reason-textarea" name="reason" class="form-input form-textarea" placeholder="Describe the reason for this action..." required></textarea>
           </div>
           <button type="submit" class="btn btn-primary">
             <span class="htmx-indicator spinner"></span>

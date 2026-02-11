@@ -403,4 +403,194 @@ llm:
         assert!(config.connectors.contains_key("jira"));
         assert_eq!(config.llm.provider, "anthropic");
     }
+
+    #[test]
+    fn test_default_config_all_fields() {
+        let config = AppConfig::default();
+        assert_eq!(config.operation_mode, "supervised");
+        assert_eq!(config.max_concurrent_incidents, 50);
+        assert!(config.connectors.is_empty());
+        assert_eq!(config.llm.provider, "openai");
+        assert_eq!(config.llm.model, "gpt-4-turbo");
+        assert!(config.llm.api_key.is_empty());
+        assert_eq!(config.llm.max_tokens, 4096);
+        assert!((config.llm.temperature - 0.1).abs() < f32::EPSILON);
+        assert_eq!(config.policy.guardrails_path, "config/guardrails.yaml");
+        assert_eq!(config.policy.default_approval_level, "analyst");
+        assert!(!config.policy.auto_approve_low_risk);
+        assert!((config.policy.confidence_threshold - 0.9).abs() < f64::EPSILON);
+        assert_eq!(config.logging.level, "info");
+        assert!(!config.logging.json_format);
+        assert!(config.logging.file_path.is_none());
+        assert_eq!(config.database.url, "sqlite://triage-warden.db?mode=rwc");
+        assert_eq!(config.database.max_connections, 10);
+        assert!(config.database.run_migrations);
+        assert_eq!(config.api.port, 8080);
+        assert_eq!(config.api.host, "0.0.0.0");
+        assert!(config.api.enable_swagger);
+        assert_eq!(config.api.timeout_secs, 30);
+    }
+
+    #[test]
+    fn test_load_nonexistent_file() {
+        let result = AppConfig::load(std::path::Path::new("/nonexistent/config.yaml"));
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Failed to read config file"));
+    }
+
+    #[test]
+    fn test_load_from_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test-config.yaml");
+        std::fs::write(
+            &file_path,
+            "operation_mode: autonomous\nmax_concurrent_incidents: 200\n",
+        )
+        .unwrap();
+
+        let config = AppConfig::load(&file_path).unwrap();
+        assert_eq!(config.operation_mode, "autonomous");
+        assert_eq!(config.max_concurrent_incidents, 200);
+    }
+
+    #[test]
+    fn test_load_invalid_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("bad.yaml");
+        std::fs::write(&file_path, "{{{{not valid yaml").unwrap();
+
+        let result = AppConfig::load(&file_path);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Failed to parse config file"));
+    }
+
+    #[test]
+    fn test_redact_secrets_empty_keys_not_redacted() {
+        let mut config = AppConfig::default();
+        config.llm.api_key = String::new();
+        config.connectors.insert(
+            "vt".to_string(),
+            ConnectorConfig {
+                connector_type: "virustotal".to_string(),
+                base_url: "https://api.virustotal.com".to_string(),
+                enabled: true,
+                api_key: String::new(),
+                api_secret: String::new(),
+                timeout_secs: 30,
+                settings: HashMap::new(),
+            },
+        );
+
+        let redacted = config.redact_secrets();
+        // Empty keys should stay empty, not be replaced with REDACTED
+        assert!(redacted.llm.api_key.is_empty());
+        assert!(redacted.connectors.get("vt").unwrap().api_key.is_empty());
+        assert!(redacted.connectors.get("vt").unwrap().api_secret.is_empty());
+    }
+
+    #[test]
+    fn test_redact_secrets_both_api_key_and_secret() {
+        let mut config = AppConfig::default();
+        config.connectors.insert(
+            "cs".to_string(),
+            ConnectorConfig {
+                connector_type: "crowdstrike".to_string(),
+                base_url: "https://api.crowdstrike.com".to_string(),
+                enabled: true,
+                api_key: "client-id".to_string(),
+                api_secret: "client-secret".to_string(),
+                timeout_secs: 30,
+                settings: HashMap::new(),
+            },
+        );
+
+        let redacted = config.redact_secrets();
+        let cs = redacted.connectors.get("cs").unwrap();
+        assert_eq!(cs.api_key, "***REDACTED***");
+        assert_eq!(cs.api_secret, "***REDACTED***");
+        // Base URL should NOT be redacted
+        assert_eq!(cs.base_url, "https://api.crowdstrike.com");
+    }
+
+    #[test]
+    fn test_parse_yaml_with_all_sections() {
+        let yaml = r#"
+operation_mode: assisted
+max_concurrent_incidents: 10
+
+llm:
+  provider: local
+  model: llama2
+  base_url: http://localhost:11434
+  max_tokens: 2048
+  temperature: 0.3
+
+policy:
+  guardrails_path: /etc/tw/guardrails.yaml
+  default_approval_level: manager
+  auto_approve_low_risk: true
+  confidence_threshold: 0.8
+
+logging:
+  level: debug
+  json_format: true
+  file_path: /var/log/tw/app.log
+
+database:
+  url: postgres://localhost/triage
+  max_connections: 20
+  run_migrations: false
+
+api:
+  port: 9090
+  host: 127.0.0.1
+  enable_swagger: false
+  timeout_secs: 60
+"#;
+
+        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.operation_mode, "assisted");
+        assert_eq!(config.max_concurrent_incidents, 10);
+        assert_eq!(config.llm.provider, "local");
+        assert_eq!(config.llm.model, "llama2");
+        assert_eq!(config.llm.base_url, "http://localhost:11434");
+        assert_eq!(config.llm.max_tokens, 2048);
+        assert!((config.llm.temperature - 0.3).abs() < f32::EPSILON);
+        assert_eq!(config.policy.guardrails_path, "/etc/tw/guardrails.yaml");
+        assert_eq!(config.policy.default_approval_level, "manager");
+        assert!(config.policy.auto_approve_low_risk);
+        assert!((config.policy.confidence_threshold - 0.8).abs() < f64::EPSILON);
+        assert_eq!(config.logging.level, "debug");
+        assert!(config.logging.json_format);
+        assert_eq!(
+            config.logging.file_path.as_deref(),
+            Some("/var/log/tw/app.log")
+        );
+        assert_eq!(config.database.url, "postgres://localhost/triage");
+        assert_eq!(config.database.max_connections, 20);
+        assert!(!config.database.run_migrations);
+        assert_eq!(config.api.port, 9090);
+        assert_eq!(config.api.host, "127.0.0.1");
+        assert!(!config.api.enable_swagger);
+        assert_eq!(config.api.timeout_secs, 60);
+    }
+
+    #[test]
+    fn test_connector_config_defaults() {
+        let yaml = r#"
+connectors:
+  test:
+    connector_type: generic
+"#;
+        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let test_conn = config.connectors.get("test").unwrap();
+        assert!(test_conn.enabled); // default_true
+        assert!(test_conn.base_url.is_empty());
+        assert!(test_conn.api_key.is_empty());
+        assert!(test_conn.api_secret.is_empty());
+        assert_eq!(test_conn.timeout_secs, 30); // default_timeout
+        assert!(test_conn.settings.is_empty());
+    }
 }

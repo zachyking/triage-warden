@@ -333,6 +333,7 @@ pub struct SettingsTemplate {
     pub privacy: PrivacySettingsData,
     pub guardrails: GuardrailsSettingsData,
     pub compliance: ComplianceSettingsData,
+    pub autonomy_level: String,
 }
 
 /// Kill switch status data for the settings template.
@@ -946,4 +947,96 @@ pub(crate) struct LessonData {
     pub incident_id: Option<Uuid>,
     pub incident_title: Option<String>,
     pub created_at: String,
+}
+
+// ============================================
+// Stage 5: Hunting Page
+// ============================================
+
+/// Threat hunting page.
+#[derive(Template)]
+#[template(path = "hunting.html")]
+pub struct HuntingTemplate {
+    pub active_nav: String,
+    pub critical_count: u32,
+    pub open_count: u32,
+    pub approval_count: u32,
+    pub system_healthy: bool,
+    pub current_user: Option<CurrentUserInfo>,
+    pub csrf_token: String,
+    pub active_hunts: u32,
+    pub total_findings: u32,
+    pub critical_findings: u32,
+    pub findings_24h: u32,
+    pub hunts: Vec<HuntRow>,
+}
+
+pub struct HuntRow {
+    pub id: Uuid,
+    pub name: String,
+    pub hypothesis: String,
+    pub hunt_type: String,
+    pub status: String,
+    pub status_color: String,
+    pub mitre_techniques: Vec<String>,
+    pub last_run: Option<String>,
+    pub last_result_total: Option<u32>,
+}
+
+// ============================================
+// Assets Page
+// ============================================
+
+/// Asset inventory page.
+#[derive(Template)]
+#[template(path = "assets.html")]
+pub struct AssetsTemplate {
+    pub active_nav: String,
+    pub critical_count: u32,
+    pub open_count: u32,
+    pub approval_count: u32,
+    pub system_healthy: bool,
+    pub current_user: Option<CurrentUserInfo>,
+    pub csrf_token: String,
+    pub assets: Vec<AssetRow>,
+    pub total_count: u32,
+    pub type_filter: String,
+    pub criticality_filter: String,
+    pub query: String,
+    pub page: u32,
+    pub total_pages: u32,
+}
+
+pub struct AssetRow {
+    pub name: String,
+    pub asset_type: String,
+    pub criticality: String,
+    pub environment: String,
+    pub last_seen: String,
+}
+
+// ============================================
+// Packages Page
+// ============================================
+
+/// Content packages browser page.
+#[derive(Template)]
+#[template(path = "packages.html")]
+pub struct PackagesTemplate {
+    pub active_nav: String,
+    pub critical_count: u32,
+    pub open_count: u32,
+    pub approval_count: u32,
+    pub system_healthy: bool,
+    pub current_user: Option<CurrentUserInfo>,
+    pub csrf_token: String,
+    pub packages: Vec<PackageRow>,
+}
+
+pub struct PackageRow {
+    pub name: String,
+    pub version: String,
+    pub author: String,
+    pub content_count: u32,
+    pub imported_at: String,
 }

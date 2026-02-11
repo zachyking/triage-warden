@@ -11,18 +11,18 @@
     <form hx-post="/api/playbooks" hx-swap="none" hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); showToast('success', 'Playbook Created', 'New playbook has been created successfully.'); location.reload(); } else { showToast('error', 'Failed to Create Playbook', 'Please check your configuration and try again.'); }">
       <div class="modal-body">
         <div class="form-group">
-          <label class="form-label">Playbook Name</label>
-          <input type="text" name="name" class="form-input" placeholder="e.g., Phishing Response" required>
+          <label for="playbook-name" class="form-label">Playbook Name</label>
+          <input type="text" id="playbook-name" name="name" class="form-input" placeholder="e.g., Phishing Response" required>
         </div>
 
         <div class="form-group">
-          <label class="form-label">Description</label>
-          <textarea name="description" class="form-input form-textarea" placeholder="Describe what this playbook does..." rows="3"></textarea>
+          <label for="playbook-description" class="form-label">Description</label>
+          <textarea id="playbook-description" name="description" class="form-input form-textarea" placeholder="Describe what this playbook does..." rows="3"></textarea>
         </div>
 
         <div class="form-group">
-          <label class="form-label">Trigger Type</label>
-          <select name="trigger_type" class="form-input form-select">
+          <label for="playbook-trigger-type" class="form-label">Trigger Type</label>
+          <select id="playbook-trigger-type" name="trigger_type" class="form-input form-select">
             <option value="alert_type">Alert Type Match</option>
             <option value="severity">Severity Level</option>
             <option value="source">Alert Source</option>
@@ -31,8 +31,8 @@
         </div>
 
         <div class="form-group">
-          <label class="form-label">Trigger Condition</label>
-          <input type="text" name="trigger_condition" class="form-input" placeholder="e.g., phishing, ransomware, malware">
+          <label for="playbook-trigger-condition" class="form-label">Trigger Condition</label>
+          <input type="text" id="playbook-trigger-condition" name="trigger_condition" class="form-input" placeholder="e.g., phishing, ransomware, malware">
           <p class="text-xs text-muted mt-1">Comma-separated values or regex pattern</p>
         </div>
 

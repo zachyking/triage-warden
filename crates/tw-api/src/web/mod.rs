@@ -25,12 +25,13 @@ use tw_core::db::{
     create_user_repository, GeneralSettings, IncidentFilter, IncidentRepository, LlmSettings,
     Pagination, PlaybookFilter, PolicyRepository, RateLimits,
 };
+use tw_core::hunting::{FindingSeverity, HuntStatus, HuntingHunt};
 use tw_core::incident::{ApprovalStatus, IncidentStatus, Severity};
 use tw_core::knowledge::{KnowledgeFilter, KnowledgeType};
 use tw_core::lesson::LessonFilter;
 use tw_core::privacy::RetentionManager;
 use tw_core::rbac::{AccessReview, ReviewStatus};
-use tw_core::{CommentType, IncidentComment, UserFilter};
+use tw_core::{AssetSearchParams, CommentType, IncidentComment, UserFilter};
 
 use crate::auth::{generate_csrf_token, AuthenticatedUser};
 use crate::error::ApiError;
@@ -127,6 +128,10 @@ pub fn create_web_router(state: AppState) -> Router {
         .route("/knowledge/:id", get(knowledge_detail))
         .route("/analytics", get(analytics))
         .route("/web/partials/lessons", get(partials_lessons))
+        // Stage 5: Hunting, Assets, Packages
+        .route("/hunting", get(hunting))
+        .route("/assets", get(assets_list))
+        .route("/packages", get(packages_list))
         .with_state(state)
 }
 
@@ -964,6 +969,14 @@ async fn settings(
         latest_archive_location,
     };
 
+    // Read autonomy level from settings (defaults to "supervised")
+    let autonomy_level = settings_repo
+        .get_raw(tenant_id, "autonomy_level_v1")
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "supervised".to_string());
+
     let template = SettingsTemplate {
         active_nav: "settings".to_string(),
         critical_count: nav.critical_count,
@@ -986,6 +999,7 @@ async fn settings(
         privacy,
         guardrails,
         compliance,
+        autonomy_level,
     };
 
     Ok(HtmlTemplate(template))
@@ -2147,6 +2161,283 @@ async fn analytics(
     Ok(HtmlTemplate(template))
 }
 
+// ============================================
+// Stage 5: Hunting / Assets / Packages
+// ============================================
+
+const HUNTS_SETTINGS_KEY: &str = "hunting_hunts_v1";
+const HUNT_RESULTS_SETTINGS_KEY: &str = "hunting_results_v1";
+const PACKAGES_SETTINGS_KEY: &str = "content_packages_v1";
+
+/// Threat hunting page.
+async fn hunting(
+    State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
+    let repo = create_incident_repository(&state.db);
+    let nav = fetch_nav_counts(repo.as_ref(), user.tenant_id).await;
+
+    let settings_repo = create_settings_repository(&state.db, state.encryptor.clone());
+    let hunts: Vec<HuntingHunt> = settings_repo
+        .get_raw(user.tenant_id, HUNTS_SETTINGS_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default();
+
+    let results: Vec<tw_core::hunting::HuntResult> = settings_repo
+        .get_raw(user.tenant_id, HUNT_RESULTS_SETTINGS_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default();
+
+    let active_hunts = hunts
+        .iter()
+        .filter(|h| h.status == HuntStatus::Active)
+        .count() as u32;
+    let total_findings: u32 = results.iter().map(|r| r.findings.len() as u32).sum();
+    let critical_findings: u32 = results
+        .iter()
+        .flat_map(|r| &r.findings)
+        .filter(|f| f.severity == FindingSeverity::Critical)
+        .count() as u32;
+    let now = Utc::now();
+    let findings_24h: u32 = results
+        .iter()
+        .filter(|r| now.signed_duration_since(r.completed_at) < Duration::hours(24))
+        .map(|r| r.findings.len() as u32)
+        .sum();
+
+    let hunt_rows: Vec<HuntRow> = hunts
+        .iter()
+        .map(|h| {
+            let status_str = format!("{:?}", h.status).to_lowercase();
+            let status_color = match h.status {
+                HuntStatus::Active => "success".to_string(),
+                HuntStatus::Draft => "info".to_string(),
+                HuntStatus::Paused => "warning".to_string(),
+                HuntStatus::Completed => "accent".to_string(),
+                HuntStatus::Failed => "critical".to_string(),
+                HuntStatus::Archived => "info".to_string(),
+            };
+            let last_result_total = h.last_result.as_ref().map(|r| r.total_findings as u32);
+            HuntRow {
+                id: h.id,
+                name: h.name.clone(),
+                hypothesis: h.hypothesis.clone(),
+                hunt_type: format!("{:?}", h.hunt_type).to_lowercase(),
+                status: status_str,
+                status_color,
+                mitre_techniques: h.mitre_techniques.clone(),
+                last_run: h.last_run.map(format_time_ago),
+                last_result_total,
+            }
+        })
+        .collect();
+
+    let template = HuntingTemplate {
+        active_nav: "hunting".to_string(),
+        critical_count: nav.critical_count,
+        open_count: nav.open_count,
+        approval_count: nav.approval_count,
+        system_healthy: true,
+        current_user: Some(user_to_current_info(&user)),
+        csrf_token: generate_csrf_token(),
+        active_hunts,
+        total_findings,
+        critical_findings,
+        findings_24h,
+        hunts: hunt_rows,
+    };
+
+    Ok(HtmlTemplate(template))
+}
+
+/// Query parameters for assets page.
+#[derive(Debug, Deserialize)]
+struct AssetsQuery {
+    #[serde(default)]
+    asset_type: String,
+    #[serde(default)]
+    criticality: String,
+    #[serde(default)]
+    q: String,
+    #[serde(default = "default_page")]
+    page: u32,
+}
+
+/// Asset inventory page.
+async fn assets_list(
+    State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
+    Query(query): Query<AssetsQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let repo = create_incident_repository(&state.db);
+    let nav = fetch_nav_counts(repo.as_ref(), user.tenant_id).await;
+
+    let per_page = 20u32;
+    let page = query.page.max(1);
+    let offset = ((page - 1) * per_page) as usize;
+
+    let name_filter = if query.q.is_empty() {
+        None
+    } else {
+        Some(query.q.clone())
+    };
+
+    let type_filter = if query.asset_type.is_empty() {
+        None
+    } else {
+        Some(query.asset_type.clone())
+    };
+
+    let crit_filter = if query.criticality.is_empty() {
+        None
+    } else {
+        Some(query.criticality.clone())
+    };
+
+    // Count total for pagination
+    let all_matching = state
+        .asset_store
+        .search(
+            user.tenant_id,
+            &AssetSearchParams {
+                name: name_filter.clone(),
+                asset_type: type_filter.as_deref().and_then(parse_asset_type_opt),
+                criticality: crit_filter.as_deref().and_then(parse_criticality_opt),
+                environment: None,
+                tag: None,
+                limit: None,
+                offset: None,
+            },
+        )
+        .await
+        .unwrap_or_default();
+    let total_count = all_matching.len() as u32;
+    let total_pages = if total_count == 0 {
+        1
+    } else {
+        ((total_count as f32) / (per_page as f32)).ceil() as u32
+    };
+
+    let assets = state
+        .asset_store
+        .search(
+            user.tenant_id,
+            &AssetSearchParams {
+                name: name_filter,
+                asset_type: type_filter.as_deref().and_then(parse_asset_type_opt),
+                criticality: crit_filter.as_deref().and_then(parse_criticality_opt),
+                environment: None,
+                tag: None,
+                limit: Some(per_page as usize),
+                offset: Some(offset),
+            },
+        )
+        .await
+        .unwrap_or_default();
+
+    let asset_rows: Vec<AssetRow> = assets
+        .into_iter()
+        .map(|a| AssetRow {
+            name: a.name,
+            asset_type: format!("{:?}", a.asset_type).to_lowercase(),
+            criticality: format!("{:?}", a.criticality).to_lowercase(),
+            environment: format!("{:?}", a.environment).to_lowercase(),
+            last_seen: format_time_ago(a.last_seen),
+        })
+        .collect();
+
+    let template = AssetsTemplate {
+        active_nav: "assets".to_string(),
+        critical_count: nav.critical_count,
+        open_count: nav.open_count,
+        approval_count: nav.approval_count,
+        system_healthy: true,
+        current_user: Some(user_to_current_info(&user)),
+        csrf_token: generate_csrf_token(),
+        assets: asset_rows,
+        total_count,
+        type_filter: query.asset_type,
+        criticality_filter: query.criticality,
+        query: query.q,
+        page,
+        total_pages,
+    };
+
+    Ok(HtmlTemplate(template))
+}
+
+/// Packages browser page.
+async fn packages_list(
+    State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
+    let repo = create_incident_repository(&state.db);
+    let nav = fetch_nav_counts(repo.as_ref(), user.tenant_id).await;
+
+    let settings_repo = create_settings_repository(&state.db, state.encryptor.clone());
+    let records: Vec<serde_json::Value> = settings_repo
+        .get_raw(user.tenant_id, PACKAGES_SETTINGS_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default();
+
+    let packages: Vec<PackageRow> = records
+        .iter()
+        .filter_map(|v| {
+            let manifest = v.get("manifest")?;
+            Some(PackageRow {
+                name: manifest
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("Unknown")
+                    .to_string(),
+                version: manifest
+                    .get("version")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0.0.0")
+                    .to_string(),
+                author: manifest
+                    .get("author")
+                    .and_then(|a| a.as_str())
+                    .unwrap_or("Unknown")
+                    .to_string(),
+                content_count: v
+                    .get("contents")
+                    .and_then(|c| c.as_array())
+                    .map(|a| a.len() as u32)
+                    .unwrap_or(0),
+                imported_at: v
+                    .get("imported_at")
+                    .and_then(|t| t.as_str())
+                    .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                    .map(|dt| format_time_ago(dt.with_timezone(&Utc)))
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            })
+        })
+        .collect();
+
+    let template = PackagesTemplate {
+        active_nav: "packages".to_string(),
+        critical_count: nav.critical_count,
+        open_count: nav.open_count,
+        approval_count: nav.approval_count,
+        system_healthy: true,
+        current_user: Some(user_to_current_info(&user)),
+        csrf_token: generate_csrf_token(),
+        packages,
+    };
+
+    Ok(HtmlTemplate(template))
+}
+
 /// Returns the lessons learned table partial.
 async fn partials_lessons(
     State(state): State<AppState>,
@@ -2726,6 +3017,36 @@ fn format_time_ago(dt: chrono::DateTime<chrono::Utc>) -> String {
         format!("{}d ago", diff.num_days())
     } else {
         dt.format("%Y-%m-%d").to_string()
+    }
+}
+
+/// Parse asset type string to enum, returning None for empty/unknown values.
+fn parse_asset_type_opt(s: &str) -> Option<tw_core::models::AssetType> {
+    use tw_core::models::AssetType;
+    match s.to_lowercase().as_str() {
+        "server" => Some(AssetType::Server),
+        "workstation" => Some(AssetType::Workstation),
+        "mobile_device" => Some(AssetType::MobileDevice),
+        "network_device" => Some(AssetType::NetworkDevice),
+        "cloud_instance" => Some(AssetType::CloudInstance),
+        "container" => Some(AssetType::Container),
+        "database" => Some(AssetType::Database),
+        "application" => Some(AssetType::Application),
+        "iot_device" => Some(AssetType::IotDevice),
+        "" => None,
+        other => Some(AssetType::Custom(other.to_string())),
+    }
+}
+
+/// Parse criticality string to enum, returning None for empty/unknown values.
+fn parse_criticality_opt(s: &str) -> Option<tw_core::models::Criticality> {
+    use tw_core::models::Criticality;
+    match s.to_lowercase().as_str() {
+        "low" => Some(Criticality::Low),
+        "medium" => Some(Criticality::Medium),
+        "high" => Some(Criticality::High),
+        "critical" => Some(Criticality::Critical),
+        _ => None,
     }
 }
 

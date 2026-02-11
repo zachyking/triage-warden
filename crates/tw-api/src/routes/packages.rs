@@ -178,6 +178,18 @@ pub struct ExportRequest {
 // ============================================================================
 
 /// Import a content package.
+#[utoipa::path(
+    post,
+    path = "/api/v1/packages/import",
+    request_body = ImportPackageRequest,
+    responses(
+        (status = 200, description = "Import results", body = ImportResultResponse),
+        (status = 400, description = "Package validation failed"),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "Packages"
+)]
 async fn import_package(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -243,6 +255,16 @@ async fn import_package(
 }
 
 /// Validate a content package without importing.
+#[utoipa::path(
+    post,
+    path = "/api/v1/packages/validate",
+    request_body = PackageDto,
+    responses(
+        (status = 200, description = "Validation results", body = ValidationResultResponse),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Packages"
+)]
 async fn validate_package(
     State(_state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -253,6 +275,20 @@ async fn validate_package(
 }
 
 /// Export a playbook as a content package.
+#[utoipa::path(
+    post,
+    path = "/api/v1/packages/export/playbook/{id}",
+    params(
+        ("id" = Uuid, Path, description = "Playbook ID to export")
+    ),
+    request_body = ExportRequest,
+    responses(
+        (status = 200, description = "Exported package", body = ExportResponse),
+        (status = 404, description = "Playbook not found"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Packages"
+)]
 async fn export_playbook(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -281,6 +317,20 @@ async fn export_playbook(
 }
 
 /// Export a hunt as a content package.
+#[utoipa::path(
+    post,
+    path = "/api/v1/packages/export/hunt/{id}",
+    params(
+        ("id" = Uuid, Path, description = "Hunt ID to export")
+    ),
+    request_body = ExportRequest,
+    responses(
+        (status = 200, description = "Exported package", body = ExportResponse),
+        (status = 404, description = "Hunt not found"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Packages"
+)]
 async fn export_hunt(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,

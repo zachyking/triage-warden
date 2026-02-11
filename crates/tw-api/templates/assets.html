@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+
+{% block title %}Assets - Triage Warden{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Asset Inventory</h1>
+    <p class="page-subtitle">{{ total_count }} assets{% if !query.is_empty() %} matching "{{ query }}"{% endif %}</p>
+  </div>
+</div>
+
+<!-- Toolbar -->
+<div class="toolbar">
+  <div class="search-box">
+    <svg class="search-box-icon" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+    </svg>
+    <input type="text"
+           name="q"
+           value="{{ query }}"
+           placeholder="Search assets by name..."
+           hx-get="/assets"
+           hx-trigger="input changed delay:300ms, search"
+           hx-target="#assets-table-body"
+           hx-select="#assets-table-body"
+           hx-push-url="true"
+           hx-include="[name='asset_type'],[name='criticality']">
+  </div>
+  <div class="flex gap-4 items-center">
+    <div class="form-group" style="margin-bottom:0">
+      <select class="form-input form-select" name="asset_type"
+              hx-get="/assets"
+              hx-target="#assets-table-body"
+              hx-select="#assets-table-body"
+              hx-push-url="true"
+              hx-include="[name='q'],[name='criticality']"
+              hx-trigger="change">
+        <option value="">All Types</option>
+        <option value="server" {% if type_filter == "server" %}selected{% endif %}>Server</option>
+        <option value="workstation" {% if type_filter == "workstation" %}selected{% endif %}>Workstation</option>
+        <option value="mobile_device" {% if type_filter == "mobile_device" %}selected{% endif %}>Mobile Device</option>
+        <option value="network_device" {% if type_filter == "network_device" %}selected{% endif %}>Network Device</option>
+        <option value="cloud_instance" {% if type_filter == "cloud_instance" %}selected{% endif %}>Cloud Instance</option>
+        <option value="container" {% if type_filter == "container" %}selected{% endif %}>Container</option>
+        <option value="database" {% if type_filter == "database" %}selected{% endif %}>Database</option>
+        <option value="application" {% if type_filter == "application" %}selected{% endif %}>Application</option>
+        <option value="iot_device" {% if type_filter == "iot_device" %}selected{% endif %}>IoT Device</option>
+      </select>
+    </div>
+    <div class="form-group" style="margin-bottom:0">
+      <select class="form-input form-select" name="criticality"
+              hx-get="/assets"
+              hx-target="#assets-table-body"
+              hx-select="#assets-table-body"
+              hx-push-url="true"
+              hx-include="[name='q'],[name='asset_type']"
+              hx-trigger="change">
+        <option value="">All Criticalities</option>
+        <option value="critical" {% if criticality_filter == "critical" %}selected{% endif %}>Critical</option>
+        <option value="high" {% if criticality_filter == "high" %}selected{% endif %}>High</option>
+        <option value="medium" {% if criticality_filter == "medium" %}selected{% endif %}>Medium</option>
+        <option value="low" {% if criticality_filter == "low" %}selected{% endif %}>Low</option>
+      </select>
+    </div>
+  </div>
+</div>
+
+<!-- Assets Table -->
+<div class="card">
+  <div class="table-container">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Criticality</th>
+          <th>Environment</th>
+          <th>Last Seen</th>
+        </tr>
+      </thead>
+      <tbody id="assets-table-body">
+        {% for asset in assets %}
+        <tr>
+          <td class="font-semibold">{{ asset.name }}</td>
+          <td><span class="badge badge-info">{{ asset.asset_type }}</span></td>
+          <td>
+            <span class="badge badge-{% if asset.criticality == "critical" %}critical{% else if asset.criticality == "high" %}high{% else if asset.criticality == "medium" %}medium{% else %}low{% endif %}">
+              {{ asset.criticality }}
+            </span>
+          </td>
+          <td class="text-sm text-muted">{{ asset.environment }}</td>
+          <td class="text-sm text-muted">{{ asset.last_seen }}</td>
+        </tr>
+        {% endfor %}
+        {% if assets.is_empty() %}
+        <tr>
+          <td colspan="5">
+            <div class="empty-state">
+              <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+                <line x1="8" y1="21" x2="16" y2="21"/>
+                <line x1="12" y1="17" x2="12" y2="21"/>
+              </svg>
+              <div class="empty-state-title">No assets found</div>
+              <div class="empty-state-text">Import assets via the API or adjust your filters.</div>
+            </div>
+          </td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Pagination -->
+{% if total_pages > 1 %}
+<div class="flex justify-between items-center mt-4">
+  <span class="text-muted text-sm">Page {{ page }} of {{ total_pages }}</span>
+  <div class="flex gap-2">
+    {% if page > 1 %}
+    <a href="/assets?page={{ page - 1 }}&asset_type={{ type_filter }}&criticality={{ criticality_filter }}&q={{ query }}"
+       class="btn btn-secondary"
+       hx-get="/assets?page={{ page - 1 }}&asset_type={{ type_filter }}&criticality={{ criticality_filter }}&q={{ query }}"
+       hx-target="#assets-table-body"
+       hx-select="#assets-table-body"
+       hx-push-url="true">Previous</a>
+    {% endif %}
+    {% if page < total_pages %}
+    <a href="/assets?page={{ page + 1 }}&asset_type={{ type_filter }}&criticality={{ criticality_filter }}&q={{ query }}"
+       class="btn btn-secondary"
+       hx-get="/assets?page={{ page + 1 }}&asset_type={{ type_filter }}&criticality={{ criticality_filter }}&q={{ query }}"
+       hx-target="#assets-table-body"
+       hx-select="#assets-table-body"
+       hx-push-url="true">Next</a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}

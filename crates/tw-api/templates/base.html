@@ -14,7 +14,7 @@
 </head>
 <body hx-ext="sse">
   <!-- Top Navigation -->
-  <nav class="top-nav">
+  <nav class="top-nav" aria-label="Main navigation">
     <a href="/" class="logo">TRIAGE_WARDEN</a>
     <div class="nav-links">
       <a href="/" class="nav-link{% if active_nav == "dashboard" %} active{% endif %}">Dashboard</a>
@@ -27,19 +27,22 @@
         {% if approval_count > 0 %}<span class="nav-badge">{{ approval_count }}</span>{% endif %}
       </a>
       <a href="/playbooks" class="nav-link{% if active_nav == "playbooks" %} active{% endif %}">Playbooks</a>
+      <a href="/hunting" class="nav-link{% if active_nav == "hunting" %} active{% endif %}">Hunting</a>
       <a href="/knowledge" class="nav-link{% if active_nav == "knowledge" %} active{% endif %}">Knowledge</a>
+      <a href="/assets" class="nav-link{% if active_nav == "assets" %} active{% endif %}">Assets</a>
+      <a href="/packages" class="nav-link{% if active_nav == "packages" %} active{% endif %}">Packages</a>
       <a href="/analytics" class="nav-link{% if active_nav == "analytics" %} active{% endif %}">Analytics</a>
       <a href="/settings" class="nav-link{% if active_nav == "settings" %} active{% endif %}">Settings</a>
     </div>
     <div class="nav-right">
-      <div class="system-status">
-        <span class="status-dot{% if system_healthy %} healthy{% else %} unhealthy{% endif %}"></span>
+      <div class="system-status" role="status">
+        <span class="status-dot{% if system_healthy %} healthy{% else %} unhealthy{% endif %}" aria-hidden="true"></span>
         <span class="status-text">{% if system_healthy %}Healthy{% else %}Degraded{% endif %}</span>
       </div>
       {% match current_user %}
       {% when Some with (user) %}
       <div class="user-menu">
-        <button class="user-menu-trigger" onclick="this.parentElement.classList.toggle('open')">
+        <button class="user-menu-trigger" onclick="this.parentElement.classList.toggle('open')" aria-label="User menu" aria-haspopup="true">
           <span class="user-avatar">{{ user.username.chars().next().unwrap_or('U') }}</span>
           <span class="user-info">
             <span class="user-name">{% match user.display_name %}{% when Some with (name) %}{{ name }}{% when None %}{{ user.username }}{% endmatch %}</span>
@@ -79,7 +82,7 @@
   </nav>
 
   {% if critical_count > 0 %}
-  <div class="alert-banner">
+  <div class="alert-banner" role="alert">
     <svg class="alert-banner-icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
     </svg>
@@ -93,8 +96,8 @@
   </div>
 
   <!-- Chat Sidebar Toggle -->
-  <button class="chat-toggle-btn" onclick="document.getElementById('chat-sidebar').classList.toggle('open')" title="AI Assistant">
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+  <button class="chat-toggle-btn" onclick="document.getElementById('chat-sidebar').classList.toggle('open')" title="AI Assistant" aria-label="Open AI Assistant chat">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
       <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
     </svg>
   </button>
@@ -106,7 +109,7 @@
   <div id="modal-container"></div>
 
   <!-- Toast Container -->
-  <div id="toast-container" class="toast-container"></div>
+  <div id="toast-container" class="toast-container" role="status" aria-live="polite"></div>
 
   <!-- Toast & Modal Scripts -->
   <script>

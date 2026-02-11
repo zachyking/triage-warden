@@ -2384,3 +2384,7 @@ code {
 .text-sm { font-size: var(--text-sm); }
 .text-base { font-size: var(--text-base); }
 .text-lg { font-size: var(--text-lg); }
+
+/* Visibility utilities */
+.hidden { display: none !important; }
+.cursor-pointer { cursor: pointer; }

@@ -157,4 +157,50 @@ mod tests {
         assert_eq!(config.level, Level::DEBUG);
         assert!(!config.json_format);
     }
+
+    #[test]
+    fn test_development_config_includes_thread_ids() {
+        let config = LoggingConfig::development();
+        assert!(config.include_thread_ids);
+        assert!(config.include_location);
+        assert!(config.include_spans);
+        assert!(config.include_target);
+    }
+
+    #[test]
+    fn test_production_config_no_location() {
+        let config = LoggingConfig::production();
+        assert!(!config.include_location);
+        assert!(!config.include_thread_ids);
+        assert!(!config.include_spans);
+        assert!(config.include_target);
+    }
+
+    #[test]
+    fn test_default_config_all_fields() {
+        let config = LoggingConfig::default();
+        assert_eq!(config.level, Level::INFO);
+        assert!(!config.json_format);
+        assert!(config.include_spans);
+        assert!(config.include_location);
+        assert!(!config.include_thread_ids);
+        assert!(config.include_target);
+    }
+
+    #[test]
+    fn test_config_clone() {
+        let config = LoggingConfig::production();
+        let cloned = config.clone();
+        assert_eq!(cloned.level, config.level);
+        assert_eq!(cloned.json_format, config.json_format);
+        assert_eq!(cloned.include_spans, config.include_spans);
+    }
+
+    #[test]
+    fn test_config_debug_impl() {
+        let config = LoggingConfig::default();
+        let debug_str = format!("{:?}", config);
+        assert!(debug_str.contains("LoggingConfig"));
+        assert!(debug_str.contains("level"));
+    }
 }

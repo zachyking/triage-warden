@@ -488,4 +488,179 @@ mod tests {
 
         assert!(result.has_warnings());
     }
+
+    #[test]
+    fn test_valid_temperature_no_warning() {
+        let mut config = default_config();
+        config.llm.temperature = 0.1;
+
+        let mut result = ValidationResult::new();
+        ConfigValidator::validate_llm_config(&config, &mut result);
+
+        // Should not have temperature-related warnings (may have API key warnings)
+        let temp_warnings: Vec<_> = result
+            .warnings
+            .iter()
+            .filter(|w| w.contains("temperature"))
+            .collect();
+        assert!(temp_warnings.is_empty());
+    }
+
+    #[test]
+    fn test_splunk_connector_requires_base_url() {
+        let mut config = default_config();
+        config.connectors.insert(
+            "splunk".to_string(),
+            ConnectorConfig {
+                connector_type: "splunk".to_string(),
+                base_url: String::new(),
+                enabled: true,
+                api_key: "token".to_string(),
+                api_secret: String::new(),
+                timeout_secs: 30,
+                settings: HashMap::new(),
+            },
+        );
+
+        let mut result = ValidationResult::new();
+        ConfigValidator::validate_connectors(&config, &mut result);
+
+        assert!(result.has_errors());
+        assert!(result.errors[0].contains("Splunk requires base_url"));
+    }
+
+    #[test]
+    fn test_crowdstrike_connector_missing_credentials() {
+        let mut config = default_config();
+        config.connectors.insert(
+            "cs".to_string(),
+            ConnectorConfig {
+                connector_type: "crowdstrike".to_string(),
+                base_url: "https://api.crowdstrike.com".to_string(),
+                enabled: true,
+                api_key: String::new(),
+                api_secret: String::new(),
+                timeout_secs: 30,
+                settings: HashMap::new(),
+            },
+        );
+
+        let mut result = ValidationResult::new();
+        ConfigValidator::validate_connectors(&config, &mut result);
+
+        assert!(result.has_warnings());
+        assert!(result.warnings[0].contains("CrowdStrike"));
+    }
+
+    #[test]
+    fn test_generic_connector_missing_base_url() {
+        let mut config = default_config();
+        config.connectors.insert(
+            "custom".to_string(),
+            ConnectorConfig {
+                connector_type: "custom_tool".to_string(),
+                base_url: String::new(),
+                enabled: true,
+                api_key: String::new(),
+                api_secret: String::new(),
+                timeout_secs: 30,
+                settings: HashMap::new(),
+            },
+        );
+
+        let mut result = ValidationResult::new();
+        ConfigValidator::validate_connectors(&config, &mut result);
+
+        assert!(result.has_warnings());
+        assert!(result.warnings[0].contains("No base_url configured"));
+    }
+
+    #[test]
+    fn test_local_llm_with_base_url_no_error() {
+        let mut config = default_config();
+        config.llm.provider = "local".to_string();
+        config.llm.base_url = "http://localhost:11434".to_string();
+
+        let mut result = ValidationResult::new();
+        ConfigValidator::validate_llm_config(&config, &mut result);
+
+        assert!(!result.has_errors());
+    }
+
+    #[test]
+    fn test_validation_result_print_does_not_panic() {
+        let mut result = ValidationResult::new();
+        result.add_error("test error");
+        result.add_warning("test warning");
+        // Should not panic
+        result.print();
+    }
+
+    #[test]
+    fn test_validation_result_empty_print_does_not_panic() {
+        let result = ValidationResult::new();
+        result.print();
+    }
+
+    #[test]
+    fn test_full_validate_with_default_config() {
+        // Set TW_ENV to non-production so encryption key is not required
+        std::env::set_var("TW_ENV", "development");
+        let config = default_config();
+        let result = ConfigValidator::validate(&config);
+        std::env::remove_var("TW_ENV");
+        // Default config should produce no errors in dev mode (may produce warnings)
+        assert!(!result.has_errors());
+    }
+
+    #[test]
+    fn test_validate_multiple_connectors() {
+        let mut config = default_config();
+        config.connectors.insert(
+            "jira".to_string(),
+            ConnectorConfig {
+                connector_type: "jira".to_string(),
+                base_url: "https://company.atlassian.net".to_string(),
+                enabled: true,
+                api_key: "email@company.com".to_string(),
+                api_secret: "api-token".to_string(),
+                timeout_secs: 30,
+                settings: HashMap::new(),
+            },
+        );
+        config.connectors.insert(
+            "vt".to_string(),
+            ConnectorConfig {
+                connector_type: "virustotal".to_string(),
+                base_url: "https://www.virustotal.com".to_string(),
+                enabled: true,
+                api_key: "vt-key".to_string(),
+                api_secret: String::new(),
+                timeout_secs: 30,
+                settings: HashMap::new(),
+            },
+        );
+
+        let mut result = ValidationResult::new();
+        ConfigValidator::validate_connectors(&config, &mut result);
+
+        // Both have credentials, should have no errors/warnings about them
+        assert!(!result.has_errors());
+    }
+
+    #[test]
+    fn test_negative_temperature_warning() {
+        let mut config = default_config();
+        config.llm.temperature = -0.5;
+
+        let mut result = ValidationResult::new();
+        ConfigValidator::validate_llm_config(&config, &mut result);
+
+        let temp_warnings: Vec<_> = result
+            .warnings
+            .iter()
+            .filter(|w| w.contains("temperature"))
+            .collect();
+        assert!(!temp_warnings.is_empty());
+    }
 }

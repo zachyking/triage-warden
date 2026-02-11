@@ -11,8 +11,8 @@
     <form hx-post="/api/notifications" hx-swap="none" hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); showToast('success', 'Channel Added', 'Notification channel has been configured.'); location.reload(); } else { showToast('error', 'Failed to Add Channel', 'Please check your configuration and try again.'); }">
       <div class="modal-body">
         <div class="form-group">
-          <label class="form-label">Channel Type</label>
-          <select name="channel_type" class="form-input form-select" required onchange="updateNotificationFields(this.value)">
+          <label for="notification-channel-type" class="form-label">Channel Type</label>
+          <select id="notification-channel-type" name="channel_type" class="form-input form-select" required onchange="updateNotificationFields(this.value)">
             <option value="">Select channel type...</option>
             <option value="slack">Slack</option>
             <option value="teams">Microsoft Teams</option>
@@ -23,8 +23,8 @@
         </div>
 
         <div class="form-group">
-          <label class="form-label">Channel Name</label>
-          <input type="text" name="name" class="form-input" placeholder="e.g., SOC Alerts Slack" required>
+          <label for="notification-channel-name" class="form-label">Channel Name</label>
+          <input type="text" id="notification-channel-name" name="name" class="form-input" placeholder="e.g., SOC Alerts Slack" required>
         </div>
 
         <div id="notification-fields">

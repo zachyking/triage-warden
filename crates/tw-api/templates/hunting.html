@@ -12,7 +12,7 @@
           hx-get="/web/modals/add-hunt"
           hx-target="#modal-container"
           hx-swap="innerHTML">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
       <path d="M12 5v14m-7-7h14"/>
     </svg>
     New Hunt
@@ -52,6 +52,7 @@
   <div class="card-body">
     <div class="flex gap-4 items-center">
       <div class="form-group" style="margin-bottom:0">
+        <label for="filter-status" class="sr-only">Filter by status</label>
         <select class="form-input form-select" id="filter-status"
                 hx-get="/web/partials/hunts"
                 hx-target="#hunts-table-body"
@@ -67,6 +68,7 @@
         </select>
       </div>
       <div class="form-group" style="margin-bottom:0">
+        <label for="filter-type" class="sr-only">Filter by type</label>
         <select class="form-input form-select" id="filter-type"
                 hx-get="/web/partials/hunts"
                 hx-target="#hunts-table-body"
@@ -80,6 +82,7 @@
         </select>
       </div>
       <div class="form-group" style="margin-bottom:0">
+        <label for="filter-category" class="sr-only">Filter by category</label>
         <select class="form-input form-select" id="filter-category"
                 hx-get="/web/partials/hunts"
                 hx-target="#hunts-table-body"
@@ -106,13 +109,13 @@
     <table class="table">
       <thead>
         <tr>
-          <th>Name</th>
-          <th>Type</th>
-          <th>Status</th>
-          <th>MITRE</th>
-          <th>Last Run</th>
-          <th>Findings</th>
-          <th>Actions</th>
+          <th scope="col">Name</th>
+          <th scope="col">Type</th>
+          <th scope="col">Status</th>
+          <th scope="col">MITRE</th>
+          <th scope="col">Last Run</th>
+          <th scope="col">Findings</th>
+          <th scope="col">Actions</th>
         </tr>
       </thead>
       <tbody id="hunts-table-body">
@@ -123,7 +126,7 @@
         <tr>
           <td colspan="7">
             <div class="empty-state">
-              <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
                 <circle cx="11" cy="11" r="8"/>
                 <path d="M21 21l-4.35-4.35"/>
               </svg>

@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+
+{% block title %}Content Packages - Triage Warden{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Content Packages</h1>
+    <p class="page-subtitle">{{ packages.len() }} package{% if packages.len() != 1 %}s{% endif %} installed</p>
+  </div>
+  <button class="btn btn-primary btn-lg" id="import-pkg-btn"
+          onclick="document.getElementById('package-import-form').classList.toggle('hidden')">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+      <polyline points="17 8 12 3 7 8"/>
+      <line x1="12" y1="3" x2="12" y2="15"/>
+    </svg>
+    Import Package
+  </button>
+</div>
+
+<!-- Import Form (hidden by default) -->
+<div id="package-import-form" class="card mb-4 hidden">
+  <div class="card-header">
+    <h3 class="card-title">Import Content Package</h3>
+  </div>
+  <div class="card-body">
+    <p class="text-sm text-muted mb-4">
+      Paste the JSON content package below. Packages can include playbooks, hunting queries, and other content.
+    </p>
+    <form hx-post="/api/packages/import" hx-swap="none"
+          hx-on::after-request="if(event.detail.successful) { showToast('success', 'Package Imported', 'Content package has been imported successfully.'); location.reload(); } else { showToast('error', 'Import Failed', 'Could not import the package. Check the format and try again.'); }">
+      <div class="form-group">
+        <label class="form-label">Package JSON</label>
+        <textarea name="package" class="form-input form-textarea" rows="8"
+                  placeholder='{"package": {"manifest": {...}, "contents": [...]}, "conflict_resolution": "skip"}' required></textarea>
+      </div>
+      <div class="flex gap-2">
+        <button type="submit" class="btn btn-primary">Import</button>
+        <button type="button" class="btn btn-secondary"
+                onclick="document.getElementById('package-import-form').classList.add('hidden')">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Packages Table -->
+<div class="card">
+  <div class="table-container">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Package</th>
+          <th>Version</th>
+          <th>Author</th>
+          <th>Contents</th>
+          <th>Imported</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for pkg in packages %}
+        <tr>
+          <td class="font-semibold">{{ pkg.name }}</td>
+          <td><span class="badge badge-info">v{{ pkg.version }}</span></td>
+          <td class="text-sm text-muted">{{ pkg.author }}</td>
+          <td>
+            <span class="font-semibold">{{ pkg.content_count }}</span>
+            <span class="text-sm text-muted">item{% if pkg.content_count != 1 %}s{% endif %}</span>
+          </td>
+          <td class="text-sm text-muted">{{ pkg.imported_at }}</td>
+        </tr>
+        {% endfor %}
+        {% if packages.is_empty() %}
+        <tr>
+          <td colspan="5">
+            <div class="empty-state">
+              <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
+              </svg>
+              <div class="empty-state-title">No packages installed</div>
+              <div class="empty-state-text">Import a content package to add playbooks, hunts, and other pre-built content.</div>
+            </div>
+          </td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

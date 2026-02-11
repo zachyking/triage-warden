@@ -207,6 +207,15 @@ pub fn routes() -> Router<AppState> {
 // ============================================================================
 
 /// Get the current autonomy configuration.
+#[utoipa::path(
+    get,
+    path = "/api/v1/autonomy/config",
+    responses(
+        (status = 200, description = "Current autonomy configuration", body = AutonomyConfigResponse),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Autonomy"
+)]
 async fn get_autonomy_config(
     State(_state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -222,6 +231,18 @@ async fn get_autonomy_config(
 }
 
 /// Update the autonomy configuration.
+#[utoipa::path(
+    put,
+    path = "/api/v1/autonomy/config",
+    request_body = UpdateAutonomyConfigRequest,
+    responses(
+        (status = 200, description = "Updated autonomy configuration", body = AutonomyConfigResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Admin role required")
+    ),
+    tag = "Autonomy"
+)]
 async fn update_autonomy_config(
     State(_state): State<AppState>,
     RequireAdmin(user): RequireAdmin,
@@ -298,6 +319,15 @@ async fn update_autonomy_config(
 }
 
 /// Get the current resolved autonomy level (using defaults).
+#[utoipa::path(
+    get,
+    path = "/api/v1/autonomy/level",
+    responses(
+        (status = 200, description = "Current resolved autonomy level", body = ResolvedLevelResponse),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Autonomy"
+)]
 async fn get_current_level(
     State(_state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -315,6 +345,17 @@ async fn get_current_level(
 }
 
 /// Resolve the autonomy level for a specific action and severity.
+#[utoipa::path(
+    post,
+    path = "/api/v1/autonomy/resolve",
+    request_body = ResolveAutonomyRequest,
+    responses(
+        (status = 200, description = "Resolved autonomy level", body = ResolvedLevelResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Autonomy"
+)]
 async fn resolve_level(
     State(_state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -351,6 +392,19 @@ async fn resolve_level(
 }
 
 /// Get the autonomy audit log.
+#[utoipa::path(
+    get,
+    path = "/api/v1/autonomy/audit",
+    params(
+        ("limit" = Option<u32>, Query, description = "Maximum entries to return (default 50)"),
+        ("incident_id" = Option<Uuid>, Query, description = "Filter by incident ID")
+    ),
+    responses(
+        (status = 200, description = "Audit log entries", body = Vec<AuditEntryResponse>),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Autonomy"
+)]
 async fn get_audit_log(
     State(_state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,

@@ -13,7 +13,7 @@
 <!-- Header -->
 <div class="page-header">
   <div class="flex items-center gap-3">
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-accent">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-accent" aria-hidden="true">
       <path d="M4 19.5A2.5 2.5 0 016.5 17H20"/>
       <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/>
     </svg>
@@ -148,8 +148,9 @@
                       hx-get="/web/modals/playbook/{{ playbook.id }}/stage/{{ loop.index0 }}/edit"
                       hx-target="#modal-container"
                       hx-swap="innerHTML"
-                      title="Edit stage">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      title="Edit stage"
+                      aria-label="Edit stage">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                   <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
                   <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
                 </svg>
@@ -159,8 +160,9 @@
                       hx-confirm="Delete this stage and all its steps?"
                       hx-swap="none"
                       hx-on::after-request="if(event.detail.successful) { location.reload(); }"
-                      title="Delete stage">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      title="Delete stage"
+                      aria-label="Delete stage">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                   <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
                 </svg>
               </button>
@@ -193,8 +195,9 @@
                         hx-get="/web/modals/playbook/{{ playbook.id }}/stage/{{ loop.index0 }}/step/{{ loop.index0 }}/edit"
                         hx-target="#modal-container"
                         hx-swap="innerHTML"
-                        title="Edit step">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        title="Edit step"
+                        aria-label="Edit step">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                     <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
                     <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
                   </svg>
@@ -204,8 +207,9 @@
                         hx-confirm="Delete this step?"
                         hx-swap="none"
                         hx-on::after-request="if(event.detail.successful) { location.reload(); }"
-                        title="Delete step">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        title="Delete step"
+                        aria-label="Delete step">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                     <path d="M6 18L18 6M6 6l12 12"/>
                   </svg>
                 </button>
@@ -221,7 +225,7 @@
                     hx-get="/web/modals/playbook/{{ playbook.id }}/stage/{{ loop.index0 }}/add-step"
                     hx-target="#modal-container"
                     hx-swap="innerHTML">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                 <path d="M12 5v14m-7-7h14"/>
               </svg>
               Add Step
@@ -231,7 +235,7 @@
         {% endfor %}
         {% else %}
         <div class="empty-state">
-          <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
             <path d="M4 19.5A2.5 2.5 0 016.5 17H20"/>
             <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/>
           </svg>
@@ -241,7 +245,7 @@
                   hx-get="/web/modals/playbook/{{ playbook.id }}/add-stage"
                   hx-target="#modal-container"
                   hx-swap="innerHTML">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <path d="M12 5v14m-7-7h14"/>
             </svg>
             Add First Stage

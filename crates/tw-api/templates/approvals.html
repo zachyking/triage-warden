@@ -16,12 +16,12 @@
     <table class="table" id="approvals-table">
       <thead>
         <tr>
-          <th>Incident</th>
-          <th>Action</th>
-          <th>Target</th>
-          <th>Risk</th>
-          <th>Proposed</th>
-          <th></th>
+          <th scope="col">Incident</th>
+          <th scope="col">Action</th>
+          <th scope="col">Target</th>
+          <th scope="col">Risk</th>
+          <th scope="col">Proposed</th>
+          <th scope="col"><span class="sr-only">Actions</span></th>
         </tr>
       </thead>
       <tbody>
@@ -64,7 +64,7 @@
                       hx-vals='{"action_id": "{{ action.id }}", "approved": true}'
                       hx-target="#action-{{ action.id }}"
                       hx-swap="outerHTML">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                   <path d="M5 13l4 4L19 7"/>
                 </svg>
                 Approve
@@ -73,8 +73,9 @@
                       hx-post="/api/incidents/{{ action.incident_id }}/approve"
                       hx-vals='{"action_id": "{{ action.id }}", "approved": false}'
                       hx-target="#action-{{ action.id }}"
-                      hx-swap="outerHTML">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      hx-swap="outerHTML"
+                      hx-confirm="Are you sure you want to reject this action?">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                   <path d="M6 18L18 6M6 6l12 12"/>
                 </svg>
                 Reject
@@ -87,7 +88,7 @@
     </table>
     {% else %}
     <div class="empty-state">
-      <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
         <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
       </svg>
       <div class="empty-state-title">No pending approvals</div>
@@ -106,11 +107,11 @@
       <table class="table">
         <thead>
           <tr>
-            <th>Incident</th>
-            <th>Action</th>
-            <th>Decision</th>
-            <th>Processed</th>
-            <th>By</th>
+            <th scope="col">Incident</th>
+            <th scope="col">Action</th>
+            <th scope="col">Decision</th>
+            <th scope="col">Processed</th>
+            <th scope="col">By</th>
           </tr>
         </thead>
         <tbody>

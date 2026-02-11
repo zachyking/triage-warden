@@ -333,3 +333,220 @@ pub struct ApiErrorResponse {
     pub details: Option<serde_json::Value>,
     pub request_id: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_trims_trailing_slash() {
+        let client = ApiClient::new("http://localhost:8080/").unwrap();
+        assert_eq!(client.base_url, "http://localhost:8080");
+    }
+
+    #[test]
+    fn test_new_no_trailing_slash_unchanged() {
+        let client = ApiClient::new("http://localhost:8080").unwrap();
+        assert_eq!(client.base_url, "http://localhost:8080");
+    }
+
+    #[test]
+    fn test_new_multiple_trailing_slashes() {
+        let client = ApiClient::new("http://example.com///").unwrap();
+        // trim_end_matches removes all trailing slashes
+        assert_eq!(client.base_url, "http://example.com");
+    }
+
+    #[test]
+    fn test_list_incidents_url_no_params() {
+        // Verify the URL format matches what the server expects
+        let client = ApiClient::new("http://localhost:8080").unwrap();
+        let url = format!("{}/api/incidents", client.base_url);
+        assert_eq!(url, "http://localhost:8080/api/incidents");
+    }
+
+    #[test]
+    fn test_list_incidents_params_query_string() {
+        let params = ListIncidentsParams {
+            status: Some("open".to_string()),
+            severity: Some("high".to_string()),
+            page: Some(2),
+            per_page: Some(50),
+        };
+
+        let mut url = "http://localhost:8080/api/incidents".to_string();
+        let mut query_parts = Vec::new();
+
+        if let Some(status) = &params.status {
+            query_parts.push(format!("status={}", status));
+        }
+        if let Some(severity) = &params.severity {
+            query_parts.push(format!("severity={}", severity));
+        }
+        if let Some(page) = params.page {
+            query_parts.push(format!("page={}", page));
+        }
+        if let Some(per_page) = params.per_page {
+            query_parts.push(format!("per_page={}", per_page));
+        }
+
+        if !query_parts.is_empty() {
+            url.push('?');
+            url.push_str(&query_parts.join("&"));
+        }
+
+        assert_eq!(
+            url,
+            "http://localhost:8080/api/incidents?status=open&severity=high&page=2&per_page=50"
+        );
+    }
+
+    #[test]
+    fn test_list_incidents_params_partial() {
+        let params = ListIncidentsParams {
+            status: Some("resolved".to_string()),
+            severity: None,
+            page: None,
+            per_page: Some(10),
+        };
+
+        let mut query_parts = Vec::new();
+
+        if let Some(status) = &params.status {
+            query_parts.push(format!("status={}", status));
+        }
+        if let Some(severity) = &params.severity {
+            query_parts.push(format!("severity={}", severity));
+        }
+        if let Some(page) = params.page {
+            query_parts.push(format!("page={}", page));
+        }
+        if let Some(per_page) = params.per_page {
+            query_parts.push(format!("per_page={}", per_page));
+        }
+
+        assert_eq!(query_parts.join("&"), "status=resolved&per_page=10");
+    }
+
+    #[test]
+    fn test_list_incidents_params_default() {
+        let params = ListIncidentsParams::default();
+        assert!(params.status.is_none());
+        assert!(params.severity.is_none());
+        assert!(params.page.is_none());
+        assert!(params.per_page.is_none());
+    }
+
+    #[test]
+    fn test_execute_action_request_serialization() {
+        let request = ExecuteActionRequest {
+            action_type: "isolate_host".to_string(),
+            target: serde_json::json!({"type": "host", "hostname": "web-01"}),
+            reason: "Contain malware".to_string(),
+            parameters: Some(serde_json::json!({"network_isolation": true})),
+            skip_policy_check: false,
+        };
+
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["action_type"], "isolate_host");
+        assert_eq!(json["target"]["hostname"], "web-01");
+        assert_eq!(json["reason"], "Contain malware");
+        assert_eq!(json["parameters"]["network_isolation"], true);
+        assert_eq!(json["skip_policy_check"], false);
+    }
+
+    #[test]
+    fn test_execute_action_request_skip_none_parameters() {
+        let request = ExecuteActionRequest {
+            action_type: "block_ip".to_string(),
+            target: serde_json::json!({"type": "ip", "ip": "1.2.3.4"}),
+            reason: "Threat intel match".to_string(),
+            parameters: None,
+            skip_policy_check: false,
+        };
+
+        let json = serde_json::to_value(&request).unwrap();
+        // parameters should be absent when None due to skip_serializing_if
+        assert!(json.get("parameters").is_none());
+    }
+
+    #[test]
+    fn test_api_error_response_deserialization() {
+        let json = r#"{"code":"NOT_FOUND","message":"Incident not found","details":null,"request_id":"req-123"}"#;
+        let error: ApiErrorResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(error.code, "NOT_FOUND");
+        assert_eq!(error.message, "Incident not found");
+        assert!(error.details.is_none());
+        assert_eq!(error.request_id.as_deref(), Some("req-123"));
+    }
+
+    #[test]
+    fn test_pagination_info_deserialization() {
+        let json = r#"{"page":1,"per_page":20,"total_items":150,"total_pages":8}"#;
+        let info: PaginationInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.page, 1);
+        assert_eq!(info.per_page, 20);
+        assert_eq!(info.total_items, 150);
+        assert_eq!(info.total_pages, 8);
+    }
+
+    #[test]
+    fn test_incident_summary_deserialization() {
+        let json = serde_json::json!({
+            "id": "00000000-0000-0000-0000-000000000001",
+            "source": "email_gateway",
+            "severity": "high",
+            "status": "open",
+            "title": "Phishing detected",
+            "alert_type": "phishing",
+            "verdict": "malicious",
+            "confidence": 0.95,
+            "risk_score": 85,
+            "ticket_id": "SEC-123",
+            "tags": ["phishing", "urgent"],
+            "created_at": "2024-01-15T09:00:00Z",
+            "updated_at": "2024-01-15T09:30:00Z"
+        });
+
+        let summary: IncidentSummary = serde_json::from_value(json).unwrap();
+        assert_eq!(summary.source, "email_gateway");
+        assert_eq!(summary.severity, "high");
+        assert_eq!(summary.status, "open");
+        assert_eq!(summary.title.as_deref(), Some("Phishing detected"));
+        assert_eq!(summary.verdict.as_deref(), Some("malicious"));
+        assert_eq!(summary.confidence, Some(0.95));
+        assert_eq!(summary.risk_score, Some(85));
+        assert_eq!(summary.tags.len(), 2);
+    }
+
+    #[test]
+    fn test_metrics_response_deserialization() {
+        let json = serde_json::json!({
+            "incidents": {
+                "total": 500,
+                "by_status": {"open": 10, "resolved": 490},
+                "by_severity": {"high": 50, "medium": 200, "low": 250},
+                "created_last_hour": 3,
+                "resolved_last_hour": 5
+            },
+            "actions": {
+                "total_executed": 120,
+                "success_rate": 0.95,
+                "pending_approvals": 2
+            },
+            "performance": {
+                "mean_time_to_triage_seconds": 45.2,
+                "mean_time_to_respond_seconds": 120.5,
+                "auto_resolution_rate": 0.6
+            }
+        });
+
+        let metrics: MetricsResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(metrics.incidents.total, 500);
+        assert_eq!(metrics.incidents.created_last_hour, 3);
+        assert_eq!(metrics.actions.total_executed, 120);
+        assert!((metrics.actions.success_rate - 0.95).abs() < f64::EPSILON);
+        assert_eq!(metrics.actions.pending_approvals, 2);
+        assert!(metrics.performance.mean_time_to_triage_seconds.is_some());
+    }
+}

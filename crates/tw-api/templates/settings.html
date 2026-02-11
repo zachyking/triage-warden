@@ -32,6 +32,7 @@
   <a href="/settings?tab=privacy" class="tab{% if tab == "privacy" %} active{% endif %}">Privacy</a>
   <a href="/settings?tab=guardrails" class="tab{% if tab == "guardrails" %} active{% endif %}">Guardrails</a>
   <a href="/settings?tab=compliance" class="tab{% if tab == "compliance" %} active{% endif %}">Compliance</a>
+  <a href="/settings?tab=autonomy" class="tab{% if tab == "autonomy" %} active{% endif %}">Autonomy</a>
 </div>
 
 {% if tab == "general" %}
@@ -45,12 +46,12 @@
           hx-on::after-request="if(event.detail.successful) showToast('success', 'Settings Saved', 'General settings have been updated.')">
       <div class="grid grid-2 gap-4">
         <div class="form-group">
-          <label class="form-label">Organization Name</label>
-          <input type="text" name="org_name" class="form-input" value="{{ settings.org_name }}">
+          <label for="settings-org-name" class="form-label">Organization Name</label>
+          <input type="text" id="settings-org-name" name="org_name" class="form-input" value="{{ settings.org_name }}">
         </div>
         <div class="form-group">
-          <label class="form-label">Default Timezone</label>
-          <select name="timezone" class="form-input form-select">
+          <label for="settings-timezone" class="form-label">Default Timezone</label>
+          <select id="settings-timezone" name="timezone" class="form-input form-select">
             <option value="UTC" {% if settings.timezone == "UTC" %}selected{% endif %}>UTC</option>
             <option value="America/New_York" {% if settings.timezone == "America/New_York" %}selected{% endif %}>Eastern Time</option>
             <option value="America/Los_Angeles" {% if settings.timezone == "America/Los_Angeles" %}selected{% endif %}>Pacific Time</option>
@@ -146,11 +147,11 @@
     <table class="table">
       <thead>
         <tr>
-          <th>Name</th>
-          <th>Condition</th>
-          <th>Requires</th>
-          <th>Status</th>
-          <th></th>
+          <th scope="col">Name</th>
+          <th scope="col">Condition</th>
+          <th scope="col">Requires</th>
+          <th scope="col">Status</th>
+          <th scope="col"><span class="sr-only">Actions</span></th>
         </tr>
       </thead>
       <tbody id="policies-table-body">
@@ -209,16 +210,16 @@
           hx-on::after-request="if(event.detail.successful) showToast('success', 'Rate Limits Saved', 'Rate limit settings have been updated.')">
       <div class="grid grid-3 gap-4">
         <div class="form-group">
-          <label class="form-label">Isolate Host (per hour)</label>
-          <input type="number" name="isolate_host_hour" class="form-input" value="{{ rate_limits.isolate_host_hour }}">
+          <label for="rl-isolate-host" class="form-label">Isolate Host (per hour)</label>
+          <input type="number" id="rl-isolate-host" name="isolate_host_hour" class="form-input" value="{{ rate_limits.isolate_host_hour }}">
         </div>
         <div class="form-group">
-          <label class="form-label">Disable User (per hour)</label>
-          <input type="number" name="disable_user_hour" class="form-input" value="{{ rate_limits.disable_user_hour }}">
+          <label for="rl-disable-user" class="form-label">Disable User (per hour)</label>
+          <input type="number" id="rl-disable-user" name="disable_user_hour" class="form-input" value="{{ rate_limits.disable_user_hour }}">
         </div>
         <div class="form-group">
-          <label class="form-label">Block IP (per hour)</label>
-          <input type="number" name="block_ip_hour" class="form-input" value="{{ rate_limits.block_ip_hour }}">
+          <label for="rl-block-ip" class="form-label">Block IP (per hour)</label>
+          <input type="number" id="rl-block-ip" name="block_ip_hour" class="form-input" value="{{ rate_limits.block_ip_hour }}">
         </div>
       </div>
       <button type="submit" class="btn btn-primary mt-4">Save Rate Limits</button>
@@ -240,11 +241,11 @@
     <table class="table">
       <thead>
         <tr>
-          <th>Channel</th>
-          <th>Type</th>
-          <th>Events</th>
-          <th>Status</th>
-          <th></th>
+          <th scope="col">Channel</th>
+          <th scope="col">Type</th>
+          <th scope="col">Events</th>
+          <th scope="col">Status</th>
+          <th scope="col"><span class="sr-only">Actions</span></th>
         </tr>
       </thead>
       <tbody>
@@ -325,7 +326,7 @@
           hx-on::after-request="if(event.detail.successful) showToast('success', 'LLM Settings Saved', 'AI/LLM configuration has been updated.')">
       <div class="grid grid-2 gap-4 mb-4">
         <div class="form-group">
-          <label class="form-label">Provider</label>
+          <label for="llm-provider" class="form-label">Provider</label>
           <select name="provider" class="form-input form-select" id="llm-provider"
                   onchange="updateModelOptions()">
             <option value="openai" {% if llm_settings.provider == "openai" %}selected{% endif %}>OpenAI</option>
@@ -336,7 +337,7 @@
           <p class="text-xs text-muted mt-1">The AI provider to use for analysis and recommendations.</p>
         </div>
         <div class="form-group">
-          <label class="form-label">Model</label>
+          <label for="llm-model" class="form-label">Model</label>
           <select name="model" class="form-input form-select" id="llm-model">
             <!-- OpenAI models -->
             <optgroup label="OpenAI" id="openai-models">
@@ -364,12 +365,12 @@
       </div>
 
       <div class="form-group mb-4">
-        <label class="form-label">API Key</label>
+        <label for="llm-api-key" class="form-label">API Key</label>
         <div class="flex gap-2">
           <input type="password" name="api_key" class="form-input" id="llm-api-key"
                  placeholder="{% if llm_settings.api_key_set %}••••••••••••••••{% else %}Enter API key{% endif %}">
-          <button type="button" class="btn btn-secondary" onclick="toggleApiKeyVisibility()">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <button type="button" class="btn btn-secondary" onclick="toggleApiKeyVisibility()" aria-label="Toggle API key visibility">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
               <circle cx="12" cy="12" r="3"/>
             </svg>
@@ -383,22 +384,22 @@
       </div>
 
       <div class="form-group mb-4" id="base-url-group" {% if llm_settings.provider != "local" && llm_settings.provider != "azure" %}style="display: none;"{% endif %}>
-        <label class="form-label">API Base URL</label>
-        <input type="text" name="base_url" class="form-input" value="{{ llm_settings.base_url }}"
+        <label for="llm-base-url" class="form-label">API Base URL</label>
+        <input type="text" id="llm-base-url" name="base_url" class="form-input" value="{{ llm_settings.base_url }}"
                placeholder="http://localhost:11434">
         <p class="text-xs text-muted mt-1">Required for local providers or Azure OpenAI. Example: http://localhost:11434 for Ollama.</p>
       </div>
 
       <div class="grid grid-2 gap-4 mb-4">
         <div class="form-group">
-          <label class="form-label">Max Tokens</label>
-          <input type="number" name="max_tokens" class="form-input" value="{{ llm_settings.max_tokens }}"
+          <label for="llm-max-tokens" class="form-label">Max Tokens</label>
+          <input type="number" id="llm-max-tokens" name="max_tokens" class="form-input" value="{{ llm_settings.max_tokens }}"
                  min="256" max="128000" step="256">
           <p class="text-xs text-muted mt-1">Maximum tokens for AI responses (256-128000). Higher values allow more detailed analysis.</p>
         </div>
         <div class="form-group">
-          <label class="form-label">Temperature</label>
-          <input type="number" name="temperature" class="form-input" value="{{ llm_settings.temperature }}"
+          <label for="llm-temperature" class="form-label">Temperature</label>
+          <input type="number" id="llm-temperature" name="temperature" class="form-input" value="{{ llm_settings.temperature }}"
                  min="0" max="2" step="0.1">
           <p class="text-xs text-muted mt-1">Response randomness (0-2). Lower values (0.1-0.3) are recommended for consistent triage decisions.</p>
         </div>
@@ -420,9 +421,9 @@
     <table class="table">
       <thead>
         <tr>
-          <th>Provider</th>
-          <th>Environment Variable</th>
-          <th>Example</th>
+          <th scope="col">Provider</th>
+          <th scope="col">Environment Variable</th>
+          <th scope="col">Example</th>
         </tr>
       </thead>
       <tbody>
@@ -468,12 +469,12 @@
     <table class="table">
       <thead>
         <tr>
-          <th>Name</th>
-          <th>Key Prefix</th>
-          <th>Scopes</th>
-          <th>Last Used</th>
-          <th>Expires</th>
-          <th></th>
+          <th scope="col">Name</th>
+          <th scope="col">Key Prefix</th>
+          <th scope="col">Scopes</th>
+          <th scope="col">Last Used</th>
+          <th scope="col">Expires</th>
+          <th scope="col"><span class="sr-only">Actions</span></th>
         </tr>
       </thead>
       <tbody id="api-keys-table-body">
@@ -951,6 +952,70 @@ function updateModelOptions() {
       <div><span class="text-primary">POST</span> /api/compliance/reports/generate</div>
       <div><span class="text-primary">POST</span> /api/audit/immutable/archive</div>
       <div><span class="text-primary">POST</span> /api/audit/immutable/verify/job</div>
+    </div>
+  </div>
+</div>
+{% else if tab == "autonomy" %}
+<!-- Autonomy Configuration -->
+<div class="card mb-4">
+  <div class="card-header">
+    <div>
+      <h3 class="card-title">Autonomy Level</h3>
+      <p class="text-sm text-muted">Control how much independence the AI agent has when responding to incidents.</p>
+    </div>
+  </div>
+  <div class="card-body">
+    <form id="autonomy-form" hx-put="/api/autonomy" hx-swap="none"
+          hx-on::after-request="if(event.detail.successful) showToast('success', 'Autonomy Updated', 'Autonomy settings have been saved.')">
+      <div class="form-group mb-4">
+        <label class="form-label">Autonomy Level</label>
+        <div class="grid grid-2 gap-4">
+          <label class="flex items-start gap-3 p-3 bg-tertiary rounded-md cursor-pointer">
+            <input type="radio" name="level" value="assisted" {% if autonomy_level == "assisted" %}checked{% endif %}>
+            <div>
+              <div class="font-semibold text-sm">Assisted</div>
+              <div class="text-xs text-muted">AI observes and suggests only. All actions require analyst approval.</div>
+            </div>
+          </label>
+          <label class="flex items-start gap-3 p-3 bg-tertiary rounded-md cursor-pointer">
+            <input type="radio" name="level" value="supervised" {% if autonomy_level == "supervised" %}checked{% endif %}>
+            <div>
+              <div class="font-semibold text-sm">Supervised</div>
+              <div class="text-xs text-muted">Low-risk actions auto-execute. High-risk actions need approval.</div>
+            </div>
+          </label>
+          <label class="flex items-start gap-3 p-3 bg-tertiary rounded-md cursor-pointer">
+            <input type="radio" name="level" value="autonomous" {% if autonomy_level == "autonomous" %}checked{% endif %}>
+            <div>
+              <div class="font-semibold text-sm">Autonomous</div>
+              <div class="text-xs text-muted">Most actions auto-execute. Only critical actions require approval.</div>
+            </div>
+          </label>
+          <label class="flex items-start gap-3 p-3 bg-tertiary rounded-md cursor-pointer">
+            <input type="radio" name="level" value="full_autonomous" {% if autonomy_level == "full_autonomous" %}checked{% endif %}>
+            <div>
+              <div class="font-semibold text-sm">Full Autonomous</div>
+              <div class="text-xs text-muted">All actions auto-execute without approval. Use with caution.</div>
+            </div>
+          </label>
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary">Save Autonomy Settings</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">Autonomy API</h3>
+  </div>
+  <div class="card-body">
+    <p class="text-sm text-muted mb-4">
+      Autonomy settings can also be managed via the REST API.
+    </p>
+    <div class="bg-surface p-4 rounded font-mono text-sm">
+      <div><span class="text-primary">GET</span> /api/autonomy</div>
+      <div><span class="text-primary">PUT</span> /api/autonomy</div>
     </div>
   </div>
 </div>
