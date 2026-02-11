@@ -1064,6 +1064,52 @@ pub struct PackageRow {
 }
 
 // ============================================
+// Admin: User Management
+// ============================================
+
+/// Modal template for adding or editing a user.
+#[derive(Template)]
+#[template(path = "admin/user_form.html")]
+pub struct UserFormTemplate {
+    pub is_edit: bool,
+    pub csrf_token: String,
+    pub user_id: Option<Uuid>,
+    pub username: Option<String>,
+    pub email: Option<String>,
+    pub display_name: Option<String>,
+    pub role: Option<String>,
+    pub enabled: Option<bool>,
+}
+
+/// Modal template for resetting a user's password.
+#[derive(Template)]
+#[template(path = "partials/modal_reset_password.html")]
+pub struct ResetPasswordModalTemplate {
+    pub user_id: Uuid,
+    pub username: String,
+    pub csrf_token: String,
+}
+
+/// A single user row for the users table partial.
+pub struct UserRowData {
+    pub id: Uuid,
+    pub username: String,
+    pub email: String,
+    pub display_name_or_username: String,
+    pub role: String,
+    pub enabled: bool,
+    pub last_login_at: Option<String>,
+    pub is_current: bool,
+}
+
+/// Partial template for the users table body (filtered).
+#[derive(Template)]
+#[template(path = "partials/users_table.html")]
+pub struct UsersTablePartialTemplate {
+    pub users: Vec<UserRowData>,
+}
+
+// ============================================
 // Hunting Partials
 // ============================================
 

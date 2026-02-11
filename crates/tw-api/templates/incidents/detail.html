@@ -31,11 +31,7 @@
          id="assignment-container">
     </div>
     {% if incident.status != "resolved" %}
-    <button class="btn btn-primary btn-lg"
-            hx-post="/api/incidents/{{ incident.id }}/actions"
-            hx-vals='{"action": "auto_triage"}'
-            hx-target="#action-result"
-            hx-swap="innerHTML">
+    <button class="btn btn-primary btn-lg" onclick="runAiTriage('{{ incident.id }}')">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
         <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
       </svg>
@@ -464,4 +460,18 @@
     </div>
   </div>
 </div>
+<script>
+function runAiTriage(incidentId) {
+  var el = document.getElementById('action-result');
+  if (el) el.innerHTML = '<p class="text-muted">Running AI triage...</p>';
+  fetch('/api/incidents/' + incidentId + '/actions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'auto_triage' })
+  }).then(function(r) {
+    if (r.ok) { showToast('success', 'AI Triage', 'Triage analysis started.'); location.reload(); }
+    else { r.text().then(function(t) { showToast('error', 'Triage Failed', t || 'Could not run AI triage.'); }); }
+  }).catch(function(err) { showToast('error', 'Triage Failed', err.message); });
+}
+</script>
 {% endblock %}

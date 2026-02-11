@@ -10,14 +10,12 @@
       </button>
     </div>
 
-    <form
+    <form id="user-form"
       {% if is_edit %}
-      hx-put="/api/admin/users/{{ user_id.unwrap() }}"
+      onsubmit="submitUserForm(event, 'PUT', '/api/admin/users/{{ user_id.unwrap() }}')"
       {% else %}
-      hx-post="/api/admin/users"
+      onsubmit="submitUserForm(event, 'POST', '/api/admin/users')"
       {% endif %}
-      hx-target="#users-table-container"
-      hx-swap="innerHTML"
     >
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
@@ -182,3 +180,41 @@
   color: var(--text-primary);
 }
 </style>
+
+<script>
+function submitUserForm(e, method, url) {
+  e.preventDefault();
+  var form = document.getElementById('user-form');
+  var body = {
+    username: form.querySelector('#username').value,
+    email: form.querySelector('#email').value,
+    display_name: form.querySelector('#display_name').value || null,
+    role: form.querySelector('#role').value
+  };
+  var passwordEl = form.querySelector('#password');
+  if (passwordEl) {
+    body.password = passwordEl.value;
+  }
+  var enabledEl = form.querySelector('input[name="enabled"]');
+  if (enabledEl) {
+    body.enabled = enabledEl.checked;
+  }
+  fetch(url, {
+    method: method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  }).then(function(r) {
+    if (r.ok) {
+      form.closest('.modal-backdrop').remove();
+      showToast('success', 'User Saved', method === 'POST' ? 'User has been created.' : 'User has been updated.');
+      htmx.ajax('GET', '/web/partials/users-table', {target: '#users-table-container', swap: 'innerHTML'});
+    } else {
+      r.text().then(function(t) {
+        showToast('error', 'Failed to Save', t || 'Please check your input.');
+      });
+    }
+  }).catch(function(err) {
+    showToast('error', 'Failed to Save', err.message);
+  });
+}
+</script>

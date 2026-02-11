@@ -308,7 +308,7 @@
       <h3 class="card-title">AI / LLM Configuration</h3>
       <p class="text-sm text-muted">Configure the AI model used for incident analysis, triage decisions, and action recommendations.</p>
     </div>
-    <label class="flex items-center gap-2">
+    <div class="flex items-center gap-2">
       <span class="text-sm">LLM Features</span>
       <label class="switch">
         <input type="checkbox" id="llm-enabled-toggle" {% if llm_settings.enabled %}checked{% endif %}
@@ -319,7 +319,7 @@
       <span class="badge badge-{% if llm_settings.enabled %}success{% else %}info{% endif %}">
         {% if llm_settings.enabled %}Enabled{% else %}Disabled{% endif %}
       </span>
-    </label>
+    </div>
   </div>
   <div class="card-body">
     <form id="llm-settings-form" hx-post="/api/settings/llm" hx-swap="none"
@@ -617,11 +617,7 @@ function updateModelOptions() {
           {% endif %}
         </div>
         <button class="btn btn-success"
-                hx-post="/api/kill-switch/deactivate"
-                hx-vals='{"reason": ""}'
-                hx-swap="none"
-                hx-confirm="Are you sure you want to re-enable automation? All playbooks and automated actions will resume."
-                hx-on::after-request="if(event.detail.successful) { showToast('success', 'Automation Resumed', 'The kill switch has been deactivated. Automation may now resume.'); location.reload(); } else { showToast('error', 'Failed', 'Could not deactivate the kill switch.'); }">
+                onclick="if(confirm('Are you sure you want to re-enable automation? All playbooks and automated actions will resume.')) { fetch('/api/kill-switch/deactivate', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({reason:''}) }).then(function(r){ if(r.ok){ showToast('success','Automation Resumed','The kill switch has been deactivated.'); location.reload(); } else { showToast('error','Failed','Could not deactivate the kill switch.'); } }).catch(function(e){ showToast('error','Failed',e.message); }); }">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1" aria-hidden="true">
             <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
             <polyline points="22 4 12 14.01 9 11.01"/>
@@ -660,11 +656,7 @@ function updateModelOptions() {
       {% else %}
       <div class="flex gap-4">
         <button class="btn btn-danger"
-                hx-post="/api/kill-switch/activate"
-                hx-vals='{"reason": ""}'
-                hx-swap="none"
-                hx-confirm="WARNING: This will immediately halt ALL automated actions including playbooks, containment actions, and AI analysis. Are you sure?"
-                hx-on::after-request="if(event.detail.successful) { showToast('warning', 'Kill Switch Activated', 'All automation has been halted.'); location.reload(); } else { showToast('error', 'Failed', 'Could not activate the kill switch.'); }">
+                onclick="if(confirm('WARNING: This will immediately halt ALL automated actions including playbooks, containment actions, and AI analysis. Are you sure?')) { fetch('/api/kill-switch/activate', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({reason:''}) }).then(function(r){ if(r.ok){ showToast('warning','Kill Switch Activated','All automation has been halted.'); location.reload(); } else { showToast('error','Failed','Could not activate the kill switch.'); } }).catch(function(e){ showToast('error','Failed',e.message); }); }">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1" aria-hidden="true">
             <circle cx="12" cy="12" r="10"/>
             <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>

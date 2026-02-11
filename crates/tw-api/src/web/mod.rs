@@ -33,7 +33,7 @@ use tw_core::privacy::RetentionManager;
 use tw_core::rbac::{AccessReview, ReviewStatus};
 use tw_core::{AssetSearchParams, CommentType, IncidentComment, UserFilter};
 
-use crate::auth::{generate_csrf_token, AuthenticatedUser};
+use crate::auth::{generate_csrf_token, AuthenticatedUser, RequireAdmin};
 use crate::error::ApiError;
 use crate::state::AppState;
 use templates::*;
@@ -44,7 +44,7 @@ fn user_to_current_info(user: &User) -> CurrentUserInfo {
     CurrentUserInfo {
         username: user.username.clone(),
         display_name: user.display_name.clone(),
-        role: format!("{:?}", user.role),
+        role: format!("{:?}", user.role).to_lowercase(),
     }
 }
 
@@ -135,6 +135,11 @@ pub fn create_web_router(state: AppState) -> Router {
         .route("/web/partials/hunts", get(partials_hunts))
         .route("/assets", get(assets_list))
         .route("/packages", get(packages_list))
+        // Admin: User Management modals and partials
+        .route("/web/modals/add-user", get(modal_add_user))
+        .route("/web/modals/edit-user/:id", get(modal_edit_user))
+        .route("/web/modals/reset-password/:id", get(modal_reset_password))
+        .route("/web/partials/users-table", get(partials_users_table))
         .with_state(state)
 }
 
@@ -3181,6 +3186,141 @@ fn parse_criticality_opt(s: &str) -> Option<tw_core::models::Criticality> {
         "critical" => Some(Criticality::Critical),
         _ => None,
     }
+}
+
+// ============================================
+// Admin: User Management Handlers
+// ============================================
+
+/// Modal for adding a new user.
+pub(crate) async fn modal_add_user(
+    RequireAdmin(_user): RequireAdmin,
+) -> Result<impl IntoResponse, ApiError> {
+    let template = UserFormTemplate {
+        is_edit: false,
+        csrf_token: generate_csrf_token(),
+        user_id: None,
+        username: None,
+        email: None,
+        display_name: None,
+        role: None,
+        enabled: None,
+    };
+    Ok(HtmlTemplate(template))
+}
+
+/// Modal for editing an existing user.
+pub(crate) async fn modal_edit_user(
+    State(state): State<AppState>,
+    RequireAdmin(admin): RequireAdmin,
+    Path(id): Path<Uuid>,
+) -> Result<Response, ApiError> {
+    let user_repo = create_user_repository(&state.db);
+
+    match user_repo.get_for_tenant(id, admin.tenant_id).await {
+        Ok(Some(target_user)) => {
+            let template = UserFormTemplate {
+                is_edit: true,
+                csrf_token: generate_csrf_token(),
+                user_id: Some(target_user.id),
+                username: Some(target_user.username),
+                email: Some(target_user.email),
+                display_name: target_user.display_name,
+                role: Some(target_user.role.as_str().to_string()),
+                enabled: Some(target_user.enabled),
+            };
+            Ok(HtmlTemplate(template).into_response())
+        }
+        _ => Ok("".into_response()),
+    }
+}
+
+/// Modal for resetting a user's password.
+pub(crate) async fn modal_reset_password(
+    State(state): State<AppState>,
+    RequireAdmin(admin): RequireAdmin,
+    Path(id): Path<Uuid>,
+) -> Result<Response, ApiError> {
+    let user_repo = create_user_repository(&state.db);
+
+    match user_repo.get_for_tenant(id, admin.tenant_id).await {
+        Ok(Some(target_user)) => {
+            let template = ResetPasswordModalTemplate {
+                user_id: target_user.id,
+                username: target_user.username,
+                csrf_token: generate_csrf_token(),
+            };
+            Ok(HtmlTemplate(template).into_response())
+        }
+        _ => Ok("".into_response()),
+    }
+}
+
+/// Query parameters for the users table partial.
+#[derive(Debug, Deserialize)]
+pub(crate) struct UsersTableQuery {
+    #[serde(default)]
+    pub search: Option<String>,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub enabled: Option<String>,
+}
+
+/// Partial handler: returns filtered users table rows.
+pub(crate) async fn partials_users_table(
+    State(state): State<AppState>,
+    RequireAdmin(admin): RequireAdmin,
+    Query(query): Query<UsersTableQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let user_repo = create_user_repository(&state.db);
+
+    let role_filter = query
+        .role
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse::<tw_core::auth::Role>().ok());
+
+    let enabled_filter = query
+        .enabled
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse::<bool>().ok());
+
+    let search_filter = query
+        .search
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    let filter = UserFilter {
+        tenant_id: Some(admin.tenant_id),
+        role: role_filter,
+        enabled: enabled_filter,
+        search: search_filter,
+    };
+
+    let users = user_repo.list(&filter).await.unwrap_or_default();
+
+    let user_rows: Vec<UserRowData> = users
+        .into_iter()
+        .map(|u| {
+            let display = u.display_name.as_deref().unwrap_or(&u.username).to_string();
+            UserRowData {
+                id: u.id,
+                username: u.username.clone(),
+                email: u.email,
+                display_name_or_username: display,
+                role: u.role.as_str().to_string(),
+                enabled: u.enabled,
+                last_login_at: u.last_login_at.map(format_time_ago),
+                is_current: u.id == admin.id,
+            }
+        })
+        .collect();
+
+    let template = UsersTablePartialTemplate { users: user_rows };
+    Ok(HtmlTemplate(template))
 }
 
 // ============================================
