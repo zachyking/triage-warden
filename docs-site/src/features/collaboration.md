@@ -26,21 +26,18 @@ curl -X POST http://localhost:8080/web/incidents/{id}/assign \
 
 ### Auto-Assignment Rules
 
-Create rules that automatically assign incidents based on conditions:
+The system supports rule-based auto-assignment. Rules are defined in the application configuration and evaluated when new incidents arrive. Each rule specifies conditions and an assignee target:
 
-```json
-{
-  "name": "Critical to Senior Analysts",
-  "enabled": true,
-  "conditions": [
-    { "field": "severity", "operator": "equals", "value": "critical" }
-  ],
-  "assignee": { "type": "team", "team_id": "senior-analysts" },
-  "priority": 1
-}
-```
+| Field | Description |
+|-------|-------------|
+| `name` | Human-readable rule name |
+| `conditions` | List of conditions to match (severity, incident type, source, tag) |
+| `assignee` | Who to assign to (see Assignee Targets below) |
+| `priority` | Evaluation order (lower number = higher priority) |
 
-Rules are evaluated in priority order (lower number = higher priority). The first matching rule wins.
+Rules are evaluated in priority order. The first matching rule wins.
+
+> **Note:** Auto-assignment rule management via API is planned for a future release. Rules are currently configured at the application level.
 
 ### Assignee Targets
 
