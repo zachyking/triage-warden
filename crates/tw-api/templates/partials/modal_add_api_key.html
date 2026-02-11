@@ -1,8 +1,8 @@
-<div class="modal-backdrop" onclick="closeModal()"></div>
+<div class="modal-backdrop" onclick="if (event.target === this) this.remove()">
 <div class="modal">
   <div class="modal-header">
     <h3 class="modal-title">Create API Key</h3>
-    <button class="modal-close" onclick="closeModal()" aria-label="Close modal">&times;</button>
+    <button class="modal-close" onclick="this.closest('.modal-backdrop').remove()" aria-label="Close modal">&times;</button>
   </div>
   <form id="add-api-key-form" onsubmit="submitCreateApiKey(event)">
     <div class="modal-body">
@@ -77,10 +77,11 @@
       </div>
     </div>
     <div class="modal-footer">
-      <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      <button type="button" class="btn btn-secondary" onclick="this.closest('.modal-backdrop').remove()">Cancel</button>
       <button type="submit" class="btn btn-primary">Create API Key</button>
     </div>
   </form>
+</div>
 </div>
 
 <script>
@@ -119,50 +120,53 @@ function submitCreateApiKey(e) {
 }
 
 function showApiKeyCreatedModal(rawKey, keyName) {
-  const modalHtml = `
-    <div class="modal-backdrop" onclick="closeModal(); location.reload();"></div>
-    <div class="modal">
-      <div class="modal-header">
-        <h3 class="modal-title">API Key Created</h3>
-      </div>
-      <div class="modal-body">
-        <div class="bg-success-surface p-4 rounded mb-4">
-          <svg class="inline-block mr-2" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
-            <path d="M22 4L12 14.01l-3-3"/>
-          </svg>
-          <span class="font-semibold">Success!</span> Your API key has been created.
-        </div>
+  var container = document.getElementById('modal-container');
+  // Build modal with DOM APIs to avoid XSS
+  var backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.onclick = function(e) { if (e.target === backdrop) { backdrop.remove(); location.reload(); } };
 
-        <div class="bg-warning-surface p-4 rounded mb-4">
-          <svg class="inline-block mr-2" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-          </svg>
-          <span class="font-semibold">Important:</span> This is the only time you will see this key. Copy it now and store it securely.
-        </div>
+  var modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.innerHTML =
+    '<div class="modal-header"><h3 class="modal-title">API Key Created</h3></div>' +
+    '<div class="modal-body">' +
+      '<div class="bg-success-surface p-4 rounded mb-4">' +
+        '<svg class="inline-block mr-2" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">' +
+          '<path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/>' +
+        '</svg>' +
+        '<span class="font-semibold">Success!</span> Your API key has been created.' +
+      '</div>' +
+      '<div class="bg-warning-surface p-4 rounded mb-4">' +
+        '<svg class="inline-block mr-2" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">' +
+          '<path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>' +
+        '</svg>' +
+        '<span class="font-semibold">Important:</span> This is the only time you will see this key. Copy it now and store it securely.' +
+      '</div>' +
+      '<label class="form-label">Your API Key</label>' +
+      '<div class="flex gap-2">' +
+        '<input type="text" class="form-input font-mono" readonly id="new-api-key">' +
+        '<button type="button" class="btn btn-secondary" onclick="copyApiKey()" aria-label="Copy API key">' +
+          '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">' +
+            '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>' +
+            '<path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>' +
+          '</svg> Copy' +
+        '</button>' +
+      '</div>' +
+    '</div>' +
+    '<div class="modal-footer">' +
+      '<button type="button" class="btn btn-primary" onclick="this.closest(\'.modal-backdrop\').remove(); location.reload();">Done</button>' +
+    '</div>';
 
-        <label class="form-label">Your API Key</label>
-        <div class="flex gap-2">
-          <input type="text" class="form-input font-mono" value="${rawKey}" readonly id="new-api-key">
-          <button type="button" class="btn btn-secondary" onclick="copyApiKey()">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-              <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
-            </svg>
-            Copy
-          </button>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-primary" onclick="closeModal(); location.reload();">Done</button>
-      </div>
-    </div>
-  `;
-  document.getElementById('modal-container').innerHTML = modalHtml;
+  backdrop.appendChild(modal);
+  container.innerHTML = '';
+  container.appendChild(backdrop);
+  // Set the key value safely via DOM property (not innerHTML)
+  document.getElementById('new-api-key').value = rawKey;
 }
 
 function copyApiKey() {
-  const input = document.getElementById('new-api-key');
+  var input = document.getElementById('new-api-key');
   input.select();
   document.execCommand('copy');
   showToast('success', 'Copied!', 'API key copied to clipboard.');

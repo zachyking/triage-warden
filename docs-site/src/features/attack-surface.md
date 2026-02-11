@@ -26,10 +26,10 @@ All scanners implement the same trait, making them interchangeable:
 
 ```rust
 pub trait VulnerabilityScanner: Connector {
-    async fn get_vulnerabilities_for_asset(&self, asset_id: &str) -> Vec<Vulnerability>;
-    async fn get_scan_results(&self, scan_id: &str) -> ScanResult;
-    async fn get_recent_vulnerabilities(&self, since: DateTime, limit: Option<usize>) -> Vec<Vulnerability>;
-    async fn get_vulnerability_by_cve(&self, cve_id: &str) -> Option<Vulnerability>;
+    async fn get_vulnerabilities_for_asset(&self, asset_id: &str) -> ConnectorResult<Vec<Vulnerability>>;
+    async fn get_scan_results(&self, scan_id: &str) -> ConnectorResult<ScanResult>;
+    async fn get_recent_vulnerabilities(&self, since: DateTime<Utc>, limit: Option<usize>) -> ConnectorResult<Vec<Vulnerability>>;
+    async fn get_vulnerability_by_cve(&self, cve_id: &str) -> ConnectorResult<Option<Vulnerability>>;
 }
 ```
 
@@ -72,9 +72,9 @@ Query scan results for summary data:
 
 ```rust
 pub trait AttackSurfaceMonitor: Connector {
-    async fn get_exposures(&self, domain: &str) -> Vec<ExternalExposure>;
-    async fn get_asset_exposure(&self, asset_id: &str) -> Vec<ExternalExposure>;
-    async fn get_risk_score(&self, domain: &str) -> Option<f32>;
+    async fn get_exposures(&self, domain: &str) -> ConnectorResult<Vec<ExternalExposure>>;
+    async fn get_asset_exposure(&self, asset_id: &str) -> ConnectorResult<Vec<ExternalExposure>>;
+    async fn get_risk_score(&self, domain: &str) -> ConnectorResult<Option<f32>>;
 }
 ```
 

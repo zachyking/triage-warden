@@ -47,8 +47,6 @@
   </div>
 </div>
 
-<div id="action-result"></div>
-
 <div class="grid grid-2 gap-4">
   <!-- Left Column: Details -->
   <div>
@@ -402,8 +400,12 @@
           }).then(function(r) {
             if (r.ok) {
               r.json().then(function(data) {
-                document.getElementById('action-result').innerHTML =
-                  '<div class="text-success font-semibold mt-2">Action executed: ' + (data.status || 'submitted') + '</div>';
+                var resultEl = document.getElementById('action-result');
+                resultEl.textContent = '';
+                var div = document.createElement('div');
+                div.className = 'text-success font-semibold mt-2';
+                div.textContent = 'Action executed: ' + (data.status || 'submitted');
+                resultEl.appendChild(div);
                 showToast('success', 'Action Executed', 'The action has been submitted.');
               });
             } else { r.text().then(function(t) { showToast('error', 'Action Failed', t || 'Could not execute the action.'); }); }

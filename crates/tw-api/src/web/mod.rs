@@ -44,7 +44,7 @@ fn user_to_current_info(user: &User) -> CurrentUserInfo {
     CurrentUserInfo {
         username: user.username.clone(),
         display_name: user.display_name.clone(),
-        role: format!("{:?}", user.role).to_lowercase(),
+        role: user.role.as_str().to_string(),
     }
 }
 
@@ -2048,7 +2048,12 @@ fn summarize_knowledge_content(content: &str, max_chars: usize) -> String {
     if normalized.len() <= max_chars {
         normalized
     } else {
-        format!("{}...", &normalized[..max_chars])
+        let boundary = normalized
+            .char_indices()
+            .nth(max_chars)
+            .map(|(i, _)| i)
+            .unwrap_or(normalized.len());
+        format!("{}...", &normalized[..boundary])
     }
 }
 
@@ -2483,9 +2488,9 @@ async fn assets_list(
         .into_iter()
         .map(|a| AssetRow {
             name: a.name,
-            asset_type: format!("{:?}", a.asset_type).to_lowercase(),
-            criticality: format!("{:?}", a.criticality).to_lowercase(),
-            environment: format!("{:?}", a.environment).to_lowercase(),
+            asset_type: serde_variant_str(&a.asset_type),
+            criticality: serde_variant_str(&a.criticality),
+            environment: serde_variant_str(&a.environment),
             last_seen: format_time_ago(a.last_seen),
         })
         .collect();
@@ -3217,22 +3222,23 @@ pub(crate) async fn modal_edit_user(
 ) -> Result<Response, ApiError> {
     let user_repo = create_user_repository(&state.db);
 
-    match user_repo.get_for_tenant(id, admin.tenant_id).await {
-        Ok(Some(target_user)) => {
-            let template = UserFormTemplate {
-                is_edit: true,
-                csrf_token: generate_csrf_token(),
-                user_id: Some(target_user.id),
-                username: Some(target_user.username),
-                email: Some(target_user.email),
-                display_name: target_user.display_name,
-                role: Some(target_user.role.as_str().to_string()),
-                enabled: Some(target_user.enabled),
-            };
-            Ok(HtmlTemplate(template).into_response())
-        }
-        _ => Ok("".into_response()),
-    }
+    let target_user = user_repo
+        .get_for_tenant(id, admin.tenant_id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
+
+    let template = UserFormTemplate {
+        is_edit: true,
+        csrf_token: generate_csrf_token(),
+        user_id: Some(target_user.id),
+        username: Some(target_user.username),
+        email: Some(target_user.email),
+        display_name: target_user.display_name,
+        role: Some(target_user.role.as_str().to_string()),
+        enabled: Some(target_user.enabled),
+    };
+    Ok(HtmlTemplate(template).into_response())
 }
 
 /// Modal for resetting a user's password.
@@ -3243,17 +3249,18 @@ pub(crate) async fn modal_reset_password(
 ) -> Result<Response, ApiError> {
     let user_repo = create_user_repository(&state.db);
 
-    match user_repo.get_for_tenant(id, admin.tenant_id).await {
-        Ok(Some(target_user)) => {
-            let template = ResetPasswordModalTemplate {
-                user_id: target_user.id,
-                username: target_user.username,
-                csrf_token: generate_csrf_token(),
-            };
-            Ok(HtmlTemplate(template).into_response())
-        }
-        _ => Ok("".into_response()),
-    }
+    let target_user = user_repo
+        .get_for_tenant(id, admin.tenant_id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
+
+    let template = ResetPasswordModalTemplate {
+        user_id: target_user.id,
+        username: target_user.username,
+        csrf_token: generate_csrf_token(),
+    };
+    Ok(HtmlTemplate(template).into_response())
 }
 
 /// Query parameters for the users table partial.
@@ -3300,7 +3307,10 @@ pub(crate) async fn partials_users_table(
         search: search_filter,
     };
 
-    let users = user_repo.list(&filter).await.unwrap_or_default();
+    let users = user_repo.list(&filter).await.map_err(|e| {
+        tracing::error!("Failed to list users: {e}");
+        ApiError::Internal(e.to_string())
+    })?;
 
     let user_rows: Vec<UserRowData> = users
         .into_iter()

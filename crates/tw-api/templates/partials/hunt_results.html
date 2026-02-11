@@ -14,7 +14,7 @@
       {% for finding in findings %}
       <tr>
         <td>
-          <span class="badge badge-{% if finding.severity == "Critical" %}danger{% elif finding.severity == "High" %}warning{% elif finding.severity == "Medium" %}info{% else %}secondary{% endif %}">
+          <span class="badge badge-{% if finding.severity == "Critical" %}critical{% else if finding.severity == "High" %}high{% else if finding.severity == "Medium" %}medium{% else %}low{% endif %}">
             {{ finding.severity }}
           </span>
         </td>

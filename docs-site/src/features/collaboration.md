@@ -21,7 +21,7 @@ Assign an incident to an analyst through the web UI's assignment picker, or via 
 ```bash
 curl -X POST http://localhost:8080/web/incidents/{id}/assign \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d 'assignee_id=analyst-uuid'
+  -d 'assignee=analyst-uuid'
 ```
 
 ### Auto-Assignment Rules
@@ -123,8 +123,8 @@ Generate structured handoff reports at shift transitions:
 curl -X POST http://localhost:8080/api/v1/handoffs \
   -H "Content-Type: application/json" \
   -d '{
-    "outgoing_shift": "Day Shift",
-    "incoming_shift": "Night Shift",
+    "shift_start": "2025-01-15T08:00:00Z",
+    "shift_end": "2025-01-15T16:00:00Z",
     "notes": "Ongoing phishing campaign targeting finance department"
   }'
 ```
