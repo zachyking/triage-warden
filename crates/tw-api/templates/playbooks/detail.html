@@ -192,7 +192,7 @@
               </div>
               <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button class="btn btn-ghost btn-xs"
-                        hx-get="/web/modals/playbook/{{ playbook.id }}/stage/{{ loop.index0 }}/step/{{ loop.index0 }}/edit"
+                        hx-get="/web/modals/playbook/{{ playbook.id }}/stage/{{ stage.index }}/step/{{ loop.index0 }}/edit"
                         hx-target="#modal-container"
                         hx-swap="innerHTML"
                         title="Edit step"
@@ -203,7 +203,7 @@
                   </svg>
                 </button>
                 <button class="btn btn-ghost btn-xs text-critical"
-                        hx-delete="/api/playbooks/{{ playbook.id }}/stages/{{ loop.index0 }}/steps/{{ loop.index0 }}"
+                        hx-delete="/api/playbooks/{{ playbook.id }}/stages/{{ stage.index }}/steps/{{ loop.index0 }}"
                         hx-confirm="Delete this step?"
                         hx-swap="none"
                         hx-on::after-request="if(event.detail.successful) { location.reload(); }"

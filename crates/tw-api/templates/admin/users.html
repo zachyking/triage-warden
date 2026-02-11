@@ -90,7 +90,7 @@
             <div class="user-info">
               <div class="user-avatar">{{ user.username.chars().next().unwrap_or('?').to_ascii_uppercase() }}</div>
               <div>
-                <div class="user-name">{{ user.display_name.as_deref().unwrap_or(&user.username) }}</div>
+                <div class="user-name">{{ user.display_name_or_username }}</div>
                 <div class="user-username">@{{ user.username }}</div>
               </div>
             </div>

@@ -135,7 +135,8 @@ pub fn create_web_router(state: AppState) -> Router {
         .route("/web/partials/hunts", get(partials_hunts))
         .route("/assets", get(assets_list))
         .route("/packages", get(packages_list))
-        // Admin: User Management modals and partials
+        // Admin: User Management
+        .route("/admin/users", get(admin_users))
         .route("/web/modals/add-user", get(modal_add_user))
         .route("/web/modals/edit-user/:id", get(modal_edit_user))
         .route("/web/modals/reset-password/:id", get(modal_reset_password))
@@ -327,7 +328,7 @@ async fn incident_detail(
                 .into_iter()
                 .map(|e| AuditEntry {
                     timestamp: e.timestamp.format("%H:%M:%S").to_string(),
-                    action: format!("{:?}", e.action),
+                    action: audit_action_str(&e.action),
                     actor: e.actor,
                     details: e.details.map(|v| v.to_string()),
                 })
@@ -390,7 +391,7 @@ async fn approvals(
                     incident_title: extract_title(&incident.alert_data),
                     action_type: format!("{}", action.action_type),
                     description: action.reason.clone(),
-                    target: Some(format!("{:?}", action.target)),
+                    target: Some(action_target_str(&action.target)),
                     risk_level: "high".to_string(),
                     proposed_at: format_time_ago(incident.created_at),
                     proposed_by: "System".to_string(),
@@ -499,7 +500,9 @@ async fn playbook_detail(
                 stages: playbook
                     .stages
                     .into_iter()
-                    .map(|s| PlaybookStageData {
+                    .enumerate()
+                    .map(|(i, s)| PlaybookStageData {
+                        index: i,
                         name: s.name,
                         description: s.description,
                         parallel: s.parallel,
@@ -1272,6 +1275,7 @@ async fn modal_edit_stage(
                 playbook_id: id,
                 stage_index,
                 stage: PlaybookStageData {
+                    index: stage_index,
                     name: stage.name.clone(),
                     description: stage.description.clone(),
                     parallel: stage.parallel,
@@ -1531,10 +1535,11 @@ async fn partials_incident_timeline(
     let events: Vec<TimelineEvent> = entries
         .into_iter()
         .map(|e| {
-            let event_type = classify_timeline_event(&format!("{:?}", e.action));
+            let action_str = audit_action_str(&e.action);
+            let event_type = classify_timeline_event(&action_str);
             TimelineEvent {
                 event_type,
-                title: format!("{:?}", e.action),
+                title: action_str,
                 description: e.actor.clone(),
                 timestamp: e.timestamp.format("%H:%M:%S").to_string(),
                 severity: None,
@@ -1901,10 +1906,11 @@ async fn partials_activity_feed(
     let activities: Vec<ActivityData> = entries
         .into_iter()
         .map(|(incident_id, e)| {
-            let activity_type = classify_timeline_event(&format!("{:?}", e.action));
+            let action_str = audit_action_str(&e.action);
+            let activity_type = classify_timeline_event(&action_str);
             ActivityData {
                 activity_type,
-                description: format!("{:?}", e.action),
+                description: action_str,
                 actor: e.actor,
                 timestamp: format_time_ago(e.timestamp),
                 incident_id: Some(incident_id),
@@ -2183,6 +2189,62 @@ fn serde_variant_str<T: serde::Serialize>(val: &T) -> String {
         .ok()
         .and_then(|v| v.as_str().map(String::from))
         .unwrap_or_default()
+}
+
+/// Human-readable string for EnrichmentType, handling Custom variant.
+fn enrichment_type_str(et: &tw_core::incident::EnrichmentType) -> String {
+    use tw_core::incident::EnrichmentType;
+    match et {
+        EnrichmentType::Custom(s) => s.clone(),
+        other => serde_variant_str(other),
+    }
+}
+
+/// Human-readable string for IoCType, handling Other variant.
+fn ioc_type_str(it: &tw_core::incident::IoCType) -> String {
+    use tw_core::incident::IoCType;
+    match it {
+        IoCType::Other(s) => s.clone(),
+        other => serde_variant_str(other),
+    }
+}
+
+/// Human-readable string for AuditAction.
+fn audit_action_str(action: &tw_core::incident::AuditAction) -> String {
+    use tw_core::incident::AuditAction;
+    match action {
+        AuditAction::IncidentCreated => "Incident Created".to_string(),
+        AuditAction::StatusChanged(status) => format!("Status Changed to {}", status),
+        AuditAction::EnrichmentAdded => "Enrichment Added".to_string(),
+        AuditAction::AnalysisCompleted => "Analysis Completed".to_string(),
+        AuditAction::ActionProposed => "Action Proposed".to_string(),
+        AuditAction::ActionApproved => "Action Approved".to_string(),
+        AuditAction::ActionDenied => "Action Denied".to_string(),
+        AuditAction::ActionExecuted => "Action Executed".to_string(),
+        AuditAction::ActionFailed => "Action Failed".to_string(),
+        AuditAction::TicketCreated => "Ticket Created".to_string(),
+        AuditAction::TicketUpdated => "Ticket Updated".to_string(),
+        AuditAction::CommentAdded => "Comment Added".to_string(),
+        AuditAction::Escalated => "Escalated".to_string(),
+        AuditAction::Closed => "Closed".to_string(),
+    }
+}
+
+/// Human-readable string for ActionTarget.
+fn action_target_str(target: &tw_core::incident::ActionTarget) -> String {
+    use tw_core::incident::ActionTarget;
+    match target {
+        ActionTarget::Host { hostname, ip } => match ip {
+            Some(ip) => format!("{} ({})", hostname, ip),
+            None => hostname.clone(),
+        },
+        ActionTarget::User { username, .. } => username.clone(),
+        ActionTarget::IpAddress(ip) => ip.clone(),
+        ActionTarget::Domain(d) => d.clone(),
+        ActionTarget::Email { message_id } => message_id.clone(),
+        ActionTarget::Ticket { ticket_id } => ticket_id.clone(),
+        ActionTarget::None => "-".to_string(),
+    }
 }
 
 /// Convert a HuntingHunt into a HuntRow for templates.
@@ -2871,7 +2933,7 @@ fn convert_incident_to_detail(
 
     // Convert analysis
     let analysis = incident.analysis.as_ref().map(|a| AnalysisData {
-        verdict: format!("{:?}", a.verdict).to_lowercase(),
+        verdict: serde_variant_str(&a.verdict),
         confidence: (a.confidence * 100.0) as u32,
         risk_score: a.risk_score as u32,
         summary: a.summary.clone(),
@@ -2901,7 +2963,7 @@ fn convert_incident_to_detail(
 
             EnrichmentData {
                 source: e.source.clone(),
-                indicator_type: format!("{:?}", e.enrichment_type),
+                indicator_type: enrichment_type_str(&e.enrichment_type),
                 indicator: e
                     .data
                     .get("indicator")
@@ -2922,7 +2984,7 @@ fn convert_incident_to_detail(
             a.iocs
                 .iter()
                 .map(|ioc| IoCData {
-                    ioc_type: format!("{:?}", ioc.ioc_type),
+                    ioc_type: ioc_type_str(&ioc.ioc_type),
                     value: ioc.value.clone(),
                     threat_level: ioc
                         .score
@@ -2950,8 +3012,8 @@ fn convert_incident_to_detail(
             id: a.id,
             action_type: format!("{}", a.action_type),
             description: a.reason.clone(),
-            target: Some(format!("{:?}", a.target)),
-            status: format!("{:?}", a.approval_status).to_lowercase(),
+            target: Some(action_target_str(&a.target)),
+            status: serde_variant_str(&a.approval_status),
         })
         .collect();
 
@@ -3275,6 +3337,57 @@ pub(crate) struct UsersTableQuery {
 }
 
 /// Partial handler: returns filtered users table rows.
+/// Admin user management page.
+async fn admin_users(
+    State(state): State<AppState>,
+    RequireAdmin(admin): RequireAdmin,
+) -> Result<impl IntoResponse, ApiError> {
+    let repo = create_incident_repository(&state.db);
+    let user_repo = create_user_repository(&state.db);
+    let nav = fetch_nav_counts(repo.as_ref(), admin.tenant_id).await;
+
+    let filter = UserFilter {
+        tenant_id: Some(admin.tenant_id),
+        role: None,
+        enabled: None,
+        search: None,
+    };
+
+    let users = user_repo.list(&filter).await.map_err(|e| {
+        tracing::error!("Failed to list users: {e}");
+        ApiError::Internal(e.to_string())
+    })?;
+
+    let user_rows: Vec<UserRowData> = users
+        .into_iter()
+        .map(|u| {
+            let display = u.display_name.as_deref().unwrap_or(&u.username).to_string();
+            UserRowData {
+                id: u.id,
+                username: u.username.clone(),
+                email: u.email,
+                display_name_or_username: display,
+                role: u.role.as_str().to_string(),
+                enabled: u.enabled,
+                last_login_at: u.last_login_at.map(format_time_ago),
+                is_current: u.id == admin.id,
+            }
+        })
+        .collect();
+
+    let template = AdminUsersTemplate {
+        active_nav: "admin".to_string(),
+        critical_count: nav.critical_count,
+        open_count: nav.open_count,
+        approval_count: nav.approval_count,
+        system_healthy: true,
+        current_user: Some(user_to_current_info(&admin)),
+        csrf_token: generate_csrf_token(),
+        users: user_rows,
+    };
+    Ok(HtmlTemplate(template))
+}
+
 pub(crate) async fn partials_users_table(
     State(state): State<AppState>,
     RequireAdmin(admin): RequireAdmin,

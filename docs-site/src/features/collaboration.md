@@ -57,7 +57,7 @@ Add discussion, analysis notes, and action records to incidents.
 ### Creating a Comment
 
 ```bash
-curl -X POST http://localhost:8080/api/comments \
+curl -X POST http://localhost:8080/api/v1/comments \
   -H "Content-Type: application/json" \
   -d '{
     "incident_id": "incident-uuid",
@@ -81,13 +81,13 @@ curl -X POST http://localhost:8080/api/comments \
 
 ```bash
 # All comments for an incident
-curl "http://localhost:8080/api/comments?incident_id={id}"
+curl "http://localhost:8080/api/v1/comments?incident_id={id}"
 
 # Only analysis comments
-curl "http://localhost:8080/api/comments?incident_id={id}&comment_type=analysis"
+curl "http://localhost:8080/api/v1/comments?incident_id={id}&comment_type=analysis"
 
 # Comments by a specific analyst
-curl "http://localhost:8080/api/comments?author_id={analyst_id}"
+curl "http://localhost:8080/api/v1/comments?author_id={analyst_id}"
 ```
 
 Comments support pagination with `page` and `per_page` query parameters.

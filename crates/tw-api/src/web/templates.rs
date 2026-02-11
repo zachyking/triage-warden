@@ -250,6 +250,7 @@ pub struct PlaybookDetailData {
 }
 
 pub struct PlaybookStageData {
+    pub index: usize,
     pub name: String,
     pub description: Option<String>,
     pub parallel: bool,
@@ -1106,6 +1107,20 @@ pub struct UserRowData {
 #[derive(Template)]
 #[template(path = "partials/users_table.html")]
 pub struct UsersTablePartialTemplate {
+    pub users: Vec<UserRowData>,
+}
+
+/// Full page template for user management (admin/users.html).
+#[derive(Template)]
+#[template(path = "admin/users.html")]
+pub struct AdminUsersTemplate {
+    pub active_nav: String,
+    pub critical_count: u32,
+    pub open_count: u32,
+    pub approval_count: u32,
+    pub system_healthy: bool,
+    pub current_user: Option<CurrentUserInfo>,
+    pub csrf_token: String,
     pub users: Vec<UserRowData>,
 }
 
