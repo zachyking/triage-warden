@@ -53,7 +53,7 @@
     <div class="flex gap-4 items-center">
       <div class="form-group" style="margin-bottom:0">
         <label for="filter-status" class="sr-only">Filter by status</label>
-        <select class="form-input form-select" id="filter-status"
+        <select class="form-input form-select" id="filter-status" name="filter-status"
                 hx-get="/web/partials/hunts"
                 hx-target="#hunts-table-body"
                 hx-include="[id^=filter-]"
@@ -69,7 +69,7 @@
       </div>
       <div class="form-group" style="margin-bottom:0">
         <label for="filter-type" class="sr-only">Filter by type</label>
-        <select class="form-input form-select" id="filter-type"
+        <select class="form-input form-select" id="filter-type" name="filter-type"
                 hx-get="/web/partials/hunts"
                 hx-target="#hunts-table-body"
                 hx-include="[id^=filter-]"
@@ -83,7 +83,7 @@
       </div>
       <div class="form-group" style="margin-bottom:0">
         <label for="filter-category" class="sr-only">Filter by category</label>
-        <select class="form-input form-select" id="filter-category"
+        <select class="form-input form-select" id="filter-category" name="filter-category"
                 hx-get="/web/partials/hunts"
                 hx-target="#hunts-table-body"
                 hx-include="[id^=filter-]"

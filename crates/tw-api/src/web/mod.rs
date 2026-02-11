@@ -130,6 +130,7 @@ pub fn create_web_router(state: AppState) -> Router {
         .route("/web/partials/lessons", get(partials_lessons))
         // Stage 5: Hunting, Assets, Packages
         .route("/hunting", get(hunting))
+        .route("/hunting/:id", get(hunting_detail))
         .route("/web/modals/add-hunt", get(modal_add_hunt))
         .route("/web/partials/hunts", get(partials_hunts))
         .route("/assets", get(assets_list))
@@ -971,13 +972,8 @@ async fn settings(
         latest_archive_location,
     };
 
-    // Read autonomy level from settings (defaults to "supervised")
-    let autonomy_level = settings_repo
-        .get_raw(tenant_id, "autonomy_level_v1")
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "supervised".to_string());
+    // Read autonomy level from the in-memory autonomy config store
+    let autonomy_level = crate::routes::autonomy::get_autonomy_level_for_tenant(tenant_id).await;
 
     let template = SettingsTemplate {
         active_nav: "settings".to_string(),
@@ -2171,6 +2167,37 @@ const HUNTS_SETTINGS_KEY: &str = "hunting_hunts_v1";
 const HUNT_RESULTS_SETTINGS_KEY: &str = "hunting_results_v1";
 const PACKAGES_SETTINGS_KEY: &str = "content_packages_v1";
 
+/// Serialize a serde enum variant to its snake_case JSON string (e.g. OnDemand → "on_demand").
+fn serde_variant_str<T: serde::Serialize>(val: &T) -> String {
+    serde_json::to_value(val)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default()
+}
+
+/// Convert a HuntingHunt into a HuntRow for templates.
+fn hunt_to_row(h: &HuntingHunt) -> HuntRow {
+    let status_color = match h.status {
+        HuntStatus::Active => "success".to_string(),
+        HuntStatus::Draft => "info".to_string(),
+        HuntStatus::Paused => "warning".to_string(),
+        HuntStatus::Completed => "accent".to_string(),
+        HuntStatus::Failed => "critical".to_string(),
+        HuntStatus::Archived => "info".to_string(),
+    };
+    HuntRow {
+        id: h.id,
+        name: h.name.clone(),
+        hypothesis: h.hypothesis.clone(),
+        hunt_type: serde_variant_str(&h.hunt_type),
+        status: serde_variant_str(&h.status),
+        status_color,
+        mitre_techniques: h.mitre_techniques.clone(),
+        last_run: h.last_run.map(format_time_ago),
+        last_result_total: h.last_result.as_ref().map(|r| r.total_findings as u32),
+    }
+}
+
 /// Threat hunting page.
 async fn hunting(
     State(state): State<AppState>,
@@ -2213,32 +2240,7 @@ async fn hunting(
         .map(|r| r.findings.len() as u32)
         .sum();
 
-    let hunt_rows: Vec<HuntRow> = hunts
-        .iter()
-        .map(|h| {
-            let status_str = format!("{:?}", h.status).to_lowercase();
-            let status_color = match h.status {
-                HuntStatus::Active => "success".to_string(),
-                HuntStatus::Draft => "info".to_string(),
-                HuntStatus::Paused => "warning".to_string(),
-                HuntStatus::Completed => "accent".to_string(),
-                HuntStatus::Failed => "critical".to_string(),
-                HuntStatus::Archived => "info".to_string(),
-            };
-            let last_result_total = h.last_result.as_ref().map(|r| r.total_findings as u32);
-            HuntRow {
-                id: h.id,
-                name: h.name.clone(),
-                hypothesis: h.hypothesis.clone(),
-                hunt_type: format!("{:?}", h.hunt_type).to_lowercase(),
-                status: status_str,
-                status_color,
-                mitre_techniques: h.mitre_techniques.clone(),
-                last_run: h.last_run.map(format_time_ago),
-                last_result_total,
-            }
-        })
-        .collect();
+    let hunt_rows: Vec<HuntRow> = hunts.iter().map(hunt_to_row).collect();
 
     let template = HuntingTemplate {
         active_nav: "hunting".to_string(),
@@ -2256,6 +2258,64 @@ async fn hunting(
     };
 
     Ok(HtmlTemplate(template))
+}
+
+/// Hunt detail page.
+async fn hunting_detail(
+    State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
+    Path(hunt_id): Path<Uuid>,
+) -> Result<Response, ApiError> {
+    let repo = create_incident_repository(&state.db);
+    let nav = fetch_nav_counts(repo.as_ref(), user.tenant_id).await;
+
+    let settings_repo = create_settings_repository(&state.db, state.encryptor.clone());
+    let hunts: Vec<HuntingHunt> = settings_repo
+        .get_raw(user.tenant_id, HUNTS_SETTINGS_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default();
+
+    let hunt = hunts.iter().find(|h| h.id == hunt_id);
+    let Some(hunt) = hunt else {
+        return Err(ApiError::NotFound("Hunt not found".to_string()));
+    };
+
+    let results: Vec<tw_core::hunting::HuntResult> = settings_repo
+        .get_raw(user.tenant_id, HUNT_RESULTS_SETTINGS_KEY)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default();
+
+    let hunt_results: Vec<_> = results.iter().filter(|r| r.hunt_id == hunt_id).collect();
+    let total_findings: u32 = hunt_results.iter().map(|r| r.findings.len() as u32).sum();
+
+    let row = hunt_to_row(hunt);
+
+    let template = HuntDetailTemplate {
+        active_nav: "hunting".to_string(),
+        critical_count: nav.critical_count,
+        open_count: nav.open_count,
+        approval_count: nav.approval_count,
+        system_healthy: true,
+        current_user: Some(user_to_current_info(&user)),
+        csrf_token: generate_csrf_token(),
+        hunt: row,
+        description: hunt.description.clone(),
+        data_sources: hunt.data_sources.clone(),
+        tags: hunt.tags.clone(),
+        queries_count: hunt.queries.len() as u32,
+        total_findings,
+        results_count: hunt_results.len() as u32,
+        enabled: hunt.enabled,
+        created_at: format_time_ago(hunt.created_at),
+    };
+
+    Ok(HtmlTemplate(template).into_response())
 }
 
 /// Modal for creating a new hunt.
@@ -2294,17 +2354,11 @@ async fn partials_hunts(
     let hunt_rows: Vec<HuntRow> = hunts
         .iter()
         .filter(|h| {
-            if !query.status.is_empty() {
-                let status_str = format!("{:?}", h.status).to_lowercase();
-                if status_str != query.status {
-                    return false;
-                }
+            if !query.status.is_empty() && serde_variant_str(&h.status) != query.status {
+                return false;
             }
-            if !query.hunt_type.is_empty() {
-                let type_str = format!("{:?}", h.hunt_type).to_lowercase();
-                if type_str != query.hunt_type {
-                    return false;
-                }
+            if !query.hunt_type.is_empty() && serde_variant_str(&h.hunt_type) != query.hunt_type {
+                return false;
             }
             if !query.category.is_empty() {
                 let matches_category = h.mitre_techniques.iter().any(|t| {
@@ -2328,29 +2382,7 @@ async fn partials_hunts(
             }
             true
         })
-        .map(|h| {
-            let status_str = format!("{:?}", h.status).to_lowercase();
-            let status_color = match h.status {
-                HuntStatus::Active => "success".to_string(),
-                HuntStatus::Draft => "info".to_string(),
-                HuntStatus::Paused => "warning".to_string(),
-                HuntStatus::Completed => "accent".to_string(),
-                HuntStatus::Failed => "critical".to_string(),
-                HuntStatus::Archived => "info".to_string(),
-            };
-            let last_result_total = h.last_result.as_ref().map(|r| r.total_findings as u32);
-            HuntRow {
-                id: h.id,
-                name: h.name.clone(),
-                hypothesis: h.hypothesis.clone(),
-                hunt_type: format!("{:?}", h.hunt_type).to_lowercase(),
-                status: status_str,
-                status_color,
-                mitre_techniques: h.mitre_techniques.clone(),
-                last_run: h.last_run.map(format_time_ago),
-                last_result_total,
-            }
-        })
+        .map(hunt_to_row)
         .collect();
 
     let template = HuntsPartialTemplate { hunts: hunt_rows };

@@ -28,10 +28,7 @@
     <p class="text-sm text-muted mb-4">
       Paste the JSON content package below. Packages can include playbooks, hunting queries, and other content.
     </p>
-    <form id="pkg-import" hx-post="/api/v1/packages/import" hx-swap="none"
-          hx-ext="json-enc"
-          hx-on::before-request="try { const ta = document.getElementById('pkg-json'); const parsed = JSON.parse(ta.value); event.detail.requestConfig.headers['Content-Type'] = 'application/json'; event.detail.requestConfig.parameters = JSON.stringify(parsed); } catch(e) { event.preventDefault(); showToast('error', 'Invalid JSON', e.message); }"
-          hx-on::after-request="if(event.detail.successful) { showToast('success', 'Package Imported', 'Content package has been imported successfully.'); location.reload(); } else { showToast('error', 'Import Failed', 'Could not import the package. Check the format and try again.'); }">
+    <form id="pkg-import" onsubmit="event.preventDefault(); submitPackageImport();">
       <div class="form-group">
         <label for="pkg-json" class="form-label">Package JSON</label>
         <textarea id="pkg-json" name="package" class="form-input form-textarea" rows="8"

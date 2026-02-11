@@ -51,6 +51,16 @@ fn default_config_for_tenant(tenant_id: Uuid) -> AutonomyConfig {
     }
 }
 
+/// Returns the current default autonomy level string for the given tenant.
+pub(crate) async fn get_autonomy_level_for_tenant(tenant_id: Uuid) -> String {
+    let configs = autonomy_configs().read().await;
+    let config = configs
+        .get(&tenant_id)
+        .cloned()
+        .unwrap_or_else(|| default_config_for_tenant(tenant_id));
+    config.default_level.as_db_str().to_string()
+}
+
 // ============================================================================
 // DTOs
 // ============================================================================

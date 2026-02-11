@@ -8,7 +8,7 @@
         </svg>
       </button>
     </div>
-    <form hx-post="/api/v1/hunts" hx-swap="none" hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); showToast('success', 'Hunt Created', 'New threat hunt has been created.'); location.reload(); } else { showToast('error', 'Failed to Create Hunt', 'Please check your configuration.'); }">
+    <form id="create-hunt-form" onsubmit="submitCreateHunt(event)">
       <div class="modal-body">
         <div class="form-group">
           <label for="hunt-name" class="form-label">Hunt Name</label>
@@ -50,7 +50,7 @@
         <div class="form-group">
           <div class="flex items-center gap-3">
             <label class="switch">
-              <input type="checkbox" name="enabled" value="true">
+              <input type="checkbox" id="hunt-enabled" name="enabled" value="true">
               <span class="switch-track"></span>
               <span class="switch-thumb"></span>
             </label>
@@ -63,5 +63,34 @@
         <button type="submit" class="btn btn-primary">Create Hunt</button>
       </div>
     </form>
+    <script>
+    function submitCreateHunt(e) {
+      e.preventDefault();
+      const form = document.getElementById('create-hunt-form');
+      const body = {
+        name: form.querySelector('#hunt-name').value,
+        hypothesis: form.querySelector('#hunt-hypothesis').value
+      };
+      const desc = form.querySelector('#hunt-description').value;
+      if (desc) body.description = desc;
+      body.hunt_type = form.querySelector('#hunt-type').value;
+      const mitre = form.querySelector('#hunt-mitre').value;
+      if (mitre) body.mitre_techniques = mitre.split(',').map(s => s.trim()).filter(Boolean);
+      const tags = form.querySelector('#hunt-tags').value;
+      if (tags) body.tags = tags.split(',').map(s => s.trim()).filter(Boolean);
+      body.enabled = form.querySelector('#hunt-enabled').checked;
+      fetch('/api/v1/hunts', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      }).then(r => {
+        if (r.ok) {
+          form.closest('.modal-backdrop').remove();
+          showToast('success', 'Hunt Created', 'New threat hunt has been created.');
+          location.reload();
+        } else { r.text().then(t => showToast('error', 'Failed to Create Hunt', t || 'Please check your configuration.')); }
+      }).catch(err => showToast('error', 'Failed to Create Hunt', err.message));
+    }
+    </script>
   </div>
 </div>

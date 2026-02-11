@@ -8,7 +8,7 @@
         </svg>
       </button>
     </div>
-    <form hx-post="/api/connectors" hx-swap="none" hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); showToast('success', 'Connector Added', 'New connector has been configured.'); location.reload(); } else { showToast('error', 'Failed to Add Connector', 'Please check your configuration and try again.'); }">
+    <form id="add-connector-form" onsubmit="submitAddConnector(event)">
       <div class="modal-body">
         <div class="form-group">
           <label for="connector-type" class="form-label">Connector Type</label>
@@ -199,5 +199,27 @@ function updateConnectorFields(type) {
   }
 
   container.innerHTML = fields;
+}
+
+function submitAddConnector(e) {
+  e.preventDefault();
+  var form = document.getElementById('add-connector-form');
+  var connectorType = form.querySelector('#connector-type').value;
+  var name = form.querySelector('#connector-name').value;
+  if (!connectorType || !name) { showToast('error', 'Required', 'Please fill in all required fields.'); return; }
+  // Collect dynamic config fields
+  var config = {};
+  form.querySelectorAll('#connector-fields input, #connector-fields select').forEach(function(el) {
+    if (el.name && el.value) config[el.name] = el.value;
+  });
+  var enabled = form.querySelector('input[name="enabled"]');
+  fetch('/api/connectors', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: name, connector_type: connectorType, config: config, enabled: enabled ? enabled.checked : true })
+  }).then(function(r) {
+    if (r.ok) { form.closest('.modal-backdrop').remove(); showToast('success', 'Connector Added', 'New connector has been configured.'); location.reload(); }
+    else { r.text().then(function(t) { showToast('error', 'Failed to Add Connector', t || 'Please check your configuration.'); }); }
+  }).catch(function(err) { showToast('error', 'Failed to Add Connector', err.message); });
 }
 </script>

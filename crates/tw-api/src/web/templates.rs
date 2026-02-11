@@ -983,6 +983,28 @@ pub struct HuntRow {
     pub last_result_total: Option<u32>,
 }
 
+/// Hunt detail page.
+#[derive(Template)]
+#[template(path = "hunting_detail.html")]
+pub struct HuntDetailTemplate {
+    pub active_nav: String,
+    pub critical_count: u32,
+    pub open_count: u32,
+    pub approval_count: u32,
+    pub system_healthy: bool,
+    pub current_user: Option<CurrentUserInfo>,
+    pub csrf_token: String,
+    pub hunt: HuntRow,
+    pub description: String,
+    pub data_sources: Vec<String>,
+    pub tags: Vec<String>,
+    pub queries_count: u32,
+    pub total_findings: u32,
+    pub results_count: u32,
+    pub enabled: bool,
+    pub created_at: String,
+}
+
 // ============================================
 // Assets Page
 // ============================================

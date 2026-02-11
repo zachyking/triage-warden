@@ -8,7 +8,7 @@
         </svg>
       </button>
     </div>
-    <form hx-put="/api/v1/hunts/{{ hunt.id }}" hx-swap="none" hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); showToast('success', 'Hunt Updated', 'Hunt has been updated.'); location.reload(); } else { showToast('error', 'Failed to Update', 'Please check your configuration.'); }">
+    <form id="edit-hunt-form" onsubmit="submitEditHunt(event, '{{ hunt.id }}')">
       <div class="modal-body">
         <div class="form-group">
           <label for="edit-hunt-name" class="form-label">Hunt Name</label>
@@ -60,7 +60,7 @@
         <div class="form-group">
           <div class="flex items-center gap-3">
             <label class="switch">
-              <input type="checkbox" name="enabled" value="true" {% if hunt.enabled %}checked{% endif %}>
+              <input type="checkbox" id="edit-hunt-enabled" name="enabled" value="true" {% if hunt.enabled %}checked{% endif %}>
               <span class="switch-track"></span>
               <span class="switch-thumb"></span>
             </label>
@@ -73,5 +73,32 @@
         <button type="submit" class="btn btn-primary">Save Changes</button>
       </div>
     </form>
+    <script>
+    function submitEditHunt(e, huntId) {
+      e.preventDefault();
+      var form = document.getElementById('edit-hunt-form');
+      var body = {
+        name: form.querySelector('#edit-hunt-name').value,
+        hypothesis: form.querySelector('#edit-hunt-hypothesis').value,
+        hunt_type: form.querySelector('#edit-hunt-type').value,
+        status: form.querySelector('#edit-hunt-status').value,
+        enabled: form.querySelector('#edit-hunt-enabled').checked
+      };
+      var desc = form.querySelector('#edit-hunt-description').value;
+      if (desc) body.description = desc;
+      var mitre = form.querySelector('#edit-hunt-mitre').value;
+      if (mitre) body.mitre_techniques = mitre.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+      var tags = form.querySelector('#edit-hunt-tags').value;
+      if (tags) body.tags = tags.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+      fetch('/api/v1/hunts/' + huntId, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }).then(function(r) {
+        if (r.ok) { form.closest('.modal-backdrop').remove(); showToast('success', 'Hunt Updated', 'Hunt has been updated.'); location.reload(); }
+        else { r.text().then(function(t) { showToast('error', 'Failed to Update', t || 'Please check your configuration.'); }); }
+      }).catch(function(err) { showToast('error', 'Failed to Update', err.message); });
+    }
+    </script>
   </div>
 </div>
