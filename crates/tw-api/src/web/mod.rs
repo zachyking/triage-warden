@@ -2469,6 +2469,24 @@ async fn partials_hunts(
     let hunts: Vec<HuntingHunt> =
         load_settings_json(settings_repo.as_ref(), user.tenant_id, HUNTS_SETTINGS_KEY).await;
 
+    // Build MITRE technique → category lookup from the built-in query library
+    // (only when category filter is active, avoids hardcoded mapping)
+    let technique_map: std::collections::HashMap<String, String> = if query.category.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        let mut map = std::collections::HashMap::new();
+        for q in tw_core::hunting::get_built_in_queries() {
+            let cat = serde_variant_str(&q.category);
+            for tech in &q.mitre_techniques {
+                map.insert(tech.clone(), cat.clone());
+                if let Some(base) = tech.split('.').next() {
+                    map.entry(base.to_string()).or_insert_with(|| cat.clone());
+                }
+            }
+        }
+        map
+    };
+
     let hunt_rows: Vec<HuntRow> = hunts
         .iter()
         .filter(|h| {
@@ -2480,19 +2498,11 @@ async fn partials_hunts(
             }
             if !query.category.is_empty() {
                 let matches_category = h.mitre_techniques.iter().any(|t| {
-                    // Map MITRE technique prefixes to categories
-                    let cat = match t.split('.').next().unwrap_or("") {
-                        "T1078" | "T1190" | "T1566" => "initial_access",
-                        "T1087" | "T1082" | "T1083" => "discovery",
-                        "T1003" | "T1110" | "T1558" => "credential_access",
-                        "T1021" | "T1570" => "lateral_movement",
-                        "T1053" | "T1547" | "T1543" => "persistence",
-                        "T1041" | "T1048" | "T1567" => "exfiltration",
-                        "T1071" | "T1095" | "T1573" => "command_and_control",
-                        "T1068" | "T1548" | "T1134" => "privilege_escalation",
-                        _ => "",
-                    };
-                    cat == query.category
+                    let base = t.split('.').next().unwrap_or("");
+                    technique_map
+                        .get(t.as_str())
+                        .or_else(|| technique_map.get(base))
+                        == Some(&query.category)
                 });
                 if !matches_category {
                     return false;
