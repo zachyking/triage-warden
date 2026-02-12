@@ -465,14 +465,14 @@
 <script>
 function runAiTriage(incidentId) {
   var el = document.getElementById('action-result');
-  if (el) el.innerHTML = '<p class="text-muted">Running AI triage...</p>';
+  if (el) el.textContent = 'Running AI triage...';
   csrfFetch('/api/incidents/' + incidentId + '/actions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action: 'auto_triage' })
+    body: JSON.stringify({ action_type: 'auto_triage', target: { type: 'none' }, reason: 'Automated AI triage requested by analyst' })
   }).then(function(r) {
     if (r.ok) { showToast('success', 'AI Triage', 'Triage analysis started.'); location.reload(); }
-    else { r.text().then(function(t) { showToast('error', 'Triage Failed', t || 'Could not run AI triage.'); }); }
+    else { return r.text().then(function(t) { showToast('error', 'Triage Failed', t || 'Could not run AI triage.'); }); }
   }).catch(function(err) { showToast('error', 'Triage Failed', err.message); });
 }
 </script>

@@ -72,7 +72,7 @@
             hx-delete="/api/admin/users/{{ user.id }}"
             hx-confirm="Are you sure you want to delete this user?"
             hx-swap="none"
-            hx-on::after-request="if(event.detail.successful) { showToast('success', 'User Deleted', 'The user has been removed.'); htmx.ajax('GET', '/web/partials/users-table', {target: '#users-table-container', swap: 'innerHTML'}); }"
+            hx-on::after-request="if(event.detail.successful) { showToast('success', 'User Deleted', 'The user has been removed.'); htmx.ajax('GET', '/web/partials/users-table', {target: '#users-table-container', swap: 'innerHTML'}); } else { showToast('error', 'Delete Failed', 'Could not delete the user.'); }"
             title="Delete user"
             aria-label="Delete user"
           >
