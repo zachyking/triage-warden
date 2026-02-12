@@ -191,7 +191,7 @@
               document.getElementById('feedback-section').innerHTML =
                 '<div class="text-success font-semibold py-4">Thank you for your feedback!</div>';
               showToast('success', 'Feedback Submitted', 'Thank you for your feedback on this analysis.');
-            } else { r.text().then(t => showToast('error', 'Submission Failed', t || 'Could not submit feedback.')); }
+            } else { return r.text().then(t => showToast('error', 'Submission Failed', t || 'Could not submit feedback.')); }
           }).catch(err => showToast('error', 'Submission Failed', err.message));
         }
         </script>
@@ -399,7 +399,7 @@
             body: JSON.stringify({ action_type: actionType, target: target, reason: reason })
           }).then(function(r) {
             if (r.ok) {
-              r.json().then(function(data) {
+              return r.json().then(function(data) {
                 var resultEl = document.getElementById('action-result');
                 resultEl.textContent = '';
                 var div = document.createElement('div');
@@ -408,7 +408,7 @@
                 resultEl.appendChild(div);
                 showToast('success', 'Action Executed', 'The action has been submitted.');
               });
-            } else { r.text().then(function(t) { showToast('error', 'Action Failed', t || 'Could not execute the action.'); }); }
+            } else { return r.text().then(function(t) { showToast('error', 'Action Failed', t || 'Could not execute the action.'); }); }
           }).catch(function(err) { showToast('error', 'Action Failed', err.message); });
         }
         </script>

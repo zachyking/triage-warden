@@ -1004,7 +1004,7 @@ function updateModelOptions() {
         body: JSON.stringify({ default_level: selected.value })
       }).then(r => {
         if (r.ok) { showToast('success', 'Autonomy Updated', 'Autonomy settings have been saved.'); }
-        else { r.text().then(t => showToast('error', 'Update Failed', t || 'Could not save autonomy settings.')); }
+        else { return r.text().then(t => showToast('error', 'Update Failed', t || 'Could not save autonomy settings.')); }
       }).catch(err => showToast('error', 'Update Failed', err.message));
     }
     </script>

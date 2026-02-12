@@ -209,7 +209,7 @@ function submitUserForm(e, method, url) {
       showToast('success', 'User Saved', method === 'POST' ? 'User has been created.' : 'User has been updated.');
       htmx.ajax('GET', '/web/partials/users-table', {target: '#users-table-container', swap: 'innerHTML'});
     } else {
-      r.text().then(function(t) {
+      return r.text().then(function(t) {
         showToast('error', 'Failed to Save', t || 'Please check your input.');
       });
     }

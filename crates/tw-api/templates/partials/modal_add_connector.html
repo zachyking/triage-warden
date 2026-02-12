@@ -219,7 +219,7 @@ function submitAddConnector(e) {
     body: JSON.stringify({ name: name, connector_type: connectorType, config: config, enabled: enabled ? enabled.checked : true })
   }).then(function(r) {
     if (r.ok) { form.closest('.modal-backdrop').remove(); showToast('success', 'Connector Added', 'New connector has been configured.'); location.reload(); }
-    else { r.text().then(function(t) { showToast('error', 'Failed to Add Connector', t || 'Please check your configuration.'); }); }
+    else { return r.text().then(function(t) { showToast('error', 'Failed to Add Connector', t || 'Please check your configuration.'); }); }
   }).catch(function(err) { showToast('error', 'Failed to Add Connector', err.message); });
 }
 </script>

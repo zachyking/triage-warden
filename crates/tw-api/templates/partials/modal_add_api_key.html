@@ -104,11 +104,11 @@ function submitCreateApiKey(e) {
     body: JSON.stringify(body)
   }).then(function(r) {
     if (r.ok) {
-      r.json().then(function(response) {
+      return r.json().then(function(response) {
         showApiKeyCreatedModal(response.raw_key, response.name);
       });
     } else {
-      r.json().then(function(error) {
+      return r.json().then(function(error) {
         showToast('error', 'Failed to Create Key', error.message || 'An error occurred.');
       }).catch(function() {
         showToast('error', 'Failed to Create Key', 'An unexpected error occurred.');

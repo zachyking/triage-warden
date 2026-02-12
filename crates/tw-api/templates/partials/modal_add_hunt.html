@@ -88,7 +88,7 @@
           form.closest('.modal-backdrop').remove();
           showToast('success', 'Hunt Created', 'New threat hunt has been created.');
           location.reload();
-        } else { r.text().then(t => showToast('error', 'Failed to Create Hunt', t || 'Please check your configuration.')); }
+        } else { return r.text().then(t => showToast('error', 'Failed to Create Hunt', t || 'Please check your configuration.')); }
       }).catch(err => showToast('error', 'Failed to Create Hunt', err.message));
     }
     </script>

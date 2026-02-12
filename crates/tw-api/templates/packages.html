@@ -51,7 +51,7 @@
           body: JSON.stringify(body)
         }).then(r => {
           if (r.ok) { showToast('success', 'Package Imported', 'Content package has been imported successfully.'); location.reload(); }
-          else { r.text().then(t => showToast('error', 'Import Failed', t || 'Check the format and try again.')); }
+          else { return r.text().then(t => showToast('error', 'Import Failed', t || 'Check the format and try again.')); }
         }).catch(e => showToast('error', 'Import Failed', e.message));
       } catch(e) { showToast('error', 'Invalid JSON', e.message); }
     }

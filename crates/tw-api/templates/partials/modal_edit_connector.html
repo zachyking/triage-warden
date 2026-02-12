@@ -291,7 +291,7 @@
         body: JSON.stringify(body)
       }).then(function(r) {
         if (r.ok) { form.closest('.modal-backdrop').remove(); showToast('success', 'Connector Updated', 'Connector configuration has been saved.'); location.reload(); }
-        else { r.text().then(function(t) { showToast('error', 'Failed to Update', t || 'Please check your configuration.'); }); }
+        else { return r.text().then(function(t) { showToast('error', 'Failed to Update', t || 'Please check your configuration.'); }); }
       }).catch(function(err) { showToast('error', 'Failed to Update', err.message); });
     }
     </script>
