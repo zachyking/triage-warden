@@ -188,7 +188,7 @@ function submitUserForm(e, method, url) {
   var body = {
     username: form.querySelector('#username').value,
     email: form.querySelector('#email').value,
-    display_name: form.querySelector('#display_name').value || null,
+    display_name: form.querySelector('#display_name').value,
     role: form.querySelector('#role').value
   };
   var passwordEl = form.querySelector('#password');
