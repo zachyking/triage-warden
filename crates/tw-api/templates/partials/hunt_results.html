@@ -33,7 +33,7 @@
           <button class="btn btn-secondary btn-sm"
                   hx-post="/api/v1/hunts/{{ finding.hunt_id }}/findings/{{ finding.id }}/promote"
                   hx-swap="none"
-                  hx-on::after-request="if(event.detail.successful) { showToast('success', 'Finding Promoted', 'An incident has been created from this finding.'); location.reload(); }">
+                  hx-on::after-request="if(event.detail.successful) { showToast('success', 'Finding Promoted', 'An incident has been created from this finding.'); location.reload(); } else { showToast('error', 'Promotion Failed', 'Could not promote finding to incident.'); }">
             Promote
           </button>
           {% endmatch %}

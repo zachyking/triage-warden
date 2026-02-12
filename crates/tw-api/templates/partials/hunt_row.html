@@ -29,7 +29,7 @@
       <button class="btn btn-ghost btn-sm"
               hx-post="/api/v1/hunts/{{ hunt.id }}/execute"
               hx-swap="none"
-              hx-on::after-request="if(event.detail.successful) { showToast('success', 'Hunt Started', 'Execution triggered.'); }"
+              hx-on::after-request="if(event.detail.successful) { showToast('success', 'Hunt Started', 'Execution triggered.'); } else { showToast('error', 'Hunt Failed', 'Could not start hunt execution.'); }"
               title="Execute hunt"
               aria-label="Execute hunt">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">

@@ -264,7 +264,7 @@
                 hx-delete="/api/connectors/{{ connector.id }}"
                 hx-confirm="Are you sure you want to delete this connector?"
                 hx-swap="none"
-                hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); showToast('success', 'Connector Deleted', 'The connector has been removed.'); htmx.ajax('GET', '/web/partials/connectors', {target: '#connectors-grid', swap: 'innerHTML'}); }">
+                hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); showToast('success', 'Connector Deleted', 'The connector has been removed.'); htmx.ajax('GET', '/web/partials/connectors', {target: '#connectors-grid', swap: 'innerHTML'}); } else { showToast('error', 'Delete Failed', 'Could not delete the connector.'); }">
           Delete Connector
         </button>
         <button type="button" class="btn btn-ghost" onclick="this.closest('.modal-backdrop').remove()">Cancel</button>

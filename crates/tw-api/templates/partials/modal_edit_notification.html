@@ -8,7 +8,7 @@
         </svg>
       </button>
     </div>
-    <form hx-put="/api/notifications/{{ channel.id }}" hx-swap="none" hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); location.reload(); }">
+    <form hx-put="/api/notifications/{{ channel.id }}" hx-swap="none" hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); showToast('success', 'Channel Updated', 'Notification channel has been saved.'); location.reload(); } else { showToast('error', 'Update Failed', 'Could not save notification channel.'); }">
       <div class="modal-body">
         <div class="form-group">
           <label class="form-label">Channel Type</label>

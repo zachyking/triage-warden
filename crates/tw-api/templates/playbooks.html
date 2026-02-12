@@ -53,7 +53,7 @@
         <button class="btn btn-ghost btn-sm"
                 hx-post="/api/playbooks/{{ playbook.id }}/toggle"
                 hx-swap="none"
-                hx-on::after-request="if(event.detail.successful) { showToast('success', 'Playbook Updated', 'Playbook status has been toggled.'); location.reload(); }">
+                hx-on::after-request="if(event.detail.successful) { showToast('success', 'Playbook Updated', 'Playbook status has been toggled.'); location.reload(); } else { showToast('error', 'Update Failed', 'Could not toggle playbook status.'); }">
           {% if playbook.enabled %}Disable{% else %}Enable{% endif %}
         </button>
       </div>
