@@ -32,6 +32,7 @@
   <a href="/settings?tab=privacy" class="tab{% if tab == "privacy" %} active{% endif %}">Privacy</a>
   <a href="/settings?tab=guardrails" class="tab{% if tab == "guardrails" %} active{% endif %}">Guardrails</a>
   <a href="/settings?tab=compliance" class="tab{% if tab == "compliance" %} active{% endif %}">Compliance</a>
+  <a href="/settings?tab=autonomy" class="tab{% if tab == "autonomy" %} active{% endif %}">Autonomy</a>
 </div>
 
 {% if tab == "general" %}
@@ -42,15 +43,15 @@
   </div>
   <div class="card-body">
     <form hx-post="/api/settings/general" hx-swap="none"
-          hx-on::after-request="if(event.detail.successful) showToast('success', 'Settings Saved', 'General settings have been updated.')">
+          hx-on::after-request="if(event.detail.successful) { showToast('success', 'Settings Saved', 'General settings have been updated.'); } else { showToast('error', 'Save Failed', 'Could not save general settings.'); }">
       <div class="grid grid-2 gap-4">
         <div class="form-group">
-          <label class="form-label">Organization Name</label>
-          <input type="text" name="org_name" class="form-input" value="{{ settings.org_name }}">
+          <label for="settings-org-name" class="form-label">Organization Name</label>
+          <input type="text" id="settings-org-name" name="org_name" class="form-input" value="{{ settings.org_name }}">
         </div>
         <div class="form-group">
-          <label class="form-label">Default Timezone</label>
-          <select name="timezone" class="form-input form-select">
+          <label for="settings-timezone" class="form-label">Default Timezone</label>
+          <select id="settings-timezone" name="timezone" class="form-input form-select">
             <option value="UTC" {% if settings.timezone == "UTC" %}selected{% endif %}>UTC</option>
             <option value="America/New_York" {% if settings.timezone == "America/New_York" %}selected{% endif %}>Eastern Time</option>
             <option value="America/Los_Angeles" {% if settings.timezone == "America/Los_Angeles" %}selected{% endif %}>Pacific Time</option>
@@ -146,11 +147,11 @@
     <table class="table">
       <thead>
         <tr>
-          <th>Name</th>
-          <th>Condition</th>
-          <th>Requires</th>
-          <th>Status</th>
-          <th></th>
+          <th scope="col">Name</th>
+          <th scope="col">Condition</th>
+          <th scope="col">Requires</th>
+          <th scope="col">Status</th>
+          <th scope="col"><span class="sr-only">Actions</span></th>
         </tr>
       </thead>
       <tbody id="policies-table-body">
@@ -168,7 +169,7 @@
                      aria-pressed="{% if policy.enabled %}true{% else %}false{% endif %}"
                      hx-post="/api/policies/{{ policy.id }}/toggle"
                      hx-swap="none"
-                     hx-on::after-request="if(event.detail.successful) { showToast('success', 'Policy Updated', 'Policy status has been toggled.'); htmx.ajax('GET', '/web/partials/policies', {target: '#policies-table-body', swap: 'innerHTML'}); }">
+                     hx-on::after-request="if(event.detail.successful) { showToast('success', 'Policy Updated', 'Policy status has been toggled.'); htmx.ajax('GET', '/web/partials/policies', {target: '#policies-table-body', swap: 'innerHTML'}); } else { showToast('error', 'Update Failed', 'Could not toggle policy status.'); }">
               <span class="switch-track" aria-hidden="true"></span>
               <span class="switch-thumb" aria-hidden="true"></span>
             </label>
@@ -183,7 +184,7 @@
                       hx-delete="/api/policies/{{ policy.id }}"
                       hx-swap="none"
                       hx-confirm="Are you sure you want to delete this policy?"
-                      hx-on::after-request="if(event.detail.successful) { showToast('success', 'Policy Deleted', 'The policy has been removed.'); htmx.ajax('GET', '/web/partials/policies', {target: '#policies-table-body', swap: 'innerHTML'}); }">Delete</button>
+                      hx-on::after-request="if(event.detail.successful) { showToast('success', 'Policy Deleted', 'The policy has been removed.'); htmx.ajax('GET', '/web/partials/policies', {target: '#policies-table-body', swap: 'innerHTML'}); } else { showToast('error', 'Delete Failed', 'Could not delete the policy.'); }">Delete</button>
             </div>
           </td>
         </tr>
@@ -206,19 +207,19 @@
   </div>
   <div class="card-body">
     <form hx-post="/api/settings/rate-limits" hx-swap="none"
-          hx-on::after-request="if(event.detail.successful) showToast('success', 'Rate Limits Saved', 'Rate limit settings have been updated.')">
+          hx-on::after-request="if(event.detail.successful) { showToast('success', 'Rate Limits Saved', 'Rate limit settings have been updated.'); } else { showToast('error', 'Save Failed', 'Could not save rate limit settings.'); }">
       <div class="grid grid-3 gap-4">
         <div class="form-group">
-          <label class="form-label">Isolate Host (per hour)</label>
-          <input type="number" name="isolate_host_hour" class="form-input" value="{{ rate_limits.isolate_host_hour }}">
+          <label for="rl-isolate-host" class="form-label">Isolate Host (per hour)</label>
+          <input type="number" id="rl-isolate-host" name="isolate_host_hour" class="form-input" value="{{ rate_limits.isolate_host_hour }}">
         </div>
         <div class="form-group">
-          <label class="form-label">Disable User (per hour)</label>
-          <input type="number" name="disable_user_hour" class="form-input" value="{{ rate_limits.disable_user_hour }}">
+          <label for="rl-disable-user" class="form-label">Disable User (per hour)</label>
+          <input type="number" id="rl-disable-user" name="disable_user_hour" class="form-input" value="{{ rate_limits.disable_user_hour }}">
         </div>
         <div class="form-group">
-          <label class="form-label">Block IP (per hour)</label>
-          <input type="number" name="block_ip_hour" class="form-input" value="{{ rate_limits.block_ip_hour }}">
+          <label for="rl-block-ip" class="form-label">Block IP (per hour)</label>
+          <input type="number" id="rl-block-ip" name="block_ip_hour" class="form-input" value="{{ rate_limits.block_ip_hour }}">
         </div>
       </div>
       <button type="submit" class="btn btn-primary mt-4">Save Rate Limits</button>
@@ -240,11 +241,11 @@
     <table class="table">
       <thead>
         <tr>
-          <th>Channel</th>
-          <th>Type</th>
-          <th>Events</th>
-          <th>Status</th>
-          <th></th>
+          <th scope="col">Channel</th>
+          <th scope="col">Type</th>
+          <th scope="col">Events</th>
+          <th scope="col">Status</th>
+          <th scope="col"><span class="sr-only">Actions</span></th>
         </tr>
       </thead>
       <tbody>
@@ -262,7 +263,7 @@
                     aria-pressed="{% if channel.enabled %}true{% else %}false{% endif %}"
                     hx-post="/api/notifications/{{ channel.id }}/toggle"
                     hx-swap="none"
-                    hx-on::after-request="if(event.detail.successful) { showToast('success', 'Channel Updated', 'Notification channel status has been toggled.'); location.reload(); }">
+                    hx-on::after-request="if(event.detail.successful) { showToast('success', 'Channel Updated', 'Notification channel status has been toggled.'); location.reload(); } else { showToast('error', 'Update Failed', 'Could not toggle notification channel.'); }">
               <span class="badge badge-{% if channel.enabled %}success{% else %}info{% endif %}">
                 {% if channel.enabled %}Active{% else %}Disabled{% endif %}
               </span>
@@ -282,7 +283,7 @@
                       hx-delete="/api/notifications/{{ channel.id }}"
                       hx-confirm="Are you sure you want to delete this notification channel?"
                       hx-swap="none"
-                      hx-on::after-request="if(event.detail.successful) { showToast('success', 'Channel Deleted', 'Notification channel has been removed.'); location.reload(); }">Delete</button>
+                      hx-on::after-request="if(event.detail.successful) { showToast('success', 'Channel Deleted', 'Notification channel has been removed.'); location.reload(); } else { showToast('error', 'Delete Failed', 'Could not delete notification channel.'); }">Delete</button>
             </div>
           </td>
         </tr>
@@ -307,7 +308,7 @@
       <h3 class="card-title">AI / LLM Configuration</h3>
       <p class="text-sm text-muted">Configure the AI model used for incident analysis, triage decisions, and action recommendations.</p>
     </div>
-    <label class="flex items-center gap-2">
+    <div class="flex items-center gap-2">
       <span class="text-sm">LLM Features</span>
       <label class="switch">
         <input type="checkbox" id="llm-enabled-toggle" {% if llm_settings.enabled %}checked{% endif %}
@@ -318,14 +319,14 @@
       <span class="badge badge-{% if llm_settings.enabled %}success{% else %}info{% endif %}">
         {% if llm_settings.enabled %}Enabled{% else %}Disabled{% endif %}
       </span>
-    </label>
+    </div>
   </div>
   <div class="card-body">
     <form id="llm-settings-form" hx-post="/api/settings/llm" hx-swap="none"
-          hx-on::after-request="if(event.detail.successful) showToast('success', 'LLM Settings Saved', 'AI/LLM configuration has been updated.')">
+          hx-on::after-request="if(event.detail.successful) { showToast('success', 'LLM Settings Saved', 'AI/LLM configuration has been updated.'); } else { showToast('error', 'Save Failed', 'Could not save LLM settings.'); }">
       <div class="grid grid-2 gap-4 mb-4">
         <div class="form-group">
-          <label class="form-label">Provider</label>
+          <label for="llm-provider" class="form-label">Provider</label>
           <select name="provider" class="form-input form-select" id="llm-provider"
                   onchange="updateModelOptions()">
             <option value="openai" {% if llm_settings.provider == "openai" %}selected{% endif %}>OpenAI</option>
@@ -336,7 +337,7 @@
           <p class="text-xs text-muted mt-1">The AI provider to use for analysis and recommendations.</p>
         </div>
         <div class="form-group">
-          <label class="form-label">Model</label>
+          <label for="llm-model" class="form-label">Model</label>
           <select name="model" class="form-input form-select" id="llm-model">
             <!-- OpenAI models -->
             <optgroup label="OpenAI" id="openai-models">
@@ -364,12 +365,12 @@
       </div>
 
       <div class="form-group mb-4">
-        <label class="form-label">API Key</label>
+        <label for="llm-api-key" class="form-label">API Key</label>
         <div class="flex gap-2">
           <input type="password" name="api_key" class="form-input" id="llm-api-key"
                  placeholder="{% if llm_settings.api_key_set %}••••••••••••••••{% else %}Enter API key{% endif %}">
-          <button type="button" class="btn btn-secondary" onclick="toggleApiKeyVisibility()">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <button type="button" class="btn btn-secondary" onclick="toggleApiKeyVisibility()" aria-label="Toggle API key visibility">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
               <circle cx="12" cy="12" r="3"/>
             </svg>
@@ -383,22 +384,22 @@
       </div>
 
       <div class="form-group mb-4" id="base-url-group" {% if llm_settings.provider != "local" && llm_settings.provider != "azure" %}style="display: none;"{% endif %}>
-        <label class="form-label">API Base URL</label>
-        <input type="text" name="base_url" class="form-input" value="{{ llm_settings.base_url }}"
+        <label for="llm-base-url" class="form-label">API Base URL</label>
+        <input type="text" id="llm-base-url" name="base_url" class="form-input" value="{{ llm_settings.base_url }}"
                placeholder="http://localhost:11434">
         <p class="text-xs text-muted mt-1">Required for local providers or Azure OpenAI. Example: http://localhost:11434 for Ollama.</p>
       </div>
 
       <div class="grid grid-2 gap-4 mb-4">
         <div class="form-group">
-          <label class="form-label">Max Tokens</label>
-          <input type="number" name="max_tokens" class="form-input" value="{{ llm_settings.max_tokens }}"
+          <label for="llm-max-tokens" class="form-label">Max Tokens</label>
+          <input type="number" id="llm-max-tokens" name="max_tokens" class="form-input" value="{{ llm_settings.max_tokens }}"
                  min="256" max="128000" step="256">
           <p class="text-xs text-muted mt-1">Maximum tokens for AI responses (256-128000). Higher values allow more detailed analysis.</p>
         </div>
         <div class="form-group">
-          <label class="form-label">Temperature</label>
-          <input type="number" name="temperature" class="form-input" value="{{ llm_settings.temperature }}"
+          <label for="llm-temperature" class="form-label">Temperature</label>
+          <input type="number" id="llm-temperature" name="temperature" class="form-input" value="{{ llm_settings.temperature }}"
                  min="0" max="2" step="0.1">
           <p class="text-xs text-muted mt-1">Response randomness (0-2). Lower values (0.1-0.3) are recommended for consistent triage decisions.</p>
         </div>
@@ -420,9 +421,9 @@
     <table class="table">
       <thead>
         <tr>
-          <th>Provider</th>
-          <th>Environment Variable</th>
-          <th>Example</th>
+          <th scope="col">Provider</th>
+          <th scope="col">Environment Variable</th>
+          <th scope="col">Example</th>
         </tr>
       </thead>
       <tbody>
@@ -468,12 +469,12 @@
     <table class="table">
       <thead>
         <tr>
-          <th>Name</th>
-          <th>Key Prefix</th>
-          <th>Scopes</th>
-          <th>Last Used</th>
-          <th>Expires</th>
-          <th></th>
+          <th scope="col">Name</th>
+          <th scope="col">Key Prefix</th>
+          <th scope="col">Scopes</th>
+          <th scope="col">Last Used</th>
+          <th scope="col">Expires</th>
+          <th scope="col"><span class="sr-only">Actions</span></th>
         </tr>
       </thead>
       <tbody id="api-keys-table-body">
@@ -507,7 +508,7 @@
                     hx-delete="/api/api-keys/{{ key.id }}"
                     hx-confirm="Are you sure you want to revoke this API key? This action cannot be undone and any applications using this key will stop working."
                     hx-swap="none"
-                    hx-on::after-request="if(event.detail.successful) { showToast('success', 'API Key Revoked', 'The API key has been permanently deleted.'); document.getElementById('api-key-row-{{ key.id }}').remove(); }">
+                    hx-on::after-request="if(event.detail.successful) { showToast('success', 'API Key Revoked', 'The API key has been permanently deleted.'); document.getElementById('api-key-row-{{ key.id }}').remove(); } else { showToast('error', 'Revoke Failed', 'Could not revoke the API key.'); }">
               Revoke
             </button>
           </td>
@@ -589,7 +590,7 @@ function updateModelOptions() {
   <div class="card-body">
     <div id="kill-switch-status" class="mb-6">
       {% if kill_switch.active %}
-      <div class="bg-critical/10 border border-critical rounded-lg p-4 mb-4">
+      <div class="card p-4 mb-4" style="border-left: 4px solid var(--severity-critical);">
         <div class="flex items-center gap-3 mb-3">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-critical" aria-hidden="true">
             <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
@@ -616,11 +617,7 @@ function updateModelOptions() {
           {% endif %}
         </div>
         <button class="btn btn-success"
-                hx-post="/api/kill-switch/deactivate"
-                hx-vals='{"reason": ""}'
-                hx-swap="none"
-                hx-confirm="Are you sure you want to re-enable automation? All playbooks and automated actions will resume."
-                hx-on::after-request="if(event.detail.successful) { showToast('success', 'Automation Resumed', 'The kill switch has been deactivated. Automation may now resume.'); location.reload(); } else { showToast('error', 'Failed', 'Could not deactivate the kill switch.'); }">
+                onclick="if(confirm('Are you sure you want to re-enable automation? All playbooks and automated actions will resume.')) { csrfFetch('/api/kill-switch/deactivate', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({reason:''}) }).then(function(r){ if(r.ok){ showToast('success','Automation Resumed','The kill switch has been deactivated.'); location.reload(); } else { showToast('error','Failed','Could not deactivate the kill switch.'); } }).catch(function(e){ showToast('error','Failed',e.message); }); }">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1" aria-hidden="true">
             <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
             <polyline points="22 4 12 14.01 9 11.01"/>
@@ -629,7 +626,7 @@ function updateModelOptions() {
         </button>
       </div>
       {% else %}
-      <div class="bg-success/10 border border-success rounded-lg p-4 mb-4">
+      <div class="card p-4 mb-4" style="border-left: 4px solid var(--severity-low);">
         <div class="flex items-center gap-3">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-success" aria-hidden="true">
             <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
@@ -659,11 +656,7 @@ function updateModelOptions() {
       {% else %}
       <div class="flex gap-4">
         <button class="btn btn-danger"
-                hx-post="/api/kill-switch/activate"
-                hx-vals='{"reason": ""}'
-                hx-swap="none"
-                hx-confirm="WARNING: This will immediately halt ALL automated actions including playbooks, containment actions, and AI analysis. Are you sure?"
-                hx-on::after-request="if(event.detail.successful) { showToast('warning', 'Kill Switch Activated', 'All automation has been halted.'); location.reload(); } else { showToast('error', 'Failed', 'Could not activate the kill switch.'); }">
+                onclick="if(confirm('WARNING: This will immediately halt ALL automated actions including playbooks, containment actions, and AI analysis. Are you sure?')) { csrfFetch('/api/kill-switch/activate', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({reason:''}) }).then(function(r){ if(r.ok){ showToast('warning','Kill Switch Activated','All automation has been halted.'); location.reload(); } else { showToast('error','Failed','Could not activate the kill switch.'); } }).catch(function(e){ showToast('error','Failed',e.message); }); }">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mr-1" aria-hidden="true">
             <circle cx="12" cy="12" r="10"/>
             <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
@@ -951,6 +944,84 @@ function updateModelOptions() {
       <div><span class="text-primary">POST</span> /api/compliance/reports/generate</div>
       <div><span class="text-primary">POST</span> /api/audit/immutable/archive</div>
       <div><span class="text-primary">POST</span> /api/audit/immutable/verify/job</div>
+    </div>
+  </div>
+</div>
+{% else if tab == "autonomy" %}
+<!-- Autonomy Configuration -->
+<div class="card mb-4">
+  <div class="card-header">
+    <div>
+      <h3 class="card-title">Autonomy Level</h3>
+      <p class="text-sm text-muted">Control how much independence the AI agent has when responding to incidents.</p>
+    </div>
+  </div>
+  <div class="card-body">
+    <form id="autonomy-form" onsubmit="submitAutonomyForm(event)">
+      <div class="form-group mb-4">
+        <label class="form-label">Autonomy Level</label>
+        <div class="grid grid-2 gap-4">
+          <label class="flex items-start gap-3 p-3 bg-tertiary rounded-md cursor-pointer">
+            <input type="radio" name="level" value="assisted" {% if autonomy_level == "assisted" %}checked{% endif %}>
+            <div>
+              <div class="font-semibold text-sm">Assisted</div>
+              <div class="text-xs text-muted">AI observes and suggests only. All actions require analyst approval.</div>
+            </div>
+          </label>
+          <label class="flex items-start gap-3 p-3 bg-tertiary rounded-md cursor-pointer">
+            <input type="radio" name="level" value="supervised" {% if autonomy_level == "supervised" %}checked{% endif %}>
+            <div>
+              <div class="font-semibold text-sm">Supervised</div>
+              <div class="text-xs text-muted">Low-risk actions auto-execute. High-risk actions need approval.</div>
+            </div>
+          </label>
+          <label class="flex items-start gap-3 p-3 bg-tertiary rounded-md cursor-pointer">
+            <input type="radio" name="level" value="autonomous" {% if autonomy_level == "autonomous" %}checked{% endif %}>
+            <div>
+              <div class="font-semibold text-sm">Autonomous</div>
+              <div class="text-xs text-muted">Most actions auto-execute. Only critical actions require approval.</div>
+            </div>
+          </label>
+          <label class="flex items-start gap-3 p-3 bg-tertiary rounded-md cursor-pointer">
+            <input type="radio" name="level" value="full_autonomous" {% if autonomy_level == "full_autonomous" %}checked{% endif %}>
+            <div>
+              <div class="font-semibold text-sm">Full Autonomous</div>
+              <div class="text-xs text-muted">All actions auto-execute without approval. Use with caution.</div>
+            </div>
+          </label>
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary">Save Autonomy Settings</button>
+    </form>
+    <script>
+    function submitAutonomyForm(e) {
+      e.preventDefault();
+      const selected = document.querySelector('#autonomy-form input[name="level"]:checked');
+      if (!selected) { showToast('error', 'No Selection', 'Please select an autonomy level.'); return; }
+      csrfFetch('/api/v1/autonomy/config', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ default_level: selected.value })
+      }).then(r => {
+        if (r.ok) { showToast('success', 'Autonomy Updated', 'Autonomy settings have been saved.'); }
+        else { return r.text().then(t => showToast('error', 'Update Failed', t || 'Could not save autonomy settings.')); }
+      }).catch(err => showToast('error', 'Update Failed', err.message));
+    }
+    </script>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">Autonomy API</h3>
+  </div>
+  <div class="card-body">
+    <p class="text-sm text-muted mb-4">
+      Autonomy settings can also be managed via the REST API.
+    </p>
+    <div class="bg-surface p-4 rounded font-mono text-sm">
+      <div><span class="text-primary">GET</span> /api/v1/autonomy/config</div>
+      <div><span class="text-primary">PUT</span> /api/v1/autonomy/config</div>
     </div>
   </div>
 </div>

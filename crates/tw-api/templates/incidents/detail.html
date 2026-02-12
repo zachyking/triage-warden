@@ -13,7 +13,7 @@
 <!-- Header -->
 <div class="page-header">
   <div class="flex items-center gap-3">
-    <div class="severity-dot {{ incident.severity }}" style="width: 16px; height: 16px;"></div>
+    <div class="severity-dot {{ incident.severity }}" style="width: 16px; height: 16px;" aria-hidden="true"></div>
     <div>
       <h1 class="page-title">{{ incident.title }}</h1>
       <p class="page-subtitle">
@@ -31,26 +31,21 @@
          id="assignment-container">
     </div>
     {% if incident.status != "resolved" %}
-    <button class="btn btn-primary btn-lg"
-            hx-post="/api/incidents/{{ incident.id }}/actions"
-            hx-vals='{"action": "auto_triage"}'
-            hx-target="#action-result"
-            hx-swap="innerHTML">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <button class="btn btn-primary btn-lg" onclick="runAiTriage('{{ incident.id }}')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
         <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
       </svg>
       Run AI Triage
     </button>
     <button class="btn btn-success btn-lg"
             hx-post="/api/incidents/{{ incident.id }}/resolve"
-            hx-target="body">
+            hx-target="body"
+            hx-confirm="Are you sure you want to mark this incident as resolved?">
       Mark Resolved
     </button>
     {% endif %}
   </div>
 </div>
-
-<div id="action-result"></div>
 
 <div class="grid grid-2 gap-4">
   <!-- Left Column: Details -->
@@ -60,7 +55,7 @@
     <div class="card mb-4">
       <div class="card-header">
         <h3 class="card-title flex items-center gap-2">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
             <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
           </svg>
           AI Analysis
@@ -103,6 +98,103 @@
           </div>
         </div>
         {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Analyst Feedback -->
+    {% if let Some(analysis) = incident.analysis %}
+    <div class="card mb-4">
+      <div class="card-header">
+        <h3 class="card-title flex items-center gap-2">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+          </svg>
+          Analyst Feedback
+        </h3>
+      </div>
+      <div class="card-body" id="feedback-section">
+        <form id="feedback-form" onsubmit="submitFeedback(event, '{{ incident.id }}')">
+          <div class="form-group">
+            <label class="form-label">Do you agree with the AI verdict?</label>
+            <div class="flex gap-4">
+              <label class="flex items-center gap-2">
+                <input type="radio" name="feedback_type" value="correct" required>
+                <span class="text-sm">Agree</span>
+              </label>
+              <label class="flex items-center gap-2">
+                <input type="radio" name="feedback_type" value="incorrect_verdict">
+                <span class="text-sm">Disagree — Wrong Verdict</span>
+              </label>
+              <label class="flex items-center gap-2">
+                <input type="radio" name="feedback_type" value="incorrect_severity">
+                <span class="text-sm">Disagree — Wrong Severity</span>
+              </label>
+              <label class="flex items-center gap-2">
+                <input type="radio" name="feedback_type" value="missing_context">
+                <span class="text-sm">Missing Context</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="corrected-verdict-select" class="form-label">Corrected Verdict (if disagreeing)</label>
+            <select id="corrected-verdict-select" name="corrected_verdict" class="form-input form-select">
+              <option value="">-- same as AI --</option>
+              <option value="true_positive">True Positive</option>
+              <option value="likely_true_positive">Likely True Positive</option>
+              <option value="suspicious">Suspicious</option>
+              <option value="likely_false_positive">Likely False Positive</option>
+              <option value="false_positive">False Positive</option>
+              <option value="inconclusive">Inconclusive</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="corrected-severity-select" class="form-label">Corrected Severity (optional)</label>
+            <select id="corrected-severity-select" name="corrected_severity" class="form-input form-select">
+              <option value="">-- same as AI --</option>
+              <option value="critical">Critical</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="feedback-notes" class="form-label">Notes (optional)</label>
+            <textarea id="feedback-notes" name="notes" class="form-input form-textarea" rows="3"
+                      placeholder="Explain your reasoning or provide additional context..."></textarea>
+          </div>
+
+          <button type="submit" class="btn btn-primary">Submit Feedback</button>
+        </form>
+        <script>
+        function submitFeedback(e, incidentId) {
+          e.preventDefault();
+          const form = document.getElementById('feedback-form');
+          const selected = form.querySelector('input[name="feedback_type"]:checked');
+          if (!selected) { showToast('error', 'Required', 'Please select agree or disagree.'); return; }
+          const body = { feedback_type: selected.value };
+          const verdict = form.querySelector('[name="corrected_verdict"]').value;
+          if (verdict) body.corrected_verdict = verdict;
+          const severity = form.querySelector('[name="corrected_severity"]').value;
+          if (severity) body.corrected_severity = severity;
+          const notes = form.querySelector('[name="notes"]').value;
+          if (notes) body.notes = notes;
+          csrfFetch('/api/incidents/' + incidentId + '/feedback', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+          }).then(r => {
+            if (r.ok) {
+              document.getElementById('feedback-section').innerHTML =
+                '<div class="text-success font-semibold py-4">Thank you for your feedback!</div>';
+              showToast('success', 'Feedback Submitted', 'Thank you for your feedback on this analysis.');
+            } else { return r.text().then(t => showToast('error', 'Submission Failed', t || 'Could not submit feedback.')); }
+          }).catch(err => showToast('error', 'Submission Failed', err.message));
+        }
+        </script>
       </div>
     </div>
     {% endif %}
@@ -177,9 +269,9 @@
         <table class="table">
           <thead>
             <tr>
-              <th>Type</th>
-              <th>Value</th>
-              <th>Threat Level</th>
+              <th scope="col">Type</th>
+              <th scope="col">Value</th>
+              <th scope="col">Threat Level</th>
             </tr>
           </thead>
           <tbody>
@@ -260,10 +352,10 @@
         <h3 class="card-title">Execute Action</h3>
       </div>
       <div class="card-body">
-        <form hx-post="/api/incidents/{{ incident.id }}/actions" hx-target="#action-result" hx-swap="innerHTML">
+        <form id="execute-action-form" onsubmit="submitExecuteAction(event, '{{ incident.id }}')">
           <div class="form-group">
-            <label class="form-label">Action Type</label>
-            <select name="action" class="form-input form-select" required>
+            <label for="action-type-select" class="form-label">Action Type</label>
+            <select id="action-type-select" name="action" class="form-input form-select" required>
               <option value="">Select action...</option>
               <option value="isolate_host">Isolate Host</option>
               <option value="disable_user">Disable User</option>
@@ -273,18 +365,53 @@
             </select>
           </div>
           <div class="form-group">
-            <label class="form-label">Target (optional)</label>
-            <input type="text" name="target" class="form-input" placeholder="e.g., hostname, username, IP">
+            <label for="action-target-input" class="form-label">Target (optional)</label>
+            <input type="text" id="action-target-input" name="target" class="form-input" placeholder="e.g., hostname, username, IP">
           </div>
           <div class="form-group">
-            <label class="form-label">Reason</label>
-            <textarea name="reason" class="form-input form-textarea" placeholder="Describe the reason for this action..." required></textarea>
+            <label for="action-reason-textarea" class="form-label">Reason</label>
+            <textarea id="action-reason-textarea" name="reason" class="form-input form-textarea" placeholder="Describe the reason for this action..." required></textarea>
           </div>
-          <button type="submit" class="btn btn-primary">
-            <span class="htmx-indicator spinner"></span>
-            Execute Action
-          </button>
+          <button type="submit" class="btn btn-primary">Execute Action</button>
         </form>
+        <div id="action-result"></div>
+        <script>
+        function submitExecuteAction(e, incidentId) {
+          e.preventDefault();
+          var form = document.getElementById('execute-action-form');
+          var actionType = form.querySelector('#action-type-select').value;
+          var targetVal = form.querySelector('#action-target-input').value.trim();
+          var reason = form.querySelector('#action-reason-textarea').value;
+          if (!actionType) { showToast('error', 'Required', 'Please select an action type.'); return; }
+          // Build target based on action type
+          var target = { type: 'none' };
+          if (targetVal) {
+            if (actionType === 'isolate_host') target = { type: 'host', hostname: targetVal };
+            else if (actionType === 'disable_user') target = { type: 'user', username: targetVal };
+            else if (actionType === 'block_ip') target = { type: 'ip_address', ip: targetVal };
+            else if (actionType === 'quarantine_email') target = { type: 'email', message_id: targetVal };
+            else if (actionType === 'create_ticket') target = { type: 'ticket', ticket_id: targetVal };
+            else target = { type: 'host', hostname: targetVal };
+          }
+          csrfFetch('/api/incidents/' + incidentId + '/actions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action_type: actionType, target: target, reason: reason })
+          }).then(function(r) {
+            if (r.ok) {
+              return r.json().then(function(data) {
+                var resultEl = document.getElementById('action-result');
+                resultEl.textContent = '';
+                var div = document.createElement('div');
+                div.className = 'text-success font-semibold mt-2';
+                div.textContent = 'Action executed: ' + (data.status || 'submitted');
+                resultEl.appendChild(div);
+                showToast('success', 'Action Executed', 'The action has been submitted.');
+              });
+            } else { return r.text().then(function(t) { showToast('error', 'Action Failed', t || 'Could not execute the action.'); }); }
+          }).catch(function(err) { showToast('error', 'Action Failed', err.message); });
+        }
+        </script>
       </div>
     </div>
     {% endif %}
@@ -335,4 +462,18 @@
     </div>
   </div>
 </div>
+<script>
+function runAiTriage(incidentId) {
+  var el = document.getElementById('action-result');
+  if (el) el.textContent = 'Running AI triage...';
+  csrfFetch('/api/incidents/' + incidentId + '/actions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action_type: 'auto_triage', target: { type: 'none' }, reason: 'Automated AI triage requested by analyst' })
+  }).then(function(r) {
+    if (r.ok) { showToast('success', 'AI Triage', 'Triage analysis started.'); location.reload(); }
+    else { return r.text().then(function(t) { showToast('error', 'Triage Failed', t || 'Could not run AI triage.'); }); }
+  }).catch(function(err) { showToast('error', 'Triage Failed', err.message); });
+}
+</script>
 {% endblock %}

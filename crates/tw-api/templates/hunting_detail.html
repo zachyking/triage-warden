@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+
+{% block title %}{{ hunt.name }} - Threat Hunting - Triage Warden{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="flex items-center gap-2 mb-1">
+      <a href="/hunting" class="text-muted text-sm">&larr; Back to Hunts</a>
+    </div>
+    <h1 class="page-title">{{ hunt.name }}</h1>
+    <p class="page-subtitle">{{ hunt.hypothesis }}</p>
+  </div>
+  <div class="flex gap-2">
+    <button class="btn btn-primary"
+            hx-post="/api/v1/hunts/{{ hunt.id }}/execute"
+            hx-swap="none"
+            hx-on::after-request="if(event.detail.successful) { showToast('success', 'Hunt Started', 'Execution triggered.'); } else { showToast('error', 'Execution Failed', 'Could not start hunt.'); }">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <polygon points="5 3 19 12 5 21 5 3"/>
+      </svg>
+      Execute
+    </button>
+  </div>
+</div>
+
+<!-- Overview Cards -->
+<div class="grid grid-4 gap-4 mb-6">
+  <div class="card">
+    <div class="card-body text-center">
+      <div class="text-2xl font-bold"><span class="badge badge-{{ hunt.status_color }}">{{ hunt.status }}</span></div>
+      <div class="text-xs text-muted mt-1">Status</div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body text-center">
+      <div class="text-2xl font-bold">{{ hunt.hunt_type }}</div>
+      <div class="text-xs text-muted">Type</div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body text-center">
+      <div class="text-2xl font-bold">{{ total_findings }}</div>
+      <div class="text-xs text-muted">Total Findings</div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body text-center">
+      <div class="text-2xl font-bold">{{ results_count }}</div>
+      <div class="text-xs text-muted">Executions</div>
+    </div>
+  </div>
+</div>
+
+<!-- Details -->
+<div class="grid grid-2 gap-4 mb-4">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Details</h3>
+    </div>
+    <div class="card-body">
+      {% if !description.is_empty() %}
+      <div class="mb-3">
+        <div class="text-xs text-muted mb-1">Description</div>
+        <p class="text-sm">{{ description }}</p>
+      </div>
+      {% endif %}
+      <div class="mb-3">
+        <div class="text-xs text-muted mb-1">Queries</div>
+        <span class="font-semibold">{{ queries_count }}</span> <span class="text-sm text-muted">configured</span>
+      </div>
+      <div class="mb-3">
+        <div class="text-xs text-muted mb-1">Last Run</div>
+        <span class="text-sm">{% match hunt.last_run %}{% when Some with (lr) %}{{ lr }}{% when None %}Never{% endmatch %}</span>
+      </div>
+      <div class="mb-3">
+        <div class="text-xs text-muted mb-1">Created</div>
+        <span class="text-sm">{{ created_at }}</span>
+      </div>
+      <div>
+        <div class="text-xs text-muted mb-1">Enabled</div>
+        <span class="badge badge-{% if enabled %}success{% else %}info{% endif %}">{% if enabled %}Yes{% else %}No{% endif %}</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Context</h3>
+    </div>
+    <div class="card-body">
+      <div class="mb-3">
+        <div class="text-xs text-muted mb-1">MITRE ATT&amp;CK Techniques</div>
+        <div class="flex flex-wrap gap-1">
+          {% for technique in hunt.mitre_techniques %}
+          <span class="badge badge-accent">{{ technique }}</span>
+          {% endfor %}
+          {% if hunt.mitre_techniques.is_empty() %}
+          <span class="text-sm text-muted">None specified</span>
+          {% endif %}
+        </div>
+      </div>
+      <div class="mb-3">
+        <div class="text-xs text-muted mb-1">Data Sources</div>
+        <div class="flex flex-wrap gap-1">
+          {% for ds in data_sources %}
+          <span class="badge badge-info">{{ ds }}</span>
+          {% endfor %}
+          {% if data_sources.is_empty() %}
+          <span class="text-sm text-muted">None specified</span>
+          {% endif %}
+        </div>
+      </div>
+      <div>
+        <div class="text-xs text-muted mb-1">Tags</div>
+        <div class="flex flex-wrap gap-1">
+          {% for tag in tags %}
+          <span class="badge badge-info">{{ tag }}</span>
+          {% endfor %}
+          {% if tags.is_empty() %}
+          <span class="text-sm text-muted">No tags</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- API Reference -->
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">Hunt API</h3>
+  </div>
+  <div class="card-body">
+    <div class="bg-surface p-4 rounded font-mono text-sm">
+      <div><span class="text-primary">GET</span> /api/v1/hunts/{{ hunt.id }}</div>
+      <div><span class="text-primary">PUT</span> /api/v1/hunts/{{ hunt.id }}</div>
+      <div><span class="text-success">POST</span> /api/v1/hunts/{{ hunt.id }}/execute</div>
+      <div><span class="text-critical">DELETE</span> /api/v1/hunts/{{ hunt.id }}</div>
+    </div>
+  </div>
+</div>
+{% endblock %}

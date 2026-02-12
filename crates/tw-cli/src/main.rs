@@ -1595,6 +1595,10 @@ async fn cmd_test(_config: AppConfig, alert_type: &str, dry_run: bool) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Mutex to serialize tests that modify environment variables.
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn parse_action_params_inferrs_host_target_and_parameters() {
@@ -1661,5 +1665,271 @@ mod tests {
         assert!(err
             .to_string()
             .contains("Invalid `incident_id` UUID: not-a-uuid"));
+    }
+
+    #[test]
+    fn parse_action_params_rejects_missing_incident_id() {
+        let params = serde_json::json!({
+            "hostname": "workstation-001"
+        })
+        .to_string();
+
+        let err = parse_action_execute_params("isolate_host", &params).unwrap_err();
+        assert!(err.to_string().contains("incident_id"));
+    }
+
+    #[test]
+    fn parse_action_params_rejects_non_object() {
+        let params = r#""just a string""#.to_string();
+        let err = parse_action_execute_params("isolate_host", &params).unwrap_err();
+        assert!(err.to_string().contains("JSON object"));
+    }
+
+    #[test]
+    fn parse_action_params_rejects_invalid_json() {
+        let params = "not json at all".to_string();
+        let err = parse_action_execute_params("isolate_host", &params).unwrap_err();
+        assert!(err.to_string().contains("Invalid --params JSON"));
+    }
+
+    #[test]
+    fn parse_action_params_default_reason() {
+        let params = serde_json::json!({
+            "incident_id": "00000000-0000-0000-0000-000000000001",
+            "hostname": "web-01"
+        })
+        .to_string();
+
+        let (_, request) = parse_action_execute_params("isolate_host", &params).unwrap();
+        assert!(request.reason.contains("triage-warden CLI"));
+        assert!(request.reason.contains("isolate_host"));
+    }
+
+    #[test]
+    fn parse_action_params_blank_reason_uses_default() {
+        let params = serde_json::json!({
+            "incident_id": "00000000-0000-0000-0000-000000000001",
+            "hostname": "web-01",
+            "reason": "   "
+        })
+        .to_string();
+
+        let (_, request) = parse_action_execute_params("isolate_host", &params).unwrap();
+        assert!(request.reason.contains("triage-warden CLI"));
+    }
+
+    #[test]
+    fn parse_action_params_skip_policy_check() {
+        let params = serde_json::json!({
+            "incident_id": "00000000-0000-0000-0000-000000000001",
+            "hostname": "web-01",
+            "skip_policy_check": true
+        })
+        .to_string();
+
+        let (_, request) = parse_action_execute_params("isolate_host", &params).unwrap();
+        assert!(request.skip_policy_check);
+    }
+
+    #[test]
+    fn parse_action_params_infer_user_target() {
+        let params = serde_json::json!({
+            "incident_id": "00000000-0000-0000-0000-000000000001",
+            "username": "compromised_user",
+            "email": "compromised@company.com"
+        })
+        .to_string();
+
+        let (_, request) = parse_action_execute_params("disable_user", &params).unwrap();
+        assert_eq!(request.target["type"], "user");
+        assert_eq!(request.target["username"], "compromised_user");
+        assert_eq!(request.target["email"], "compromised@company.com");
+    }
+
+    #[test]
+    fn parse_action_params_infer_ip_target() {
+        let params = serde_json::json!({
+            "incident_id": "00000000-0000-0000-0000-000000000001",
+            "ip": "10.0.0.50"
+        })
+        .to_string();
+
+        let (_, request) = parse_action_execute_params("block_ip", &params).unwrap();
+        assert_eq!(request.target["type"], "ip_address");
+        assert_eq!(request.target["ip"], "10.0.0.50");
+    }
+
+    #[test]
+    fn parse_action_params_infer_domain_target() {
+        let params = serde_json::json!({
+            "incident_id": "00000000-0000-0000-0000-000000000001",
+            "domain": "evil.com"
+        })
+        .to_string();
+
+        let (_, request) = parse_action_execute_params("block_domain", &params).unwrap();
+        assert_eq!(request.target["type"], "domain");
+        assert_eq!(request.target["domain"], "evil.com");
+    }
+
+    #[test]
+    fn parse_action_params_unknown_action_gets_none_target() {
+        let params = serde_json::json!({
+            "incident_id": "00000000-0000-0000-0000-000000000001"
+        })
+        .to_string();
+
+        let (_, request) = parse_action_execute_params("some_unknown_action", &params).unwrap();
+        assert_eq!(request.target["type"], "none");
+    }
+
+    #[test]
+    fn test_get_action_details_known_actions() {
+        assert!(get_action_details("isolate_host").is_some());
+        assert!(get_action_details("unisolate_host").is_some());
+        assert!(get_action_details("disable_user").is_some());
+        assert!(get_action_details("create_ticket").is_some());
+        assert!(get_action_details("send_notification").is_some());
+    }
+
+    #[test]
+    fn test_get_action_details_unknown_action() {
+        assert!(get_action_details("nonexistent_action").is_none());
+    }
+
+    #[test]
+    fn test_get_action_details_case_insensitive() {
+        assert!(get_action_details("ISOLATE_HOST").is_some());
+        assert!(get_action_details("Disable_User").is_some());
+    }
+
+    #[test]
+    fn test_get_action_details_isolate_host_fields() {
+        let details = get_action_details("isolate_host").unwrap();
+        assert_eq!(details.name, "isolate_host");
+        assert!(details.required_params.contains(&"hostname"));
+        assert!(details.optional_params.contains(&"ip"));
+        assert!(details.supports_dry_run);
+    }
+
+    #[test]
+    fn test_output_format_from_str() {
+        assert!("text".parse::<OutputFormat>().unwrap() == OutputFormat::Text);
+        assert!("json".parse::<OutputFormat>().unwrap() == OutputFormat::Json);
+        assert!("TEXT".parse::<OutputFormat>().unwrap() == OutputFormat::Text);
+        assert!("JSON".parse::<OutputFormat>().unwrap() == OutputFormat::Json);
+    }
+
+    #[test]
+    fn test_output_format_from_str_invalid() {
+        assert!("xml".parse::<OutputFormat>().is_err());
+        assert!("".parse::<OutputFormat>().is_err());
+    }
+
+    #[test]
+    fn test_daemon_state_serialization_roundtrip() {
+        let state = DaemonState {
+            pid: 12345,
+            started_at: chrono::Utc::now(),
+            operation_mode: "supervised".to_string(),
+            config_path: "/etc/tw/config.yaml".to_string(),
+        };
+
+        let serialized = serde_json::to_string(&state).unwrap();
+        let deserialized: DaemonState = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.pid, 12345);
+        assert_eq!(deserialized.operation_mode, "supervised");
+        assert_eq!(deserialized.config_path, "/etc/tw/config.yaml");
+    }
+
+    #[test]
+    fn test_daemon_runtime_dir_env_override() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_str().unwrap().to_string();
+        std::env::set_var(DAEMON_RUNTIME_DIR_ENV, &path);
+        let result = daemon_runtime_dir();
+        std::env::remove_var(DAEMON_RUNTIME_DIR_ENV);
+        assert_eq!(result, std::path::PathBuf::from(&path));
+    }
+
+    #[test]
+    fn test_daemon_runtime_dir_env_empty_fallback() {
+        let _lock = ENV_MUTEX.lock().unwrap();
+        std::env::set_var(DAEMON_RUNTIME_DIR_ENV, "   ");
+        let result = daemon_runtime_dir();
+        std::env::remove_var(DAEMON_RUNTIME_DIR_ENV);
+        // Should fall back to directories or .triage-warden/runtime, not the empty string
+        assert_ne!(result, std::path::PathBuf::from("   "));
+    }
+
+    #[test]
+    fn test_enrich_parameters_from_host_target() {
+        let target = serde_json::json!({
+            "type": "host",
+            "hostname": "web-01",
+            "ip": "10.0.0.5"
+        });
+
+        let mut params = serde_json::Map::new();
+        enrich_parameters_from_target(&target, &mut params);
+
+        assert_eq!(params["hostname"], "web-01");
+        assert_eq!(params["ip"], "10.0.0.5");
+    }
+
+    #[test]
+    fn test_enrich_parameters_from_user_target() {
+        let target = serde_json::json!({
+            "type": "user",
+            "username": "alice",
+            "email": "alice@company.com"
+        });
+
+        let mut params = serde_json::Map::new();
+        enrich_parameters_from_target(&target, &mut params);
+
+        assert_eq!(params["username"], "alice");
+        assert_eq!(params["email"], "alice@company.com");
+    }
+
+    #[test]
+    fn test_enrich_parameters_does_not_overwrite_existing() {
+        let target = serde_json::json!({
+            "type": "host",
+            "hostname": "from-target"
+        });
+
+        let mut params = serde_json::Map::new();
+        params.insert("hostname".to_string(), serde_json::json!("from-params"));
+        enrich_parameters_from_target(&target, &mut params);
+
+        // Existing value should not be overwritten
+        assert_eq!(params["hostname"], "from-params");
+    }
+
+    #[test]
+    fn test_enrich_parameters_null_target_field_skipped() {
+        let target = serde_json::json!({
+            "type": "host",
+            "hostname": "web-01",
+            "ip": null
+        });
+
+        let mut params = serde_json::Map::new();
+        enrich_parameters_from_target(&target, &mut params);
+
+        assert_eq!(params["hostname"], "web-01");
+        // Null ip should not be added
+        assert!(!params.contains_key("ip"));
+    }
+
+    #[test]
+    fn test_enrich_parameters_non_object_target_noop() {
+        let target = serde_json::json!("not an object");
+        let mut params = serde_json::Map::new();
+        enrich_parameters_from_target(&target, &mut params);
+        assert!(params.is_empty());
     }
 }

@@ -243,6 +243,20 @@ const ALL_STATUSES: &[IncidentStatus] = &[
 ];
 
 /// Get incident metrics.
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/incidents",
+    params(
+        ("start" = Option<DateTime<Utc>>, Query, description = "Start of time range (ISO 8601)"),
+        ("end" = Option<DateTime<Utc>>, Query, description = "End of time range (ISO 8601)")
+    ),
+    responses(
+        (status = 200, description = "Incident metrics", body = IncidentMetricsResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "Analytics"
+)]
 async fn get_incident_metrics(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -345,6 +359,21 @@ async fn get_incident_metrics(
 }
 
 /// Get analyst performance metrics.
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/analysts",
+    params(
+        ("analyst_id" = Option<Uuid>, Query, description = "Filter by specific analyst"),
+        ("start" = Option<DateTime<Utc>>, Query, description = "Start of time range (ISO 8601)"),
+        ("end" = Option<DateTime<Utc>>, Query, description = "End of time range (ISO 8601)"),
+        ("limit" = Option<usize>, Query, description = "Maximum results (1-100)")
+    ),
+    responses(
+        (status = 200, description = "Analyst performance metrics", body = AnalystMetricsResponse),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Analytics"
+)]
 async fn get_analyst_metrics(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -401,6 +430,15 @@ async fn get_analyst_metrics(
 }
 
 /// Get security posture overview.
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/posture",
+    responses(
+        (status = 200, description = "Security posture overview", body = SecurityPostureResponse),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Analytics"
+)]
 async fn get_security_posture(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -446,6 +484,22 @@ async fn get_security_posture(
 }
 
 /// Get trend data.
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/trends",
+    params(
+        ("start" = Option<DateTime<Utc>>, Query, description = "Start of time range (ISO 8601)"),
+        ("end" = Option<DateTime<Utc>>, Query, description = "End of time range (ISO 8601)"),
+        ("granularity" = Option<String>, Query, description = "Time granularity: hourly, daily, weekly, monthly"),
+        ("metric" = Option<String>, Query, description = "Metric type: incidents, resolution_time, accuracy")
+    ),
+    responses(
+        (status = 200, description = "Trend data", body = TrendsResponse),
+        (status = 400, description = "Invalid granularity"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Analytics"
+)]
 async fn get_trends(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,

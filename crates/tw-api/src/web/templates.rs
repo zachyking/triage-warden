@@ -250,6 +250,7 @@ pub struct PlaybookDetailData {
 }
 
 pub struct PlaybookStageData {
+    pub index: usize,
     pub name: String,
     pub description: Option<String>,
     pub parallel: bool,
@@ -333,6 +334,7 @@ pub struct SettingsTemplate {
     pub privacy: PrivacySettingsData,
     pub guardrails: GuardrailsSettingsData,
     pub compliance: ComplianceSettingsData,
+    pub autonomy_level: String,
 }
 
 /// Kill switch status data for the settings template.
@@ -946,4 +948,213 @@ pub(crate) struct LessonData {
     pub incident_id: Option<Uuid>,
     pub incident_title: Option<String>,
     pub created_at: String,
+}
+
+// ============================================
+// Stage 5: Hunting Page
+// ============================================
+
+/// Threat hunting page.
+#[derive(Template)]
+#[template(path = "hunting.html")]
+pub struct HuntingTemplate {
+    pub active_nav: String,
+    pub critical_count: u32,
+    pub open_count: u32,
+    pub approval_count: u32,
+    pub system_healthy: bool,
+    pub current_user: Option<CurrentUserInfo>,
+    pub csrf_token: String,
+    pub active_hunts: u32,
+    pub total_findings: u32,
+    pub critical_findings: u32,
+    pub findings_24h: u32,
+    pub hunts: Vec<HuntRow>,
+}
+
+pub struct HuntRow {
+    pub id: Uuid,
+    pub name: String,
+    pub hypothesis: String,
+    pub hunt_type: String,
+    pub status: String,
+    pub status_color: String,
+    pub mitre_techniques: Vec<String>,
+    pub last_run: Option<String>,
+    pub last_result_total: Option<u32>,
+}
+
+/// Hunt detail page.
+#[derive(Template)]
+#[template(path = "hunting_detail.html")]
+pub struct HuntDetailTemplate {
+    pub active_nav: String,
+    pub critical_count: u32,
+    pub open_count: u32,
+    pub approval_count: u32,
+    pub system_healthy: bool,
+    pub current_user: Option<CurrentUserInfo>,
+    pub csrf_token: String,
+    pub hunt: HuntRow,
+    pub description: String,
+    pub data_sources: Vec<String>,
+    pub tags: Vec<String>,
+    pub queries_count: u32,
+    pub total_findings: u32,
+    pub results_count: u32,
+    pub enabled: bool,
+    pub created_at: String,
+}
+
+// ============================================
+// Assets Page
+// ============================================
+
+/// Asset inventory page.
+#[derive(Template)]
+#[template(path = "assets.html")]
+pub struct AssetsTemplate {
+    pub active_nav: String,
+    pub critical_count: u32,
+    pub open_count: u32,
+    pub approval_count: u32,
+    pub system_healthy: bool,
+    pub current_user: Option<CurrentUserInfo>,
+    pub csrf_token: String,
+    pub assets: Vec<AssetRow>,
+    pub total_count: u32,
+    pub type_filter: String,
+    pub criticality_filter: String,
+    pub query: String,
+    pub page: u32,
+    pub total_pages: u32,
+}
+
+pub struct AssetRow {
+    pub name: String,
+    pub asset_type: String,
+    pub criticality: String,
+    pub environment: String,
+    pub last_seen: String,
+}
+
+// ============================================
+// Packages Page
+// ============================================
+
+/// Content packages browser page.
+#[derive(Template)]
+#[template(path = "packages.html")]
+pub struct PackagesTemplate {
+    pub active_nav: String,
+    pub critical_count: u32,
+    pub open_count: u32,
+    pub approval_count: u32,
+    pub system_healthy: bool,
+    pub current_user: Option<CurrentUserInfo>,
+    pub csrf_token: String,
+    pub packages: Vec<PackageRow>,
+}
+
+pub struct PackageRow {
+    pub name: String,
+    pub version: String,
+    pub author: String,
+    pub content_count: u32,
+    pub imported_at: String,
+}
+
+// ============================================
+// Admin: User Management
+// ============================================
+
+/// Modal template for adding or editing a user.
+#[derive(Template)]
+#[template(path = "admin/user_form.html")]
+pub struct UserFormTemplate {
+    pub is_edit: bool,
+    pub csrf_token: String,
+    pub user_id: Option<Uuid>,
+    pub username: Option<String>,
+    pub email: Option<String>,
+    pub display_name: Option<String>,
+    pub role: Option<String>,
+    pub enabled: Option<bool>,
+}
+
+/// Modal template for resetting a user's password.
+#[derive(Template)]
+#[template(path = "partials/modal_reset_password.html")]
+pub struct ResetPasswordModalTemplate {
+    pub user_id: Uuid,
+    pub username: String,
+    pub csrf_token: String,
+}
+
+/// A single user row for the users table partial.
+pub struct UserRowData {
+    pub id: Uuid,
+    pub username: String,
+    pub email: String,
+    pub display_name_or_username: String,
+    pub role: String,
+    pub enabled: bool,
+    pub last_login_at: Option<String>,
+    pub is_current: bool,
+}
+
+/// Partial template for the users table body (filtered).
+#[derive(Template)]
+#[template(path = "partials/users_table.html")]
+pub struct UsersTablePartialTemplate {
+    pub users: Vec<UserRowData>,
+}
+
+/// Full page template for user management (admin/users.html).
+#[derive(Template)]
+#[template(path = "admin/users.html")]
+pub struct AdminUsersTemplate {
+    pub active_nav: String,
+    pub critical_count: u32,
+    pub open_count: u32,
+    pub approval_count: u32,
+    pub system_healthy: bool,
+    pub current_user: Option<CurrentUserInfo>,
+    pub csrf_token: String,
+    pub users: Vec<UserRowData>,
+}
+
+// ============================================
+// Hunting Partials
+// ============================================
+
+/// Modal for creating a new hunt.
+#[derive(Template)]
+#[template(path = "partials/modal_add_hunt.html")]
+pub struct AddHuntModalTemplate;
+
+/// Partial rendering hunt table rows (filtered).
+#[derive(Template)]
+#[template(
+    source = r#"{% for hunt in hunts %}
+{% include "partials/hunt_row.html" %}
+{% endfor %}
+{% if hunts.is_empty() %}
+<tr>
+  <td colspan="7">
+    <div class="empty-state">
+      <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+        <circle cx="11" cy="11" r="8"/>
+        <path d="M21 21l-4.35-4.35"/>
+      </svg>
+      <div class="empty-state-title">No hunts match your filters</div>
+      <div class="empty-state-text">Try adjusting your filter criteria.</div>
+    </div>
+  </td>
+</tr>
+{% endif %}"#,
+    ext = "html"
+)]
+pub struct HuntsPartialTemplate {
+    pub hunts: Vec<HuntRow>,
 }

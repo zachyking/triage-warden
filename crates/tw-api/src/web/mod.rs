@@ -22,28 +22,44 @@ use tw_core::db::{
     create_connector_repository, create_incident_repository, create_knowledge_repository,
     create_lesson_repository, create_notification_repository, create_playbook_repository,
     create_policy_repository, create_rbac_repository, create_settings_repository,
-    create_user_repository, GeneralSettings, IncidentFilter, IncidentRepository, LlmSettings,
-    Pagination, PlaybookFilter, PolicyRepository, RateLimits,
+    create_user_repository, GeneralSettings, IncidentFilter, IncidentRepository, Pagination,
+    PlaybookFilter, PolicyRepository, RateLimits,
 };
+use tw_core::hunting::{FindingSeverity, HuntStatus, HuntingHunt};
 use tw_core::incident::{ApprovalStatus, IncidentStatus, Severity};
 use tw_core::knowledge::{KnowledgeFilter, KnowledgeType};
 use tw_core::lesson::LessonFilter;
 use tw_core::privacy::RetentionManager;
 use tw_core::rbac::{AccessReview, ReviewStatus};
-use tw_core::{CommentType, IncidentComment, UserFilter};
+use tw_core::{AssetSearchParams, CommentType, IncidentComment, UserFilter};
 
-use crate::auth::{generate_csrf_token, AuthenticatedUser};
+use crate::auth::{generate_csrf_token, AuthenticatedUser, RequireAdmin};
 use crate::error::ApiError;
 use crate::state::AppState;
 use templates::*;
 use tw_core::User;
+
+/// Converts a User to a UserRowData for admin table rendering.
+fn user_to_row(u: User, current_user_id: Uuid) -> UserRowData {
+    let display = u.display_name.as_deref().unwrap_or(&u.username).to_string();
+    UserRowData {
+        id: u.id,
+        username: u.username.clone(),
+        email: u.email,
+        display_name_or_username: display,
+        role: u.role.as_str().to_string(),
+        enabled: u.enabled,
+        last_login_at: u.last_login_at.map(format_time_ago),
+        is_current: u.id == current_user_id,
+    }
+}
 
 /// Converts a User to CurrentUserInfo for templates.
 fn user_to_current_info(user: &User) -> CurrentUserInfo {
     CurrentUserInfo {
         username: user.username.clone(),
         display_name: user.display_name.clone(),
-        role: format!("{:?}", user.role),
+        role: user.role.as_str().to_string(),
     }
 }
 
@@ -127,6 +143,19 @@ pub fn create_web_router(state: AppState) -> Router {
         .route("/knowledge/:id", get(knowledge_detail))
         .route("/analytics", get(analytics))
         .route("/web/partials/lessons", get(partials_lessons))
+        // Stage 5: Hunting, Assets, Packages
+        .route("/hunting", get(hunting))
+        .route("/hunting/:id", get(hunting_detail))
+        .route("/web/modals/add-hunt", get(modal_add_hunt))
+        .route("/web/partials/hunts", get(partials_hunts))
+        .route("/assets", get(assets_list))
+        .route("/packages", get(packages_list))
+        // Admin: User Management
+        .route("/admin/users", get(admin_users))
+        .route("/web/modals/add-user", get(modal_add_user))
+        .route("/web/modals/edit-user/:id", get(modal_edit_user))
+        .route("/web/modals/reset-password/:id", get(modal_reset_password))
+        .route("/web/partials/users-table", get(partials_users_table))
         .with_state(state)
 }
 
@@ -310,11 +339,11 @@ async fn incident_detail(
             let audit_entries = audit_repo
                 .get_for_incident(user.tenant_id, id)
                 .await
-                .unwrap_or_default()
+                .unwrap_or_log("Failed to fetch audit log")
                 .into_iter()
                 .map(|e| AuditEntry {
                     timestamp: e.timestamp.format("%H:%M:%S").to_string(),
-                    action: format!("{:?}", e.action),
+                    action: audit_action_str(&e.action),
                     actor: e.actor,
                     details: e.details.map(|v| v.to_string()),
                 })
@@ -361,7 +390,10 @@ async fn approvals(
         per_page: 50,
     };
 
-    let pending_incidents = repo.list(&filter, &pagination).await.unwrap_or_default();
+    let pending_incidents = repo
+        .list(&filter, &pagination)
+        .await
+        .unwrap_or_log("Failed to fetch pending incidents");
 
     // Convert to pending actions
     let pending_actions: Vec<PendingAction> = pending_incidents
@@ -377,7 +409,7 @@ async fn approvals(
                     incident_title: extract_title(&incident.alert_data),
                     action_type: format!("{}", action.action_type),
                     description: action.reason.clone(),
-                    target: Some(format!("{:?}", action.target)),
+                    target: Some(action_target_str(&action.target)),
                     risk_level: "high".to_string(),
                     proposed_at: format_time_ago(incident.created_at),
                     proposed_by: "System".to_string(),
@@ -415,7 +447,10 @@ async fn playbooks(
         tenant_id: Some(user.tenant_id),
         ..Default::default()
     };
-    let db_playbooks = playbook_repo.list(&filter).await.unwrap_or_default();
+    let db_playbooks = playbook_repo
+        .list(&filter)
+        .await
+        .unwrap_or_log("Failed to fetch playbooks");
 
     // Convert to template data
     let playbooks_list: Vec<PlaybookData> = db_playbooks
@@ -486,7 +521,9 @@ async fn playbook_detail(
                 stages: playbook
                     .stages
                     .into_iter()
-                    .map(|s| PlaybookStageData {
+                    .enumerate()
+                    .map(|(i, s)| PlaybookStageData {
+                        index: i,
                         name: s.name,
                         description: s.description,
                         parallel: s.parallel,
@@ -624,7 +661,7 @@ async fn settings(
     let connectors: Vec<ConnectorData> = connector_repo
         .list_for_tenant(tenant_id)
         .await
-        .unwrap_or_default()
+        .unwrap_or_log("Failed to fetch connectors")
         .into_iter()
         .map(|c| ConnectorData {
             id: c.id,
@@ -643,10 +680,13 @@ async fn settings(
     let db_rate_limits = settings_repo
         .get_rate_limits(tenant_id)
         .await
-        .unwrap_or(RateLimits {
-            isolate_host_hour: 5,
-            disable_user_hour: 10,
-            block_ip_hour: 20,
+        .unwrap_or_else(|e| {
+            tracing::warn!("Failed to load rate limits: {e}");
+            RateLimits {
+                isolate_host_hour: 5,
+                disable_user_hour: 10,
+                block_ip_hour: 20,
+            }
         });
 
     // Use defaults if settings are zero (first run)
@@ -673,7 +713,7 @@ async fn settings(
     let notification_channels: Vec<NotificationChannel> = notification_repo
         .list_for_tenant(tenant_id)
         .await
-        .unwrap_or_default()
+        .unwrap_or_log("Failed to fetch notification channels")
         .into_iter()
         .map(|channel| NotificationChannel {
             id: channel.id,
@@ -688,7 +728,7 @@ async fn settings(
     let llm = settings_repo
         .get_llm(tenant_id)
         .await
-        .unwrap_or(LlmSettings::default());
+        .unwrap_or_log("Failed to load LLM settings");
     let llm_settings = LlmSettingsData {
         provider: llm.provider,
         model: llm.model,
@@ -704,7 +744,7 @@ async fn settings(
     let api_keys: Vec<ApiKeyData> = api_key_repo
         .list_by_user(user.id)
         .await
-        .unwrap_or_default()
+        .unwrap_or_log("Failed to fetch API keys")
         .into_iter()
         .map(|key| ApiKeyData {
             id: key.id,
@@ -787,7 +827,7 @@ async fn settings(
     let roles = rbac_repo
         .list_roles(tenant_id, true)
         .await
-        .unwrap_or_default();
+        .unwrap_or_log("Failed to fetch roles");
     let custom_roles_count = roles.iter().filter(|role| !role.is_system).count();
     let users = create_user_repository(&state.db)
         .list(&UserFilter {
@@ -795,22 +835,24 @@ async fn settings(
             ..Default::default()
         })
         .await
-        .unwrap_or_default();
+        .unwrap_or_log("Failed to fetch users");
     let mut assignments_count = 0usize;
     for listed_user in users {
         assignments_count += rbac_repo
             .list_user_assignments(tenant_id, listed_user.id)
             .await
             .map(|rows| rows.len())
-            .unwrap_or(0);
+            .unwrap_or_else(|e| {
+                tracing::warn!("Failed to fetch role assignments: {e}");
+                0
+            });
     }
-    let access_reviews: Vec<AccessReview> = settings_repo
-        .get_raw(tenant_id, ACCESS_REVIEWS_SETTINGS_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default();
+    let access_reviews: Vec<AccessReview> = load_settings_json(
+        settings_repo.as_ref(),
+        tenant_id,
+        ACCESS_REVIEWS_SETTINGS_KEY,
+    )
+    .await;
     let now = Utc::now();
     let access_reviews_total = access_reviews.len();
     let access_reviews_active = access_reviews
@@ -834,37 +876,36 @@ async fn settings(
     };
 
     // Stage 6: Privacy summary
-    let retention_policy_count = settings_repo
-        .get_raw(tenant_id, RETENTION_SETTINGS_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(&raw).ok())
-        .map(|policies| policies.len())
-        .unwrap_or_else(|| RetentionManager::default().all_policies().len());
-    let subject_access_records: Vec<SubjectAccessRecordSummary> = settings_repo
-        .get_raw(tenant_id, SUBJECT_ACCESS_REQUESTS_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default();
+    let retention_policy_count = load_settings_deser::<Vec<serde_json::Value>>(
+        settings_repo.as_ref(),
+        tenant_id,
+        RETENTION_SETTINGS_KEY,
+    )
+    .await
+    .map(|policies| policies.len())
+    .unwrap_or_else(|| RetentionManager::default().all_policies().len());
+    let subject_access_records: Vec<SubjectAccessRecordSummary> = load_settings_json(
+        settings_repo.as_ref(),
+        tenant_id,
+        SUBJECT_ACCESS_REQUESTS_KEY,
+    )
+    .await;
     let subject_access_pending = subject_access_records
         .iter()
         .filter(|record| record.status == "pending_action")
         .count();
-    let last_cleanup_job = settings_repo
-        .get_raw(tenant_id, PRIVACY_CLEANUP_SCHEDULER_LAST_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str::<CleanupSchedulerSummary>(&raw).ok())
-        .map(|summary| {
-            summary
-                .timestamp
-                .format("%Y-%m-%d %H:%M:%S UTC")
-                .to_string()
-        });
+    let last_cleanup_job = load_settings_deser::<CleanupSchedulerSummary>(
+        settings_repo.as_ref(),
+        tenant_id,
+        PRIVACY_CLEANUP_SCHEDULER_LAST_KEY,
+    )
+    .await
+    .map(|summary| {
+        summary
+            .timestamp
+            .format("%Y-%m-%d %H:%M:%S UTC")
+            .to_string()
+    });
     let privacy = PrivacySettingsData {
         retention_policy_count,
         subject_access_total: subject_access_records.len(),
@@ -873,20 +914,20 @@ async fn settings(
     };
 
     // Stage 6: Guardrails summary
-    let rollback_entries = settings_repo
-        .get_raw(tenant_id, GUARDRAIL_ROLLBACKS_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(&raw).ok())
-        .map(|entries| entries.len())
-        .unwrap_or(0);
-    let pause_state = settings_repo
-        .get_raw(tenant_id, GUARDRAIL_AUTOPAUSE_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str::<PauseStateSummary>(&raw).ok());
+    let rollback_entries = load_settings_deser::<Vec<serde_json::Value>>(
+        settings_repo.as_ref(),
+        tenant_id,
+        GUARDRAIL_ROLLBACKS_KEY,
+    )
+    .await
+    .map(|entries| entries.len())
+    .unwrap_or(0);
+    let pause_state = load_settings_deser::<PauseStateSummary>(
+        settings_repo.as_ref(),
+        tenant_id,
+        GUARDRAIL_AUTOPAUSE_KEY,
+    )
+    .await;
     let guardrails = GuardrailsSettingsData {
         rollback_entries,
         automation_paused: pause_state.as_ref().is_some_and(|state| state.paused),
@@ -900,56 +941,56 @@ async fn settings(
     };
 
     // Stage 6: Compliance + immutable audit summary
-    let reports_count = settings_repo
-        .get_raw(tenant_id, COMPLIANCE_REPORT_INDEX_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(&raw).ok())
-        .map(|entries| entries.len())
-        .unwrap_or(0);
-    let evidence_packages_count = settings_repo
-        .get_raw(tenant_id, EVIDENCE_PACKAGE_INDEX_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(&raw).ok())
-        .map(|entries| entries.len())
-        .unwrap_or(0);
-    let immutable_alerts_count = settings_repo
-        .get_raw(tenant_id, IMMUTABLE_VERIFY_ALERTS_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(&raw).ok())
-        .map(|entries| entries.len())
-        .unwrap_or(0);
-    let mut verify_summary = settings_repo
-        .get_raw(tenant_id, IMMUTABLE_VERIFY_SCHEDULER_LAST_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str::<VerifySummary>(&raw).ok());
+    let reports_count = load_settings_deser::<Vec<serde_json::Value>>(
+        settings_repo.as_ref(),
+        tenant_id,
+        COMPLIANCE_REPORT_INDEX_KEY,
+    )
+    .await
+    .map(|entries| entries.len())
+    .unwrap_or(0);
+    let evidence_packages_count = load_settings_deser::<Vec<serde_json::Value>>(
+        settings_repo.as_ref(),
+        tenant_id,
+        EVIDENCE_PACKAGE_INDEX_KEY,
+    )
+    .await
+    .map(|entries| entries.len())
+    .unwrap_or(0);
+    let immutable_alerts_count = load_settings_deser::<Vec<serde_json::Value>>(
+        settings_repo.as_ref(),
+        tenant_id,
+        IMMUTABLE_VERIFY_ALERTS_KEY,
+    )
+    .await
+    .map(|entries| entries.len())
+    .unwrap_or(0);
+    let mut verify_summary = load_settings_deser::<VerifySummary>(
+        settings_repo.as_ref(),
+        tenant_id,
+        IMMUTABLE_VERIFY_SCHEDULER_LAST_KEY,
+    )
+    .await;
     if verify_summary.is_none() {
-        verify_summary = settings_repo
-            .get_raw(tenant_id, IMMUTABLE_VERIFY_LAST_KEY)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|raw| serde_json::from_str::<VerifySummary>(&raw).ok());
+        verify_summary = load_settings_deser::<VerifySummary>(
+            settings_repo.as_ref(),
+            tenant_id,
+            IMMUTABLE_VERIFY_LAST_KEY,
+        )
+        .await;
     }
-    let latest_archive_location = settings_repo
-        .get_raw(tenant_id, IMMUTABLE_ARCHIVE_INDEX_KEY)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str::<Vec<ArchiveIndexSummary>>(&raw).ok())
-        .and_then(|mut entries| {
-            entries.sort_by(|a, b| b.archived_at.cmp(&a.archived_at));
-            entries
-                .into_iter()
-                .find_map(|entry| entry.external_archive_path)
-        });
+    let latest_archive_location = load_settings_deser::<Vec<ArchiveIndexSummary>>(
+        settings_repo.as_ref(),
+        tenant_id,
+        IMMUTABLE_ARCHIVE_INDEX_KEY,
+    )
+    .await
+    .and_then(|mut entries| {
+        entries.sort_by(|a, b| b.archived_at.cmp(&a.archived_at));
+        entries
+            .into_iter()
+            .find_map(|entry| entry.external_archive_path)
+    });
     let compliance = ComplianceSettingsData {
         reports_count,
         evidence_packages_count,
@@ -963,6 +1004,9 @@ async fn settings(
         last_verify_valid: verify_summary.as_ref().map(|summary| summary.valid),
         latest_archive_location,
     };
+
+    // Read autonomy level from the in-memory autonomy config store
+    let autonomy_level = crate::routes::autonomy::get_autonomy_level_for_tenant(tenant_id).await;
 
     let template = SettingsTemplate {
         active_nav: "settings".to_string(),
@@ -986,6 +1030,7 @@ async fn settings(
         privacy,
         guardrails,
         compliance,
+        autonomy_level,
     };
 
     Ok(HtmlTemplate(template))
@@ -1112,7 +1157,7 @@ async fn partials_notifications(
     let notification_channels: Vec<NotificationChannel> = notification_repo
         .list_for_tenant(user.tenant_id)
         .await
-        .unwrap_or_default()
+        .unwrap_or_log("Failed to fetch notification channels")
         .into_iter()
         .map(|channel| NotificationChannel {
             id: channel.id,
@@ -1212,7 +1257,7 @@ async fn partials_connectors(
     let connectors: Vec<ConnectorData> = connector_repo
         .list_for_tenant(user.tenant_id)
         .await
-        .unwrap_or_default()
+        .unwrap_or_log("Failed to fetch connectors")
         .into_iter()
         .map(|c| ConnectorData {
             id: c.id,
@@ -1255,6 +1300,7 @@ async fn modal_edit_stage(
                 playbook_id: id,
                 stage_index,
                 stage: PlaybookStageData {
+                    index: stage_index,
                     name: stage.name.clone(),
                     description: stage.description.clone(),
                     parallel: stage.parallel,
@@ -1509,15 +1555,16 @@ async fn partials_incident_timeline(
     let entries = audit_repo
         .get_for_incident(user.tenant_id, id)
         .await
-        .unwrap_or_default();
+        .unwrap_or_log("Failed to fetch audit log");
 
     let events: Vec<TimelineEvent> = entries
         .into_iter()
         .map(|e| {
-            let event_type = classify_timeline_event(&format!("{:?}", e.action));
+            let action_str = audit_action_str(&e.action);
+            let event_type = classify_timeline_event(&action_str);
             TimelineEvent {
                 event_type,
-                title: format!("{:?}", e.action),
+                title: action_str,
                 description: e.actor.clone(),
                 timestamp: e.timestamp.format("%H:%M:%S").to_string(),
                 severity: None,
@@ -1879,15 +1926,16 @@ async fn partials_activity_feed(
     let entries = audit_repo
         .get_recent_for_tenant(user.tenant_id, 20)
         .await
-        .unwrap_or_default();
+        .unwrap_or_log("Failed to fetch activity feed");
 
     let activities: Vec<ActivityData> = entries
         .into_iter()
         .map(|(incident_id, e)| {
-            let activity_type = classify_timeline_event(&format!("{:?}", e.action));
+            let action_str = audit_action_str(&e.action);
+            let activity_type = classify_timeline_event(&action_str);
             ActivityData {
                 activity_type,
-                description: format!("{:?}", e.action),
+                description: action_str,
                 actor: e.actor,
                 timestamp: format_time_ago(e.timestamp),
                 incident_id: Some(incident_id),
@@ -2028,10 +2076,15 @@ fn knowledge_category(doc_type: KnowledgeType) -> &'static str {
 
 fn summarize_knowledge_content(content: &str, max_chars: usize) -> String {
     let normalized = content.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.len() <= max_chars {
+    if normalized.chars().count() <= max_chars {
         normalized
     } else {
-        format!("{}...", &normalized[..max_chars])
+        let boundary = normalized
+            .char_indices()
+            .nth(max_chars)
+            .map(|(i, _)| i)
+            .unwrap_or(normalized.len());
+        format!("{}...", &normalized[..boundary])
     }
 }
 
@@ -2110,7 +2163,7 @@ async fn analytics(
     let recent_incidents = repo
         .list(&tenant_filter, &recent_pagination)
         .await
-        .unwrap_or_default();
+        .unwrap_or_log("Failed to fetch incidents");
 
     let mut technique_counts: std::collections::HashMap<(String, String), u32> =
         std::collections::HashMap::new();
@@ -2142,6 +2195,520 @@ async fn analytics(
         top_techniques,
         analyst_workload: vec![],
         incident_trend: vec![],
+    };
+
+    Ok(HtmlTemplate(template))
+}
+
+// ============================================
+// Stage 5: Hunting / Assets / Packages
+// ============================================
+
+const HUNTS_SETTINGS_KEY: &str = "hunting_hunts_v1";
+const HUNT_RESULTS_SETTINGS_KEY: &str = "hunting_results_v1";
+const PACKAGES_SETTINGS_KEY: &str = "content_packages_v1";
+
+/// Serialize a serde enum variant to its snake_case JSON string (e.g. OnDemand → "on_demand").
+fn serde_variant_str<T: serde::Serialize>(val: &T) -> String {
+    serde_json::to_value(val)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default()
+}
+
+/// Human-readable string for EnrichmentType, handling Custom variant.
+fn enrichment_type_str(et: &tw_core::incident::EnrichmentType) -> String {
+    use tw_core::incident::EnrichmentType;
+    match et {
+        EnrichmentType::Custom(s) => s.clone(),
+        other => serde_variant_str(other),
+    }
+}
+
+/// Human-readable string for IoCType, handling Other variant.
+fn ioc_type_str(it: &tw_core::incident::IoCType) -> String {
+    use tw_core::incident::IoCType;
+    match it {
+        IoCType::Other(s) => s.clone(),
+        other => serde_variant_str(other),
+    }
+}
+
+/// Human-readable string for AuditAction.
+fn audit_action_str(action: &tw_core::incident::AuditAction) -> String {
+    use tw_core::incident::AuditAction;
+    match action {
+        AuditAction::IncidentCreated => "Incident Created".to_string(),
+        AuditAction::StatusChanged(status) => format!("Status Changed to {}", status),
+        AuditAction::EnrichmentAdded => "Enrichment Added".to_string(),
+        AuditAction::AnalysisCompleted => "Analysis Completed".to_string(),
+        AuditAction::ActionProposed => "Action Proposed".to_string(),
+        AuditAction::ActionApproved => "Action Approved".to_string(),
+        AuditAction::ActionDenied => "Action Denied".to_string(),
+        AuditAction::ActionExecuted => "Action Executed".to_string(),
+        AuditAction::ActionFailed => "Action Failed".to_string(),
+        AuditAction::TicketCreated => "Ticket Created".to_string(),
+        AuditAction::TicketUpdated => "Ticket Updated".to_string(),
+        AuditAction::CommentAdded => "Comment Added".to_string(),
+        AuditAction::Escalated => "Escalated".to_string(),
+        AuditAction::Closed => "Closed".to_string(),
+    }
+}
+
+/// Human-readable string for ActionTarget.
+fn action_target_str(target: &tw_core::incident::ActionTarget) -> String {
+    use tw_core::incident::ActionTarget;
+    match target {
+        ActionTarget::Host { hostname, ip } => match ip {
+            Some(ip) => format!("{} ({})", hostname, ip),
+            None => hostname.clone(),
+        },
+        ActionTarget::User { username, .. } => username.clone(),
+        ActionTarget::IpAddress(ip) => ip.clone(),
+        ActionTarget::Domain(d) => d.clone(),
+        ActionTarget::Email { message_id } => message_id.clone(),
+        ActionTarget::Ticket { ticket_id } => ticket_id.clone(),
+        ActionTarget::None => "-".to_string(),
+    }
+}
+
+/// Extension trait that unwraps a Result, logging the error before returning the default.
+trait UnwrapOrLog {
+    type Value;
+    fn unwrap_or_log(self, msg: &str) -> Self::Value;
+}
+
+impl<T: Default, E: std::fmt::Display> UnwrapOrLog for Result<T, E> {
+    type Value = T;
+    fn unwrap_or_log(self, msg: &str) -> T {
+        match self {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("{msg}: {e}");
+                T::default()
+            }
+        }
+    }
+}
+
+/// Deserialize a JSON value from settings, logging DB and parse errors.
+/// Returns `None` when the key is absent or any error occurs.
+async fn load_settings_deser<T: serde::de::DeserializeOwned>(
+    repo: &dyn tw_core::db::SettingsRepository,
+    tenant_id: Uuid,
+    key: &str,
+) -> Option<T> {
+    match repo.get_raw(tenant_id, key).await {
+        Ok(Some(raw)) => match serde_json::from_str(&raw) {
+            Ok(val) => Some(val),
+            Err(e) => {
+                tracing::warn!(settings_key = key, error = %e, "Failed to deserialize settings");
+                None
+            }
+        },
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!(settings_key = key, error = %e, "Failed to load settings");
+            None
+        }
+    }
+}
+
+/// Load a JSON value from settings, returning `T::default()` on any error.
+async fn load_settings_json<T: serde::de::DeserializeOwned + Default>(
+    repo: &dyn tw_core::db::SettingsRepository,
+    tenant_id: Uuid,
+    key: &str,
+) -> T {
+    load_settings_deser(repo, tenant_id, key)
+        .await
+        .unwrap_or_default()
+}
+
+/// Convert a HuntingHunt into a HuntRow for templates.
+fn hunt_to_row(h: &HuntingHunt) -> HuntRow {
+    let status_color = match h.status {
+        HuntStatus::Active => "success".to_string(),
+        HuntStatus::Draft => "info".to_string(),
+        HuntStatus::Paused => "warning".to_string(),
+        HuntStatus::Completed => "accent".to_string(),
+        HuntStatus::Failed => "critical".to_string(),
+        HuntStatus::Archived => "info".to_string(),
+    };
+    HuntRow {
+        id: h.id,
+        name: h.name.clone(),
+        hypothesis: h.hypothesis.clone(),
+        hunt_type: serde_variant_str(&h.hunt_type),
+        status: serde_variant_str(&h.status),
+        status_color,
+        mitre_techniques: h.mitre_techniques.clone(),
+        last_run: h.last_run.map(format_time_ago),
+        last_result_total: h.last_result.as_ref().map(|r| r.total_findings as u32),
+    }
+}
+
+/// Threat hunting page.
+async fn hunting(
+    State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
+    let repo = create_incident_repository(&state.db);
+    let nav = fetch_nav_counts(repo.as_ref(), user.tenant_id).await;
+
+    let settings_repo = create_settings_repository(&state.db, state.encryptor.clone());
+    let hunts: Vec<HuntingHunt> =
+        load_settings_json(settings_repo.as_ref(), user.tenant_id, HUNTS_SETTINGS_KEY).await;
+
+    let results: Vec<tw_core::hunting::HuntResult> = load_settings_json(
+        settings_repo.as_ref(),
+        user.tenant_id,
+        HUNT_RESULTS_SETTINGS_KEY,
+    )
+    .await;
+
+    let active_hunts = hunts
+        .iter()
+        .filter(|h| h.status == HuntStatus::Active)
+        .count() as u32;
+    let total_findings: u32 = results.iter().map(|r| r.findings.len() as u32).sum();
+    let critical_findings: u32 = results
+        .iter()
+        .flat_map(|r| &r.findings)
+        .filter(|f| f.severity == FindingSeverity::Critical)
+        .count() as u32;
+    let now = Utc::now();
+    let findings_24h: u32 = results
+        .iter()
+        .filter(|r| now.signed_duration_since(r.completed_at) < Duration::hours(24))
+        .map(|r| r.findings.len() as u32)
+        .sum();
+
+    let hunt_rows: Vec<HuntRow> = hunts.iter().map(hunt_to_row).collect();
+
+    let template = HuntingTemplate {
+        active_nav: "hunting".to_string(),
+        critical_count: nav.critical_count,
+        open_count: nav.open_count,
+        approval_count: nav.approval_count,
+        system_healthy: true,
+        current_user: Some(user_to_current_info(&user)),
+        csrf_token: generate_csrf_token(),
+        active_hunts,
+        total_findings,
+        critical_findings,
+        findings_24h,
+        hunts: hunt_rows,
+    };
+
+    Ok(HtmlTemplate(template))
+}
+
+/// Hunt detail page.
+async fn hunting_detail(
+    State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
+    Path(hunt_id): Path<Uuid>,
+) -> Result<Response, ApiError> {
+    let repo = create_incident_repository(&state.db);
+    let nav = fetch_nav_counts(repo.as_ref(), user.tenant_id).await;
+
+    let settings_repo = create_settings_repository(&state.db, state.encryptor.clone());
+    let hunts: Vec<HuntingHunt> =
+        load_settings_json(settings_repo.as_ref(), user.tenant_id, HUNTS_SETTINGS_KEY).await;
+
+    let hunt = hunts.iter().find(|h| h.id == hunt_id);
+    let Some(hunt) = hunt else {
+        return Err(ApiError::NotFound("Hunt not found".to_string()));
+    };
+
+    let results: Vec<tw_core::hunting::HuntResult> = load_settings_json(
+        settings_repo.as_ref(),
+        user.tenant_id,
+        HUNT_RESULTS_SETTINGS_KEY,
+    )
+    .await;
+
+    let hunt_results: Vec<_> = results.iter().filter(|r| r.hunt_id == hunt_id).collect();
+    let total_findings: u32 = hunt_results.iter().map(|r| r.findings.len() as u32).sum();
+
+    let row = hunt_to_row(hunt);
+
+    let template = HuntDetailTemplate {
+        active_nav: "hunting".to_string(),
+        critical_count: nav.critical_count,
+        open_count: nav.open_count,
+        approval_count: nav.approval_count,
+        system_healthy: true,
+        current_user: Some(user_to_current_info(&user)),
+        csrf_token: generate_csrf_token(),
+        hunt: row,
+        description: hunt.description.clone(),
+        data_sources: hunt.data_sources.clone(),
+        tags: hunt.tags.clone(),
+        queries_count: hunt.queries.len() as u32,
+        total_findings,
+        results_count: hunt_results.len() as u32,
+        enabled: hunt.enabled,
+        created_at: format_time_ago(hunt.created_at),
+    };
+
+    Ok(HtmlTemplate(template).into_response())
+}
+
+/// Modal for creating a new hunt.
+async fn modal_add_hunt(
+    AuthenticatedUser(_user): AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(HtmlTemplate(AddHuntModalTemplate))
+}
+
+/// Query parameters for hunt filters (HTMX partial).
+#[derive(Debug, Deserialize)]
+struct HuntsFilterQuery {
+    #[serde(default, rename = "filter-status")]
+    status: String,
+    #[serde(default, rename = "filter-type")]
+    hunt_type: String,
+    #[serde(default, rename = "filter-category")]
+    category: String,
+}
+
+/// Partial handler: returns filtered hunt table rows.
+async fn partials_hunts(
+    State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
+    Query(query): Query<HuntsFilterQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let settings_repo = create_settings_repository(&state.db, state.encryptor.clone());
+    let hunts: Vec<HuntingHunt> =
+        load_settings_json(settings_repo.as_ref(), user.tenant_id, HUNTS_SETTINGS_KEY).await;
+
+    // Build MITRE technique → category lookup from the built-in query library
+    // (only when category filter is active, avoids hardcoded mapping)
+    let technique_map: std::collections::HashMap<String, String> = if query.category.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        let mut map = std::collections::HashMap::new();
+        for q in tw_core::hunting::get_built_in_queries() {
+            let cat = serde_variant_str(&q.category);
+            for tech in &q.mitre_techniques {
+                map.insert(tech.clone(), cat.clone());
+                if let Some(base) = tech.split('.').next() {
+                    map.entry(base.to_string()).or_insert_with(|| cat.clone());
+                }
+            }
+        }
+        map
+    };
+
+    let hunt_rows: Vec<HuntRow> = hunts
+        .iter()
+        .filter(|h| {
+            if !query.status.is_empty() && serde_variant_str(&h.status) != query.status {
+                return false;
+            }
+            if !query.hunt_type.is_empty() && serde_variant_str(&h.hunt_type) != query.hunt_type {
+                return false;
+            }
+            if !query.category.is_empty() {
+                let matches_category = h.mitre_techniques.iter().any(|t| {
+                    let base = t.split('.').next().unwrap_or("");
+                    technique_map
+                        .get(t.as_str())
+                        .or_else(|| technique_map.get(base))
+                        == Some(&query.category)
+                });
+                if !matches_category {
+                    return false;
+                }
+            }
+            true
+        })
+        .map(hunt_to_row)
+        .collect();
+
+    let template = HuntsPartialTemplate { hunts: hunt_rows };
+    Ok(HtmlTemplate(template))
+}
+
+/// Query parameters for assets page.
+#[derive(Debug, Deserialize)]
+struct AssetsQuery {
+    #[serde(default)]
+    asset_type: String,
+    #[serde(default)]
+    criticality: String,
+    #[serde(default)]
+    q: String,
+    #[serde(default = "default_page")]
+    page: u32,
+}
+
+/// Asset inventory page.
+async fn assets_list(
+    State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
+    Query(query): Query<AssetsQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let repo = create_incident_repository(&state.db);
+    let nav = fetch_nav_counts(repo.as_ref(), user.tenant_id).await;
+
+    let per_page = 20u32;
+    let page = query.page.max(1);
+    let offset = (page - 1).saturating_mul(per_page) as usize;
+
+    let name_filter = if query.q.is_empty() {
+        None
+    } else {
+        Some(query.q.clone())
+    };
+
+    let type_filter = if query.asset_type.is_empty() {
+        None
+    } else {
+        Some(query.asset_type.clone())
+    };
+
+    let crit_filter = if query.criticality.is_empty() {
+        None
+    } else {
+        Some(query.criticality.clone())
+    };
+
+    // Count total for pagination (cap to avoid loading unbounded data)
+    const ASSET_COUNT_CAP: usize = 10_000;
+    let all_matching = state
+        .asset_store
+        .search(
+            user.tenant_id,
+            &AssetSearchParams {
+                name: name_filter.clone(),
+                asset_type: type_filter.as_deref().and_then(parse_asset_type_opt),
+                criticality: crit_filter.as_deref().and_then(parse_criticality_opt),
+                environment: None,
+                tag: None,
+                limit: Some(ASSET_COUNT_CAP),
+                offset: None,
+            },
+        )
+        .await
+        .unwrap_or_log("Failed to count assets");
+    let total_count = all_matching.len() as u32;
+    let total_pages = if total_count == 0 {
+        1
+    } else {
+        ((total_count as f32) / (per_page as f32)).ceil() as u32
+    };
+
+    let assets = state
+        .asset_store
+        .search(
+            user.tenant_id,
+            &AssetSearchParams {
+                name: name_filter,
+                asset_type: type_filter.as_deref().and_then(parse_asset_type_opt),
+                criticality: crit_filter.as_deref().and_then(parse_criticality_opt),
+                environment: None,
+                tag: None,
+                limit: Some(per_page as usize),
+                offset: Some(offset),
+            },
+        )
+        .await
+        .unwrap_or_log("Failed to fetch assets");
+
+    let asset_rows: Vec<AssetRow> = assets
+        .into_iter()
+        .map(|a| AssetRow {
+            name: a.name,
+            asset_type: serde_variant_str(&a.asset_type),
+            criticality: serde_variant_str(&a.criticality),
+            environment: serde_variant_str(&a.environment),
+            last_seen: format_time_ago(a.last_seen),
+        })
+        .collect();
+
+    let template = AssetsTemplate {
+        active_nav: "assets".to_string(),
+        critical_count: nav.critical_count,
+        open_count: nav.open_count,
+        approval_count: nav.approval_count,
+        system_healthy: true,
+        current_user: Some(user_to_current_info(&user)),
+        csrf_token: generate_csrf_token(),
+        assets: asset_rows,
+        total_count,
+        type_filter: query.asset_type,
+        criticality_filter: query.criticality,
+        query: query.q,
+        page,
+        total_pages,
+    };
+
+    Ok(HtmlTemplate(template))
+}
+
+/// Packages browser page.
+async fn packages_list(
+    State(state): State<AppState>,
+    AuthenticatedUser(user): AuthenticatedUser,
+) -> Result<impl IntoResponse, ApiError> {
+    let repo = create_incident_repository(&state.db);
+    let nav = fetch_nav_counts(repo.as_ref(), user.tenant_id).await;
+
+    let settings_repo = create_settings_repository(&state.db, state.encryptor.clone());
+    let records: Vec<serde_json::Value> = load_settings_json(
+        settings_repo.as_ref(),
+        user.tenant_id,
+        PACKAGES_SETTINGS_KEY,
+    )
+    .await;
+
+    let packages: Vec<PackageRow> = records
+        .iter()
+        .filter_map(|v| {
+            let manifest = v.get("manifest")?;
+            Some(PackageRow {
+                name: manifest
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("Unknown")
+                    .to_string(),
+                version: manifest
+                    .get("version")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0.0.0")
+                    .to_string(),
+                author: manifest
+                    .get("author")
+                    .and_then(|a| a.as_str())
+                    .unwrap_or("Unknown")
+                    .to_string(),
+                content_count: v
+                    .get("contents")
+                    .and_then(|c| c.as_array())
+                    .map(|a| a.len() as u32)
+                    .unwrap_or(0),
+                imported_at: v
+                    .get("imported_at")
+                    .and_then(|t| t.as_str())
+                    .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                    .map(|dt| format_time_ago(dt.with_timezone(&Utc)))
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            })
+        })
+        .collect();
+
+    let template = PackagesTemplate {
+        active_nav: "packages".to_string(),
+        critical_count: nav.critical_count,
+        open_count: nav.open_count,
+        approval_count: nav.approval_count,
+        system_healthy: true,
+        current_user: Some(user_to_current_info(&user)),
+        csrf_token: generate_csrf_token(),
+        packages,
     };
 
     Ok(HtmlTemplate(template))
@@ -2377,7 +2944,7 @@ async fn fetch_incidents_with_filter(
     let incidents = repo
         .list(&tenant_scoped_filter, &pagination)
         .await
-        .unwrap_or_default();
+        .unwrap_or_log("Failed to fetch incidents");
 
     incidents
         .into_iter()
@@ -2400,7 +2967,10 @@ async fn fetch_incidents_with_filter(
 
 /// Fetches policies from the repository and converts them to template data.
 async fn fetch_policies(repo: &dyn PolicyRepository, tenant_id: Uuid) -> Vec<PolicyData> {
-    let policies = repo.list_for_tenant(tenant_id).await.unwrap_or_default();
+    let policies = repo
+        .list_for_tenant(tenant_id)
+        .await
+        .unwrap_or_log("Failed to fetch policies");
 
     policies
         .into_iter()
@@ -2437,7 +3007,7 @@ fn convert_incident_to_detail(
 
     // Convert analysis
     let analysis = incident.analysis.as_ref().map(|a| AnalysisData {
-        verdict: format!("{:?}", a.verdict).to_lowercase(),
+        verdict: serde_variant_str(&a.verdict),
         confidence: (a.confidence * 100.0) as u32,
         risk_score: a.risk_score as u32,
         summary: a.summary.clone(),
@@ -2467,7 +3037,7 @@ fn convert_incident_to_detail(
 
             EnrichmentData {
                 source: e.source.clone(),
-                indicator_type: format!("{:?}", e.enrichment_type),
+                indicator_type: enrichment_type_str(&e.enrichment_type),
                 indicator: e
                     .data
                     .get("indicator")
@@ -2488,7 +3058,7 @@ fn convert_incident_to_detail(
             a.iocs
                 .iter()
                 .map(|ioc| IoCData {
-                    ioc_type: format!("{:?}", ioc.ioc_type),
+                    ioc_type: ioc_type_str(&ioc.ioc_type),
                     value: ioc.value.clone(),
                     threat_level: ioc
                         .score
@@ -2516,8 +3086,8 @@ fn convert_incident_to_detail(
             id: a.id,
             action_type: format!("{}", a.action_type),
             description: a.reason.clone(),
-            target: Some(format!("{:?}", a.target)),
-            status: format!("{:?}", a.approval_status).to_lowercase(),
+            target: Some(action_target_str(&a.target)),
+            status: serde_variant_str(&a.approval_status),
         })
         .collect();
 
@@ -2727,6 +3297,203 @@ fn format_time_ago(dt: chrono::DateTime<chrono::Utc>) -> String {
     } else {
         dt.format("%Y-%m-%d").to_string()
     }
+}
+
+/// Parse asset type string to enum, returning None for empty/unknown values.
+fn parse_asset_type_opt(s: &str) -> Option<tw_core::models::AssetType> {
+    use tw_core::models::AssetType;
+    match s.to_lowercase().as_str() {
+        "server" => Some(AssetType::Server),
+        "workstation" => Some(AssetType::Workstation),
+        "mobile_device" => Some(AssetType::MobileDevice),
+        "network_device" => Some(AssetType::NetworkDevice),
+        "cloud_instance" => Some(AssetType::CloudInstance),
+        "container" => Some(AssetType::Container),
+        "database" => Some(AssetType::Database),
+        "application" => Some(AssetType::Application),
+        "iot_device" => Some(AssetType::IotDevice),
+        "" => None,
+        other => Some(AssetType::Custom(other.to_string())),
+    }
+}
+
+/// Parse criticality string to enum, returning None for empty/unknown values.
+fn parse_criticality_opt(s: &str) -> Option<tw_core::models::Criticality> {
+    use tw_core::models::Criticality;
+    match s.to_lowercase().as_str() {
+        "low" => Some(Criticality::Low),
+        "medium" => Some(Criticality::Medium),
+        "high" => Some(Criticality::High),
+        "critical" => Some(Criticality::Critical),
+        _ => None,
+    }
+}
+
+// ============================================
+// Admin: User Management Handlers
+// ============================================
+
+/// Modal for adding a new user.
+pub(crate) async fn modal_add_user(
+    RequireAdmin(_user): RequireAdmin,
+) -> Result<impl IntoResponse, ApiError> {
+    let template = UserFormTemplate {
+        is_edit: false,
+        csrf_token: generate_csrf_token(),
+        user_id: None,
+        username: None,
+        email: None,
+        display_name: None,
+        role: None,
+        enabled: None,
+    };
+    Ok(HtmlTemplate(template))
+}
+
+/// Modal for editing an existing user.
+pub(crate) async fn modal_edit_user(
+    State(state): State<AppState>,
+    RequireAdmin(admin): RequireAdmin,
+    Path(id): Path<Uuid>,
+) -> Result<Response, ApiError> {
+    let user_repo = create_user_repository(&state.db);
+
+    let target_user = user_repo
+        .get_for_tenant(id, admin.tenant_id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
+
+    let template = UserFormTemplate {
+        is_edit: true,
+        csrf_token: generate_csrf_token(),
+        user_id: Some(target_user.id),
+        username: Some(target_user.username),
+        email: Some(target_user.email),
+        display_name: target_user.display_name,
+        role: Some(target_user.role.as_str().to_string()),
+        enabled: Some(target_user.enabled),
+    };
+    Ok(HtmlTemplate(template).into_response())
+}
+
+/// Modal for resetting a user's password.
+pub(crate) async fn modal_reset_password(
+    State(state): State<AppState>,
+    RequireAdmin(admin): RequireAdmin,
+    Path(id): Path<Uuid>,
+) -> Result<Response, ApiError> {
+    let user_repo = create_user_repository(&state.db);
+
+    let target_user = user_repo
+        .get_for_tenant(id, admin.tenant_id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::NotFound("User not found".to_string()))?;
+
+    let template = ResetPasswordModalTemplate {
+        user_id: target_user.id,
+        username: target_user.username,
+        csrf_token: generate_csrf_token(),
+    };
+    Ok(HtmlTemplate(template).into_response())
+}
+
+/// Query parameters for the users table partial.
+#[derive(Debug, Deserialize)]
+pub(crate) struct UsersTableQuery {
+    #[serde(default)]
+    pub search: Option<String>,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub enabled: Option<String>,
+}
+
+/// Partial handler: returns filtered users table rows.
+/// Admin user management page.
+async fn admin_users(
+    State(state): State<AppState>,
+    RequireAdmin(admin): RequireAdmin,
+) -> Result<impl IntoResponse, ApiError> {
+    let repo = create_incident_repository(&state.db);
+    let user_repo = create_user_repository(&state.db);
+    let nav = fetch_nav_counts(repo.as_ref(), admin.tenant_id).await;
+
+    let filter = UserFilter {
+        tenant_id: Some(admin.tenant_id),
+        role: None,
+        enabled: None,
+        search: None,
+    };
+
+    let users = user_repo.list(&filter).await.map_err(|e| {
+        tracing::error!("Failed to list users: {e}");
+        ApiError::Internal(e.to_string())
+    })?;
+
+    let user_rows: Vec<UserRowData> = users
+        .into_iter()
+        .map(|u| user_to_row(u, admin.id))
+        .collect();
+
+    let template = AdminUsersTemplate {
+        active_nav: "admin".to_string(),
+        critical_count: nav.critical_count,
+        open_count: nav.open_count,
+        approval_count: nav.approval_count,
+        system_healthy: true,
+        current_user: Some(user_to_current_info(&admin)),
+        csrf_token: generate_csrf_token(),
+        users: user_rows,
+    };
+    Ok(HtmlTemplate(template))
+}
+
+pub(crate) async fn partials_users_table(
+    State(state): State<AppState>,
+    RequireAdmin(admin): RequireAdmin,
+    Query(query): Query<UsersTableQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let user_repo = create_user_repository(&state.db);
+
+    let role_filter = query
+        .role
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse::<tw_core::auth::Role>().ok());
+
+    let enabled_filter = query
+        .enabled
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse::<bool>().ok());
+
+    let search_filter = query
+        .search
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    let filter = UserFilter {
+        tenant_id: Some(admin.tenant_id),
+        role: role_filter,
+        enabled: enabled_filter,
+        search: search_filter,
+    };
+
+    let users = user_repo.list(&filter).await.map_err(|e| {
+        tracing::error!("Failed to list users: {e}");
+        ApiError::Internal(e.to_string())
+    })?;
+
+    let user_rows: Vec<UserRowData> = users
+        .into_iter()
+        .map(|u| user_to_row(u, admin.id))
+        .collect();
+
+    let template = UsersTablePartialTemplate { users: user_rows };
+    Ok(HtmlTemplate(template))
 }
 
 // ============================================

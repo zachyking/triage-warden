@@ -2,19 +2,19 @@
   <table class="table">
     <thead>
       <tr>
-        <th>Severity</th>
-        <th>Title</th>
-        <th>Type</th>
-        <th>Query</th>
-        <th>Detected</th>
-        <th>Actions</th>
+        <th scope="col">Severity</th>
+        <th scope="col">Title</th>
+        <th scope="col">Type</th>
+        <th scope="col">Query</th>
+        <th scope="col">Detected</th>
+        <th scope="col">Actions</th>
       </tr>
     </thead>
     <tbody>
       {% for finding in findings %}
       <tr>
         <td>
-          <span class="badge badge-{% if finding.severity == "Critical" %}danger{% elif finding.severity == "High" %}warning{% elif finding.severity == "Medium" %}info{% else %}secondary{% endif %}">
+          <span class="badge badge-{% if finding.severity == "Critical" %}critical{% else if finding.severity == "High" %}high{% else if finding.severity == "Medium" %}medium{% else %}low{% endif %}">
             {{ finding.severity }}
           </span>
         </td>
@@ -33,7 +33,7 @@
           <button class="btn btn-secondary btn-sm"
                   hx-post="/api/v1/hunts/{{ finding.hunt_id }}/findings/{{ finding.id }}/promote"
                   hx-swap="none"
-                  hx-on::after-request="if(event.detail.successful) { showToast('success', 'Finding Promoted', 'An incident has been created from this finding.'); location.reload(); }">
+                  hx-on::after-request="if(event.detail.successful) { showToast('success', 'Finding Promoted', 'An incident has been created from this finding.'); location.reload(); } else { showToast('error', 'Promotion Failed', 'Could not promote finding to incident.'); }">
             Promote
           </button>
           {% endmatch %}

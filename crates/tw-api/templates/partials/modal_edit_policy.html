@@ -9,7 +9,7 @@
       </button>
     </div>
     <form hx-put="/api/policies/{{ policy.id }}" hx-swap="none"
-          hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); htmx.ajax('GET', '/web/partials/policies', {target: '#policies-table-body', swap: 'innerHTML'}); }">
+          hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); showToast('success', 'Policy Updated', 'Approval policy has been saved.'); htmx.ajax('GET', '/web/partials/policies', {target: '#policies-table-body', swap: 'innerHTML'}); } else { showToast('error', 'Update Failed', 'Could not save policy changes.'); }">
       <div class="modal-body">
         <div class="form-group">
           <label class="form-label">Policy Name</label>

@@ -11,6 +11,7 @@ use axum::{
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::auth::RequireAnalyst;
@@ -32,7 +33,7 @@ const HUNT_RESULTS_SETTINGS_KEY: &str = "hunting_results_v1";
 // ============================================================================
 
 /// Request to create a new hunt.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateHuntRequest {
     pub name: String,
     pub description: Option<String>,
@@ -47,7 +48,7 @@ pub struct CreateHuntRequest {
 }
 
 /// Request to update an existing hunt.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateHuntRequest {
     pub name: Option<String>,
     pub description: Option<String>,
@@ -63,7 +64,7 @@ pub struct UpdateHuntRequest {
 }
 
 /// DTO for hunt queries in requests.
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, ToSchema)]
 pub struct HuntingQueryDto {
     pub id: Option<String>,
     pub query_type: String,
@@ -74,7 +75,7 @@ pub struct HuntingQueryDto {
 }
 
 /// DTO for hunt schedule.
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, ToSchema)]
 pub struct HuntScheduleDto {
     pub cron_expression: String,
     pub timezone: Option<String>,
@@ -82,7 +83,7 @@ pub struct HuntScheduleDto {
 }
 
 /// Hunt response DTO.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct HuntResponse {
     pub id: Uuid,
     pub tenant_id: Uuid,
@@ -105,7 +106,7 @@ pub struct HuntResponse {
 }
 
 /// Result summary DTO.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct HuntResultSummaryDto {
     pub total_findings: usize,
     pub critical_findings: usize,
@@ -114,7 +115,7 @@ pub struct HuntResultSummaryDto {
 }
 
 /// Hunt execution result DTO.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct HuntResultResponse {
     pub hunt_id: Uuid,
     pub findings: Vec<FindingResponse>,
@@ -127,7 +128,7 @@ pub struct HuntResultResponse {
 }
 
 /// Finding response DTO.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct FindingResponse {
     pub id: Uuid,
     pub hunt_id: Uuid,
@@ -142,7 +143,7 @@ pub struct FindingResponse {
 }
 
 /// Built-in query response DTO.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct BuiltInQueryResponse {
     pub id: String,
     pub name: String,
@@ -156,7 +157,7 @@ pub struct BuiltInQueryResponse {
 }
 
 /// Query parameter response DTO.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct QueryParameterResponse {
     pub name: String,
     pub description: String,
@@ -379,6 +380,23 @@ fn parse_finding_severity_to_incident(severity: &str) -> Severity {
 // ============================================================================
 
 /// GET /api/v1/hunts - List all hunts
+#[utoipa::path(
+    get,
+    path = "/api/v1/hunts",
+    params(
+        ("status" = Option<String>, Query, description = "Filter by hunt status (draft, active, paused, completed, failed, archived)"),
+        ("hunt_type" = Option<String>, Query, description = "Filter by hunt type (scheduled, continuous, on_demand, triggered)"),
+        ("tag" = Option<String>, Query, description = "Filter by tag"),
+        ("page" = Option<u32>, Query, description = "Page number (1-indexed)"),
+        ("page_size" = Option<u32>, Query, description = "Items per page (max 200)")
+    ),
+    responses(
+        (status = 200, description = "List of hunts", body = Vec<HuntResponse>),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "Hunting"
+)]
 async fn list_hunts(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -418,6 +436,18 @@ async fn list_hunts(
 }
 
 /// POST /api/v1/hunts - Create a new hunt
+#[utoipa::path(
+    post,
+    path = "/api/v1/hunts",
+    request_body = CreateHuntRequest,
+    responses(
+        (status = 201, description = "Hunt created", body = HuntResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "Hunting"
+)]
 async fn create_hunt(
     State(state): State<AppState>,
     RequireAnalyst(user): RequireAnalyst,
@@ -491,6 +521,19 @@ async fn create_hunt(
 }
 
 /// GET /api/v1/hunts/:id - Get hunt details
+#[utoipa::path(
+    get,
+    path = "/api/v1/hunts/{id}",
+    params(
+        ("id" = Uuid, Path, description = "Hunt ID")
+    ),
+    responses(
+        (status = 200, description = "Hunt details", body = HuntResponse),
+        (status = 404, description = "Hunt not found"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Hunting"
+)]
 async fn get_hunt(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -507,6 +550,21 @@ async fn get_hunt(
 }
 
 /// PUT /api/v1/hunts/:id - Update a hunt
+#[utoipa::path(
+    put,
+    path = "/api/v1/hunts/{id}",
+    params(
+        ("id" = Uuid, Path, description = "Hunt ID")
+    ),
+    request_body = UpdateHuntRequest,
+    responses(
+        (status = 200, description = "Hunt updated", body = HuntResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 404, description = "Hunt not found"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Hunting"
+)]
 async fn update_hunt(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -586,6 +644,19 @@ async fn update_hunt(
 }
 
 /// DELETE /api/v1/hunts/:id - Delete a hunt
+#[utoipa::path(
+    delete,
+    path = "/api/v1/hunts/{id}",
+    params(
+        ("id" = Uuid, Path, description = "Hunt ID")
+    ),
+    responses(
+        (status = 204, description = "Hunt deleted"),
+        (status = 404, description = "Hunt not found"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Hunting"
+)]
 async fn delete_hunt(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -610,6 +681,20 @@ async fn delete_hunt(
 }
 
 /// POST /api/v1/hunts/:id/execute - Trigger hunt execution
+#[utoipa::path(
+    post,
+    path = "/api/v1/hunts/{id}/execute",
+    params(
+        ("id" = Uuid, Path, description = "Hunt ID")
+    ),
+    responses(
+        (status = 200, description = "Hunt execution results", body = HuntResultResponse),
+        (status = 404, description = "Hunt not found"),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "Hunting"
+)]
 async fn execute_hunt(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -649,6 +734,19 @@ async fn execute_hunt(
 }
 
 /// GET /api/v1/hunts/:id/results - Get hunt results/findings
+#[utoipa::path(
+    get,
+    path = "/api/v1/hunts/{id}/results",
+    params(
+        ("id" = Uuid, Path, description = "Hunt ID")
+    ),
+    responses(
+        (status = 200, description = "Hunt execution results", body = Vec<HuntResultResponse>),
+        (status = 404, description = "Hunt not found"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Hunting"
+)]
 async fn get_hunt_results(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -671,6 +769,15 @@ async fn get_hunt_results(
 }
 
 /// GET /api/v1/hunts/queries/library - List built-in queries
+#[utoipa::path(
+    get,
+    path = "/api/v1/hunts/queries/library",
+    responses(
+        (status = 200, description = "Built-in query library", body = Vec<BuiltInQueryResponse>),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Hunting"
+)]
 async fn get_query_library(
     State(_state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -708,6 +815,21 @@ async fn get_query_library(
 }
 
 /// POST /api/v1/hunts/:id/findings/:finding_id/promote - Promote finding to incident
+#[utoipa::path(
+    post,
+    path = "/api/v1/hunts/{id}/findings/{finding_id}/promote",
+    params(
+        ("id" = Uuid, Path, description = "Hunt ID"),
+        ("finding_id" = Uuid, Path, description = "Finding ID")
+    ),
+    responses(
+        (status = 200, description = "Finding promoted to incident"),
+        (status = 404, description = "Finding or hunt not found"),
+        (status = 409, description = "Finding already promoted"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Hunting"
+)]
 async fn promote_finding(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,

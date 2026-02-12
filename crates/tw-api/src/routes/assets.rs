@@ -183,6 +183,24 @@ pub struct PaginatedAssetResponse {
 // ============================================================================
 
 /// List assets with pagination and filters.
+#[utoipa::path(
+    get,
+    path = "/api/v1/assets",
+    params(
+        ("name" = Option<String>, Query, description = "Search by asset name"),
+        ("asset_type" = Option<String>, Query, description = "Filter by asset type"),
+        ("criticality" = Option<String>, Query, description = "Filter by criticality"),
+        ("environment" = Option<String>, Query, description = "Filter by environment"),
+        ("page" = Option<u32>, Query, description = "Page number (1-indexed)"),
+        ("per_page" = Option<u32>, Query, description = "Items per page (max 200)")
+    ),
+    responses(
+        (status = 200, description = "Paginated list of assets", body = PaginatedAssetResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "Assets"
+)]
 async fn list_assets(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -263,6 +281,18 @@ async fn list_assets(
 }
 
 /// Create a new asset.
+#[utoipa::path(
+    post,
+    path = "/api/v1/assets",
+    request_body = CreateAssetRequest,
+    responses(
+        (status = 201, description = "Asset created", body = AssetResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 409, description = "Asset identifier conflict"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Assets"
+)]
 async fn create_asset(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -299,6 +329,19 @@ async fn create_asset(
 }
 
 /// Get asset by ID.
+#[utoipa::path(
+    get,
+    path = "/api/v1/assets/{id}",
+    params(
+        ("id" = Uuid, Path, description = "Asset ID")
+    ),
+    responses(
+        (status = 200, description = "Asset details", body = AssetResponse),
+        (status = 404, description = "Asset not found"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Assets"
+)]
 async fn get_asset(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -317,6 +360,21 @@ async fn get_asset(
 }
 
 /// Update an asset.
+#[utoipa::path(
+    put,
+    path = "/api/v1/assets/{id}",
+    params(
+        ("id" = Uuid, Path, description = "Asset ID")
+    ),
+    request_body = UpdateAssetRequest,
+    responses(
+        (status = 200, description = "Asset updated", body = AssetResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 404, description = "Asset not found"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Assets"
+)]
 async fn update_asset(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -364,6 +422,19 @@ async fn update_asset(
 }
 
 /// Delete an asset.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/assets/{id}",
+    params(
+        ("id" = Uuid, Path, description = "Asset ID")
+    ),
+    responses(
+        (status = 204, description = "Asset deleted"),
+        (status = 404, description = "Asset not found"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Assets"
+)]
 async fn delete_asset(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -385,6 +456,19 @@ async fn delete_asset(
 }
 
 /// Get relationships for an asset.
+#[utoipa::path(
+    get,
+    path = "/api/v1/assets/{id}/relationships",
+    params(
+        ("id" = Uuid, Path, description = "Asset ID")
+    ),
+    responses(
+        (status = 200, description = "Asset relationships", body = Vec<RelationshipResponse>),
+        (status = 404, description = "Asset not found"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Assets"
+)]
 async fn get_relationships(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
@@ -425,6 +509,17 @@ async fn get_relationships(
 }
 
 /// Bulk import assets.
+#[utoipa::path(
+    post,
+    path = "/api/v1/assets/import",
+    request_body = BulkImportRequest,
+    responses(
+        (status = 200, description = "Import results", body = BulkImportResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Assets"
+)]
 async fn bulk_import(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,

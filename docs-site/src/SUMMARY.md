@@ -43,6 +43,15 @@
   - [Rules](./policy/rules.md)
   - [Approval Levels](./policy/approvals.md)
 
+# Features
+
+- [Natural Language Queries](./features/natural-language-queries.md)
+- [Threat Hunting](./features/threat-hunting.md)
+- [Collaboration](./features/collaboration.md)
+- [Agentic AI Response](./features/agentic-response.md)
+- [Attack Surface Integration](./features/attack-surface.md)
+- [Content Packages](./features/content-packages.md)
+
 # AI Triage
 
 - [Overview](./ai-triage/README.md)
@@ -72,6 +81,8 @@
   - [Playbooks Guide](./configuration/playbooks-guide.md)
   - [Notifications Setup](./configuration/notifications-setup.md)
   - [Policies Guide](./configuration/policies-guide.md)
+  - [Default Config Reference](./configuration/default-config-reference.md)
+  - [Guardrails Reference](./configuration/guardrails-reference.md)
 
 # Integrations
 

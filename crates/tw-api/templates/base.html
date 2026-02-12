@@ -14,7 +14,7 @@
 </head>
 <body hx-ext="sse">
   <!-- Top Navigation -->
-  <nav class="top-nav">
+  <nav class="top-nav" aria-label="Main navigation">
     <a href="/" class="logo">TRIAGE_WARDEN</a>
     <div class="nav-links">
       <a href="/" class="nav-link{% if active_nav == "dashboard" %} active{% endif %}">Dashboard</a>
@@ -27,19 +27,22 @@
         {% if approval_count > 0 %}<span class="nav-badge">{{ approval_count }}</span>{% endif %}
       </a>
       <a href="/playbooks" class="nav-link{% if active_nav == "playbooks" %} active{% endif %}">Playbooks</a>
+      <a href="/hunting" class="nav-link{% if active_nav == "hunting" %} active{% endif %}">Hunting</a>
       <a href="/knowledge" class="nav-link{% if active_nav == "knowledge" %} active{% endif %}">Knowledge</a>
+      <a href="/assets" class="nav-link{% if active_nav == "assets" %} active{% endif %}">Assets</a>
+      <a href="/packages" class="nav-link{% if active_nav == "packages" %} active{% endif %}">Packages</a>
       <a href="/analytics" class="nav-link{% if active_nav == "analytics" %} active{% endif %}">Analytics</a>
       <a href="/settings" class="nav-link{% if active_nav == "settings" %} active{% endif %}">Settings</a>
     </div>
     <div class="nav-right">
-      <div class="system-status">
-        <span class="status-dot{% if system_healthy %} healthy{% else %} unhealthy{% endif %}"></span>
+      <div class="system-status" role="status">
+        <span class="status-dot{% if system_healthy %} healthy{% else %} unhealthy{% endif %}" aria-hidden="true"></span>
         <span class="status-text">{% if system_healthy %}Healthy{% else %}Degraded{% endif %}</span>
       </div>
       {% match current_user %}
       {% when Some with (user) %}
       <div class="user-menu">
-        <button class="user-menu-trigger" onclick="this.parentElement.classList.toggle('open')">
+        <button class="user-menu-trigger" onclick="this.parentElement.classList.toggle('open')" aria-label="User menu" aria-haspopup="true">
           <span class="user-avatar">{{ user.username.chars().next().unwrap_or('U') }}</span>
           <span class="user-info">
             <span class="user-name">{% match user.display_name %}{% when Some with (name) %}{{ name }}{% when None %}{{ user.username }}{% endmatch %}</span>
@@ -79,7 +82,7 @@
   </nav>
 
   {% if critical_count > 0 %}
-  <div class="alert-banner">
+  <div class="alert-banner" role="alert">
     <svg class="alert-banner-icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
     </svg>
@@ -93,8 +96,8 @@
   </div>
 
   <!-- Chat Sidebar Toggle -->
-  <button class="chat-toggle-btn" onclick="document.getElementById('chat-sidebar').classList.toggle('open')" title="AI Assistant">
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+  <button class="chat-toggle-btn" onclick="document.getElementById('chat-sidebar').classList.toggle('open')" title="AI Assistant" aria-label="Open AI Assistant chat">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
       <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
     </svg>
   </button>
@@ -106,7 +109,7 @@
   <div id="modal-container"></div>
 
   <!-- Toast Container -->
-  <div id="toast-container" class="toast-container"></div>
+  <div id="toast-container" class="toast-container" role="status" aria-live="polite"></div>
 
   <!-- Toast & Modal Scripts -->
   <script>
@@ -123,21 +126,42 @@
       });
     });
 
+    // CSRF-aware fetch wrapper for non-HTMX requests
+    window.csrfFetch = function(url, options) {
+      options = options || {};
+      options.headers = options.headers || {};
+      var token = document.querySelector('meta[name="csrf-token"]');
+      if (token) {
+        options.headers['X-CSRF-Token'] = token.getAttribute('content');
+      }
+      return fetch(url, options);
+    };
+
+    // Escape HTML to prevent XSS in toast messages from server error text
+    function escapeHtml(s) {
+      if (!s) return '';
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
     // Toast management
     window.showToast = function(type, title, message, duration = 5000) {
+      var validTypes = ['success', 'error', 'warning', 'info'];
+      var safeType = validTypes.indexOf(type) !== -1 ? type : 'info';
+      var safeTitle = escapeHtml(title);
+      var safeMessage = escapeHtml(message);
       const container = document.getElementById('toast-container');
       const toast = document.createElement('div');
       toast.className = 'toast';
       toast.innerHTML = `
-        <svg class="toast-icon ${type}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-          ${type === 'success' ? '<path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>' : ''}
-          ${type === 'error' ? '<path d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/>' : ''}
-          ${type === 'warning' ? '<path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>' : ''}
-          ${type === 'info' ? '<path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>' : ''}
+        <svg class="toast-icon ${safeType}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          ${safeType === 'success' ? '<path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>' : ''}
+          ${safeType === 'error' ? '<path d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/>' : ''}
+          ${safeType === 'warning' ? '<path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>' : ''}
+          ${safeType === 'info' ? '<path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>' : ''}
         </svg>
         <div class="toast-content">
-          <div class="toast-title">${title}</div>
-          ${message ? `<div class="toast-message">${message}</div>` : ''}
+          <div class="toast-title">${safeTitle}</div>
+          ${safeMessage ? `<div class="toast-message">${safeMessage}</div>` : ''}
         </div>
         <button class="toast-close" aria-label="Close" onclick="this.parentElement.classList.add('removing'); setTimeout(() => this.parentElement.remove(), 200);">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -163,7 +187,7 @@
     });
     document.addEventListener('keydown', function(e) {
       if (e.key === 'Escape') {
-        document.querySelector('.modal-backdrop')?.remove();
+        var modals = document.querySelectorAll('.modal-backdrop'); if (modals.length) modals[modals.length - 1].remove();
       }
     });
 
@@ -208,6 +232,12 @@
 
     document.body.addEventListener('htmx:sendError', function(e) {
       showToast('error', 'Network Error', 'Unable to connect to the server. Please check your connection and try again.');
+    });
+
+    // Prevent double form submissions: disable submit buttons during processing
+    document.addEventListener('submit', function(e) {
+      var btn = e.submitter || e.target.querySelector('[type="submit"]');
+      if (btn) { btn.disabled = true; setTimeout(function() { btn.disabled = false; }, 10000); }
     });
 
     // Chat helper: append user message bubble before HTMX sends the request

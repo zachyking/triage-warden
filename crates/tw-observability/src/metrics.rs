@@ -526,4 +526,220 @@ mod tests {
         let kpis = collector.calculate_kpis().await;
         assert_eq!(kpis.auto_resolution_rate, 0.5);
     }
+
+    #[tokio::test]
+    async fn test_kpis_with_no_incidents() {
+        let collector = MetricsCollector::new();
+
+        let kpis = collector.calculate_kpis().await;
+        assert!(kpis.mttt.is_none());
+        assert!(kpis.mttr.is_none());
+        assert_eq!(kpis.auto_resolution_rate, 0.0);
+        assert_eq!(kpis.override_rate, 0.0);
+        assert_eq!(kpis.false_positive_rate, 0.0);
+        assert_eq!(kpis.total_incidents, 0);
+    }
+
+    #[tokio::test]
+    async fn test_override_rate() {
+        let collector = MetricsCollector::new();
+
+        let id1 = uuid::Uuid::new_v4();
+        let id2 = uuid::Uuid::new_v4();
+
+        collector.record_incident_created(id1, "test", "high").await;
+        collector
+            .record_incident_created(id2, "test", "medium")
+            .await;
+
+        collector.record_response_complete(id1, false).await;
+        collector.record_response_complete(id2, false).await;
+        collector.record_override().await;
+
+        let kpis = collector.calculate_kpis().await;
+        assert_eq!(kpis.override_rate, 0.5); // 1 override / 2 resolved
+    }
+
+    #[tokio::test]
+    async fn test_false_positive_rate() {
+        let collector = MetricsCollector::new();
+
+        let id1 = uuid::Uuid::new_v4();
+        let id2 = uuid::Uuid::new_v4();
+        let id3 = uuid::Uuid::new_v4();
+
+        collector.record_incident_created(id1, "test", "high").await;
+        collector
+            .record_incident_created(id2, "test", "medium")
+            .await;
+        collector.record_incident_created(id3, "test", "low").await;
+
+        collector.record_response_complete(id1, false).await;
+        collector.record_response_complete(id2, false).await;
+        collector.record_response_complete(id3, false).await;
+        collector.record_false_positive().await;
+
+        let kpis = collector.calculate_kpis().await;
+        let expected = 1.0 / 3.0;
+        assert!((kpis.false_positive_rate - expected).abs() < f64::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_removes_old_timings() {
+        let collector = MetricsCollector::new();
+
+        let id1 = uuid::Uuid::new_v4();
+        collector.record_incident_created(id1, "test", "high").await;
+
+        // Before cleanup, should have 1 timing
+        {
+            let timings = collector.incident_timings.read().await;
+            assert_eq!(timings.len(), 1);
+        }
+
+        // Cleanup with 0 hours max age should remove everything
+        collector.cleanup(0).await;
+
+        let timings = collector.incident_timings.read().await;
+        assert_eq!(timings.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_retains_recent_timings() {
+        let collector = MetricsCollector::new();
+
+        let id1 = uuid::Uuid::new_v4();
+        collector.record_incident_created(id1, "test", "high").await;
+
+        // Cleanup with generous max age should keep recent entries
+        collector.cleanup(24).await;
+
+        let timings = collector.incident_timings.read().await;
+        assert_eq!(timings.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_triage_without_incident_noop() {
+        let collector = MetricsCollector::new();
+
+        // Recording triage for nonexistent incident should not panic
+        let unknown_id = uuid::Uuid::new_v4();
+        collector.record_triage_complete(unknown_id).await;
+
+        let kpis = collector.calculate_kpis().await;
+        assert!(kpis.mttt.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_response_without_incident_still_counts() {
+        let collector = MetricsCollector::new();
+
+        // Response for unknown incident should still increment counters
+        let unknown_id = uuid::Uuid::new_v4();
+        collector.record_response_complete(unknown_id, true).await;
+
+        let kpis = collector.calculate_kpis().await;
+        assert_eq!(kpis.auto_resolution_rate, 1.0); // 1 auto-resolved / 1 total
+    }
+
+    #[test]
+    fn test_record_alert_received_does_not_panic() {
+        let collector = MetricsCollector::new();
+        collector.record_alert_received("email_gateway", "high");
+        collector.record_alert_received("siem", "critical");
+    }
+
+    #[test]
+    fn test_record_action_executed_does_not_panic() {
+        let collector = MetricsCollector::new();
+        collector.record_action_executed("isolate_host", true);
+        collector.record_action_executed("block_ip", false);
+    }
+
+    #[test]
+    fn test_record_action_denied_does_not_panic() {
+        let collector = MetricsCollector::new();
+        collector.record_action_denied("disable_user", "insufficient_confidence");
+    }
+
+    #[test]
+    fn test_record_action_duration_does_not_panic() {
+        let collector = MetricsCollector::new();
+        collector.record_action_duration("isolate_host", 2.5);
+    }
+
+    #[test]
+    fn test_record_error_does_not_panic() {
+        let collector = MetricsCollector::new();
+        collector.record_error("connector_timeout");
+    }
+
+    #[test]
+    fn test_record_llm_latency_does_not_panic() {
+        let collector = MetricsCollector::new();
+        collector.record_llm_latency("openai", 1.2);
+    }
+
+    #[test]
+    fn test_record_pending_approvals_does_not_panic() {
+        let collector = MetricsCollector::new();
+        collector.record_pending_approvals(5);
+    }
+
+    #[test]
+    fn test_record_incident_resolved_does_not_panic() {
+        let collector = MetricsCollector::new();
+        collector.record_incident_resolved("auto");
+        collector.record_incident_resolved("manual");
+    }
+
+    #[test]
+    fn test_db_metrics_do_not_panic() {
+        let collector = MetricsCollector::new();
+        collector.record_db_pool_size(10);
+        collector.record_db_pool_idle(5);
+        collector.record_db_pool_exhausted();
+        collector.record_db_query_duration("select_incidents", 0.05);
+        collector.record_db_error("connection_timeout");
+        collector.record_db_retry("insert_incident", 2);
+    }
+
+    #[test]
+    fn test_security_metrics_do_not_panic() {
+        let collector = MetricsCollector::new();
+        collector.record_login_attempt(true);
+        collector.record_login_attempt(false);
+        collector.record_rate_limit_exceeded("/api/incidents");
+        collector.record_api_key_auth(true);
+        collector.record_api_key_auth(false);
+    }
+
+    #[test]
+    fn test_action_audit_metrics_do_not_panic() {
+        let collector = MetricsCollector::new();
+        collector.record_action_audit("isolate_host", "success", "analyst", 0.15, false);
+        collector.record_action_audit("block_ip", "failure", "system", 5.0, false);
+        collector.record_action_audit("disable_user", "skipped", "analyst", 0.01, true);
+        collector.record_action_authorization_denied("delete_user", "insufficient_permissions");
+    }
+
+    #[test]
+    fn test_kpis_default() {
+        let kpis = KPIs::default();
+        assert!(kpis.mttt.is_none());
+        assert!(kpis.mttr.is_none());
+        assert_eq!(kpis.auto_resolution_rate, 0.0);
+        assert_eq!(kpis.override_rate, 0.0);
+        assert_eq!(kpis.false_positive_rate, 0.0);
+        assert_eq!(kpis.total_incidents, 0);
+        assert!(kpis.incidents_by_severity.is_empty());
+        assert!(kpis.incidents_by_source.is_empty());
+    }
+
+    #[test]
+    fn test_metrics_collector_default() {
+        // MetricsCollector::default() should work the same as new()
+        let collector = MetricsCollector::default();
+        collector.record_alert_received("test", "low");
+    }
 }

@@ -11,13 +11,13 @@
     <form hx-post="/api/policies" hx-swap="none" hx-on::after-request="if(event.detail.successful) { this.closest('.modal-backdrop').remove(); showToast('success', 'Policy Created', 'Approval policy has been created successfully.'); htmx.ajax('GET', '/web/partials/policies', {target: '#policies-table-body', swap: 'innerHTML'}); } else { showToast('error', 'Failed to Create Policy', 'Please check your configuration and try again.'); }">
       <div class="modal-body">
         <div class="form-group">
-          <label class="form-label">Policy Name</label>
-          <input type="text" name="name" class="form-input" placeholder="e.g., Critical Asset Protection" required>
+          <label for="policy-name" class="form-label">Policy Name</label>
+          <input type="text" id="policy-name" name="name" class="form-input" placeholder="e.g., Critical Asset Protection" required>
         </div>
 
         <div class="form-group">
-          <label class="form-label">Condition Type</label>
-          <select name="condition_type" class="form-input form-select">
+          <label for="policy-condition-type" class="form-label">Condition Type</label>
+          <select id="policy-condition-type" name="condition_type" class="form-input form-select">
             <option value="severity">Severity Level</option>
             <option value="action_type">Action Type</option>
             <option value="target_pattern">Target Pattern</option>
@@ -26,13 +26,13 @@
         </div>
 
         <div class="form-group">
-          <label class="form-label">Condition Value</label>
-          <input type="text" name="condition_value" class="form-input" placeholder="e.g., critical, high or .*-prod-.*">
+          <label for="policy-condition-value" class="form-label">Condition Value</label>
+          <input type="text" id="policy-condition-value" name="condition_value" class="form-input" placeholder="e.g., critical, high or .*-prod-.*">
         </div>
 
         <div class="form-group">
-          <label class="form-label">Required Approval</label>
-          <select name="requires" class="form-input form-select">
+          <label for="policy-requires" class="form-label">Required Approval</label>
+          <select id="policy-requires" name="requires" class="form-input form-select">
             <option value="auto">Auto-approve (no approval needed)</option>
             <option value="single">Single Approver</option>
             <option value="dual">Dual Approval (2 approvers)</option>
