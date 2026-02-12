@@ -5026,7 +5026,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "tw-actions"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5051,7 +5051,7 @@ dependencies = [
 
 [[package]]
 name = "tw-api"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "argon2",
@@ -5105,7 +5105,7 @@ dependencies = [
 
 [[package]]
 name = "tw-bridge"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5126,7 +5126,7 @@ dependencies = [
 
 [[package]]
 name = "tw-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -5157,7 +5157,7 @@ dependencies = [
 
 [[package]]
 name = "tw-connectors"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5183,7 +5183,7 @@ dependencies = [
 
 [[package]]
 name = "tw-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -5219,7 +5219,7 @@ dependencies = [
 
 [[package]]
 name = "tw-observability"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "metrics",
@@ -5235,7 +5235,7 @@ dependencies = [
 
 [[package]]
 name = "tw-policy"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",

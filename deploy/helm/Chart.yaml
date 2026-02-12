@@ -4,10 +4,10 @@ description: A Helm chart for deploying Triage Warden security automation platfo
 type: application
 
 # Chart version - follows SemVer 2.0
-version: 0.1.0
+version: 0.1.1
 
 # Application version - matches the Triage Warden release version
-appVersion: "0.1.0"
+appVersion: "0.1.1"
 
 # Kubernetes version compatibility
 kubeVersion: ">=1.25.0-0"
