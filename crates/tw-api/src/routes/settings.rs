@@ -442,6 +442,10 @@ mod tests {
 
     /// Creates an AppState with a test database.
     async fn create_test_state() -> AppState {
+        // Ensure we're not in "production" mode, which requires TW_ENCRYPTION_KEY.
+        // Another test module (state.rs) temporarily sets TW_ENV=production and this
+        // can race with us, causing a spurious "InvalidKey" panic.
+        std::env::set_var("TW_ENV", "test");
         let db = create_test_db().await;
         let event_bus = EventBus::new(100);
         let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());

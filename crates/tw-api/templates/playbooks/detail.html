@@ -159,7 +159,7 @@
                       hx-delete="/api/playbooks/{{ playbook.id }}/stages/{{ loop.index0 }}"
                       hx-confirm="Delete this stage and all its steps?"
                       hx-swap="none"
-                      hx-on::after-request="if(event.detail.successful) { location.reload(); } else { showToast('error', 'Delete Failed', 'Could not delete the item.'); }"
+                      hx-on::after-request="if(event.detail.successful) { showToast('success', 'Deleted', 'Item has been removed.'); location.reload(); } else { showToast('error', 'Delete Failed', 'Could not delete the item.'); }"
                       title="Delete stage"
                       aria-label="Delete stage">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -206,7 +206,7 @@
                         hx-delete="/api/playbooks/{{ playbook.id }}/stages/{{ stage.index }}/steps/{{ loop.index0 }}"
                         hx-confirm="Delete this step?"
                         hx-swap="none"
-                        hx-on::after-request="if(event.detail.successful) { location.reload(); } else { showToast('error', 'Delete Failed', 'Could not delete the item.'); }"
+                        hx-on::after-request="if(event.detail.successful) { showToast('success', 'Deleted', 'Item has been removed.'); location.reload(); } else { showToast('error', 'Delete Failed', 'Could not delete the item.'); }"
                         title="Delete step"
                         aria-label="Delete step">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">

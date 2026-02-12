@@ -234,6 +234,12 @@
       showToast('error', 'Network Error', 'Unable to connect to the server. Please check your connection and try again.');
     });
 
+    // Prevent double form submissions: disable submit buttons during processing
+    document.addEventListener('submit', function(e) {
+      var btn = e.submitter || e.target.querySelector('[type="submit"]');
+      if (btn) { btn.disabled = true; setTimeout(function() { btn.disabled = false; }, 10000); }
+    });
+
     // Chat helper: append user message bubble before HTMX sends the request
     window.appendUserMessage = function(text) {
       const container = document.getElementById('chat-messages');

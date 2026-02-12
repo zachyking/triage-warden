@@ -35,7 +35,7 @@
                   placeholder='{"package": {"manifest": {...}, "contents": [...]}, "conflict_resolution": "skip"}' required></textarea>
       </div>
       <div class="flex gap-2">
-        <button type="button" class="btn btn-primary" onclick="submitPackageImport()">Import</button>
+        <button type="submit" class="btn btn-primary">Import</button>
         <button type="button" class="btn btn-secondary"
                 onclick="document.getElementById('package-import-form').classList.add('hidden')">Cancel</button>
       </div>
@@ -43,6 +43,7 @@
     <script>
     function submitPackageImport() {
       const ta = document.getElementById('pkg-json');
+      if (!ta.value.trim()) { showToast('error', 'Required', 'Please paste a package JSON.'); return; }
       try {
         const body = JSON.parse(ta.value);
         csrfFetch('/api/v1/packages/import', {
