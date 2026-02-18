@@ -48,11 +48,11 @@
 
 ### 5. Deployment and CI Integration
 
-- [ ] Define clean deployment process (Docker Compose / K8s)
-- [ ] Create `make e2e` or `scripts/run_e2e_tests.sh`
+- [x] Define clean deployment process (Docker Compose / K8s)
+- [x] Create bootstrap/test scripts (`scripts/bootstrap-e2e-infra.sh`, `scripts/run-integration-tests.sh`)
 - [ ] Seed environment with demo org data (playbooks, policies, users)
 - [ ] Add GitHub Actions workflow for nightly or pre-release E2E tests
-- [ ] Add reset script (`make reset_demo_env`)
+- [x] Add reset path via bootstrap recreate (`scripts/bootstrap-e2e-infra.sh --recreate`)
 
 ### 6. Demo Mode and Documentation
 
@@ -76,5 +76,4 @@
 - Prefer open source and free-tier tooling to minimize cost
 - Use separate cloud accounts or sandbox tenants to avoid polluting personal infrastructure
 - Design for resettable, reproducible, and isolated test runs
-
 

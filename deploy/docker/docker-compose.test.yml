@@ -95,6 +95,7 @@ services:
       TW_SESSION_SECRET: test_session_secret_for_integration
       TW_SESSION_SECURE: "false"
       TW_BASE_URL: http://localhost:8081
+      TW_ADMIN_PASSWORD: ${TW_E2E_ADMIN_PASSWORD:-tw_e2e_admin_password}
       QDRANT_URL: http://qdrant-test:6334
       REDIS_URL: redis://redis-test:6379
       TW_TRIAGE_SERVICE_URL: http://tw-triage-test:8091

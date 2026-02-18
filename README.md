@@ -79,7 +79,18 @@ uv run pytest tests/ -v --tb=short
 
 # tw-bridge
 cd ../tw-bridge
-python -m pytest python/tests -v
+.venv/bin/maturin develop
+.venv/bin/python -m pytest python/tests -v
+```
+
+### E2E Infra Bootstrap
+
+```bash
+# Start test stack and seed baseline connectors for fake-org style E2E runs
+./scripts/bootstrap-e2e-infra.sh --recreate
+
+# Then run integration suites against the bootstrapped stack
+./scripts/run-integration-tests.sh --keep-containers
 ```
 
 ## Documentation
