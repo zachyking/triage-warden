@@ -31,6 +31,16 @@ SKIP_PYTHON=false
 KEEP_CONTAINERS=false
 VERBOSE=false
 
+# Host port overrides (match deploy/docker/docker-compose.test.yml defaults)
+TW_E2E_POSTGRES_PORT="${TW_E2E_POSTGRES_PORT:-5433}"
+TW_E2E_QDRANT_HTTP_PORT="${TW_E2E_QDRANT_HTTP_PORT:-6335}"
+TW_E2E_QDRANT_GRPC_PORT="${TW_E2E_QDRANT_GRPC_PORT:-6336}"
+TW_E2E_REDIS_PORT="${TW_E2E_REDIS_PORT:-6380}"
+TW_E2E_API_PORT="${TW_E2E_API_PORT:-8081}"
+TW_E2E_TRIAGE_PORT="${TW_E2E_TRIAGE_PORT:-8092}"
+export TW_E2E_POSTGRES_PORT TW_E2E_QDRANT_HTTP_PORT TW_E2E_QDRANT_GRPC_PORT
+export TW_E2E_REDIS_PORT TW_E2E_API_PORT TW_E2E_TRIAGE_PORT
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -155,10 +165,10 @@ wait_for_healthy redis-test
 log_info "All services are healthy"
 
 # Export environment variables for tests
-export TEST_DATABASE_URL="postgres://test:test@localhost:5433/triage_warden_test"
-export TEST_QDRANT_URL="http://localhost:6335"
-export TEST_REDIS_URL="redis://localhost:6380"
-export TEST_API_URL="http://localhost:8081"
+export TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgres://test:test@localhost:${TW_E2E_POSTGRES_PORT}/triage_warden_test}"
+export TEST_QDRANT_URL="${TEST_QDRANT_URL:-http://localhost:${TW_E2E_QDRANT_HTTP_PORT}}"
+export TEST_REDIS_URL="${TEST_REDIS_URL:-redis://localhost:${TW_E2E_REDIS_PORT}}"
+export TEST_API_URL="${TEST_API_URL:-http://localhost:${TW_E2E_API_PORT}}"
 
 # Track test results
 RUST_RESULT=0

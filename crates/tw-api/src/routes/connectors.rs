@@ -17,6 +17,7 @@ use validator::Validate;
 
 use crate::auth::{RequireAdmin, RequireAnalyst};
 use crate::error::ApiError;
+use crate::middleware::OptionalTenant;
 use crate::state::AppState;
 use tw_connectors::cloud::azure::defender::DefenderConfig;
 use tw_connectors::{
@@ -24,6 +25,7 @@ use tw_connectors::{
     CrowdStrikeConnector, DefenderConnector, JiraConfig, JiraConnector, M365Config, M365Connector,
     SplunkConfig, SplunkConnector, VirusTotalConfig, VirusTotalConnector,
 };
+use tw_core::auth::DEFAULT_TENANT_ID;
 use tw_core::connector::{ConnectorConfig, ConnectorStatus, ConnectorType};
 use tw_core::db::{create_connector_repository, ConnectorRepository, ConnectorUpdate};
 use tw_core::CredentialEncryptor;
@@ -118,10 +120,12 @@ pub struct TestConnectionResponse {
 async fn list_connectors(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
 ) -> Result<Json<Vec<ConnectorResponse>>, ApiError> {
     let repo: Box<dyn ConnectorRepository> = create_connector_repository(&state.db);
+    let tenant_id = tenant_id_or_default(tenant);
 
-    let connectors = repo.list().await?;
+    let connectors = repo.list_for_tenant(tenant_id).await?;
     let responses: Vec<ConnectorResponse> = connectors
         .into_iter()
         .map(|c| connector_to_response(c, true))
@@ -147,12 +151,14 @@ async fn list_connectors(
 async fn get_connector(
     State(state): State<AppState>,
     RequireAnalyst(_user): RequireAnalyst,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ConnectorResponse>, ApiError> {
     let repo: Box<dyn ConnectorRepository> = create_connector_repository(&state.db);
+    let tenant_id = tenant_id_or_default(tenant);
 
     let connector = repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Connector {} not found", id)))?;
 
@@ -175,9 +181,11 @@ async fn get_connector(
 async fn create_connector(
     State(state): State<AppState>,
     RequireAdmin(_user): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     Json(request): Json<CreateConnectorRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     request.validate()?;
+    let tenant_id = tenant_id_or_default(tenant);
 
     let connector_type = parse_connector_type(&request.connector_type).ok_or_else(|| {
         ApiError::validation_field(
@@ -200,7 +208,7 @@ async fn create_connector(
     }
 
     let repo: Box<dyn ConnectorRepository> = create_connector_repository(&state.db);
-    let created = repo.create(&connector).await?;
+    let created = repo.create_for_tenant(tenant_id, &connector).await?;
 
     let response = connector_to_response(created, false);
 
@@ -242,16 +250,18 @@ async fn create_connector(
 async fn update_connector(
     State(state): State<AppState>,
     RequireAdmin(_user): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
     Json(request): Json<UpdateConnectorRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     request.validate()?;
+    let tenant_id = tenant_id_or_default(tenant);
 
     let repo: Box<dyn ConnectorRepository> = create_connector_repository(&state.db);
 
     // Verify connector exists
     let _ = repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Connector {} not found", id)))?;
 
@@ -266,7 +276,7 @@ async fn update_connector(
         enabled: request.enabled,
     };
 
-    let updated = repo.update(id, &update).await?;
+    let updated = repo.update_for_tenant(id, tenant_id, &update).await?;
     let response = connector_to_response(updated, true);
 
     let trigger_json = serde_json::json!({
@@ -304,17 +314,19 @@ async fn update_connector(
 async fn delete_connector(
     State(state): State<AppState>,
     RequireAdmin(_user): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
     let repo: Box<dyn ConnectorRepository> = create_connector_repository(&state.db);
+    let tenant_id = tenant_id_or_default(tenant);
 
     // Get connector name before deletion for the toast message
     let connector = repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Connector {} not found", id)))?;
 
-    let deleted = repo.delete(id).await?;
+    let deleted = repo.delete_for_tenant(id, tenant_id).await?;
 
     if !deleted {
         return Err(ApiError::NotFound(format!("Connector {} not found", id)));
@@ -354,12 +366,14 @@ async fn delete_connector(
 async fn test_connector(
     State(state): State<AppState>,
     RequireAdmin(_user): RequireAdmin,
+    OptionalTenant(tenant): OptionalTenant,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
     let repo: Box<dyn ConnectorRepository> = create_connector_repository(&state.db);
+    let tenant_id = tenant_id_or_default(tenant);
 
     let connector = repo
-        .get(id)
+        .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Connector {} not found", id)))?;
 
@@ -379,8 +393,10 @@ async fn test_connector(
     };
 
     // Update status and health check timestamp
-    let _ = repo.update_status(id, new_status).await;
-    let _ = repo.update_health_check(id).await;
+    let _ = repo
+        .update_status_for_tenant(id, tenant_id, new_status)
+        .await;
+    let _ = repo.update_health_check_for_tenant(id, tenant_id).await;
 
     let response = TestConnectionResponse {
         success: test_result.success,
@@ -425,6 +441,10 @@ async fn test_connector(
 struct InternalTestResult {
     success: bool,
     message: String,
+}
+
+fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> Uuid {
+    tenant.map(|ctx| ctx.tenant_id).unwrap_or(DEFAULT_TENANT_ID)
 }
 
 /// Tests connection for a given connector type with decrypted configuration.
@@ -3420,10 +3440,8 @@ mod api_tests {
             .unwrap();
         let result: TestConnectionResponse = serde_json::from_slice(&body_bytes).unwrap();
 
-        assert!(result.latency_ms.is_some());
-        // Latency should be reasonable (less than 30 seconds for a mock test
-        // running under load on CI or alongside pre-commit hooks)
-        assert!(result.latency_ms.unwrap() < 30_000);
+        let latency_ms = result.latency_ms.expect("expected latency_ms in response");
+        assert!(latency_ms > 0);
     }
 
     // ==================== EDGE CASE TESTS ====================

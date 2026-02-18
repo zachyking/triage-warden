@@ -19,7 +19,7 @@ services:
       POSTGRES_PASSWORD: test
       POSTGRES_DB: triage_warden_test
     ports:
-      - "5433:5432"
+      - "${TW_E2E_POSTGRES_PORT:-5433}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U test -d triage_warden_test"]
       interval: 2s
@@ -36,10 +36,12 @@ services:
       QDRANT__SERVICE__HTTP_PORT: 6333
       QDRANT__STORAGE__ON_DISK_PAYLOAD: "false"  # In-memory for speed
     ports:
-      - "6335:6333"  # HTTP
-      - "6336:6334"  # gRPC
+      - "${TW_E2E_QDRANT_HTTP_PORT:-6335}:6333"  # HTTP
+      - "${TW_E2E_QDRANT_GRPC_PORT:-6336}:6334"  # gRPC
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      # qdrant image does not include curl/wget; verify HTTP port 6333 is listening
+      # by checking kernel TCP tables (6333 = 0x18BD).
+      test: ["CMD-SHELL", "grep -q ':18BD ' /proc/net/tcp /proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 10
@@ -50,7 +52,7 @@ services:
   redis-test:
     image: redis:7-alpine
     ports:
-      - "6380:6379"
+      - "${TW_E2E_REDIS_PORT:-6380}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 2s
@@ -59,24 +61,48 @@ services:
     tmpfs:
       - /data
 
+  # Python AI triage service in test mode
+  tw-triage-test:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.triage-service
+    ports:
+      - "${TW_E2E_TRIAGE_PORT:-8092}:8091"
+    environment:
+      TW_LLM_PROVIDER: openai
+      TW_LLM_MODEL: gpt-4-turbo
+      # LLM keys can be set externally for integration tests
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8091/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   # Triage Warden API in test mode
   tw-api-test:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile
     ports:
-      - "8081:8080"
+      - "${TW_E2E_API_PORT:-8081}:8080"
     environment:
       DATABASE_URL: postgres://test:test@postgres-test:5432/triage_warden_test
       TW_ENV: test
       TW_LOG_LEVEL: debug
-      TW_ENCRYPTION_KEY: test_encryption_key_32_bytes_long!
+      # Base64-encoded 32-byte test key (deterministic for local integration tests)
+      TW_ENCRYPTION_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
       TW_JWT_SECRET: test_jwt_secret_for_integration_testing
       TW_SESSION_SECRET: test_session_secret_for_integration
       TW_SESSION_SECURE: "false"
-      TW_BASE_URL: http://localhost:8081
+<<<<<<< HEAD
+      TW_BASE_URL: http://localhost:${TW_E2E_API_PORT:-8081}
+      TW_ADMIN_PASSWORD: ${TW_E2E_ADMIN_PASSWORD:-tw_e2e_admin_password}
       QDRANT_URL: http://qdrant-test:6334
       REDIS_URL: redis://redis-test:6379
+      TW_TRIAGE_SERVICE_URL: http://tw-triage-test:8091
       RUST_LOG: debug,tw_api=debug,tw_core=debug
       # Disable rate limiting for tests
       TW_RATE_LIMIT_DISABLED: "true"
@@ -89,6 +115,8 @@ services:
       qdrant-test:
         condition: service_healthy
       redis-test:
+        condition: service_healthy
+      tw-triage-test:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]

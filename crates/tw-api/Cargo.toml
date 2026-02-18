@@ -49,7 +49,7 @@ hex.workspace = true
 # Authentication
 argon2 = "0.5"
 tower-sessions = "0.13"
-tower-sessions-sqlx-store = { version = "0.14.1", features = ["sqlite"] }
+tower-sessions-sqlx-store = { version = "0.14.1", features = ["sqlite", "postgres"] }
 subtle = "2.5"
 rand = "0.8"
 time = "0.3"

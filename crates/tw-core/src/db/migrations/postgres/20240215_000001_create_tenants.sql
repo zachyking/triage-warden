@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS tenants (
     name TEXT NOT NULL,
     slug TEXT NOT NULL UNIQUE,
     status tenant_status NOT NULL DEFAULT 'active',
-    settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+    settings JSONB NOT NULL DEFAULT '{"llm_provider":null,"llm_api_key_ref":null,"default_operation_mode":"assisted","concurrency_limit":10,"feature_overrides":{}}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -40,7 +40,7 @@ VALUES (
     'Default Organization',
     'default',
     'active',
-    '{}'::jsonb,
+    '{"llm_provider":null,"llm_api_key_ref":null,"default_operation_mode":"assisted","concurrency_limit":10,"feature_overrides":{}}'::jsonb,
     NOW(),
     NOW()
 )

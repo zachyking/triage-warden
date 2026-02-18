@@ -53,6 +53,7 @@ impl std::fmt::Display for TenantStatus {
 /// These settings control the tenant's LLM provider, operation mode,
 /// concurrency limits, and feature flag overrides.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TenantSettings {
     /// LLM provider name (e.g., "openai", "anthropic", "azure").
     /// If None, uses the system default.
@@ -152,6 +153,21 @@ mod tests {
         assert_eq!(parsed.llm_provider, Some("anthropic".to_string()));
         assert_eq!(parsed.concurrency_limit, 20);
         assert_eq!(parsed.feature_overrides.get("new_ui"), Some(&true));
+    }
+
+    #[test]
+    fn test_tenant_settings_deserialize_empty_object_uses_defaults() {
+        let parsed: TenantSettings = serde_json::from_str("{}").unwrap();
+        let defaults = TenantSettings::default();
+
+        assert_eq!(parsed.llm_provider, defaults.llm_provider);
+        assert_eq!(parsed.llm_api_key_ref, defaults.llm_api_key_ref);
+        assert_eq!(
+            parsed.default_operation_mode,
+            defaults.default_operation_mode
+        );
+        assert_eq!(parsed.concurrency_limit, defaults.concurrency_limit);
+        assert_eq!(parsed.feature_overrides, defaults.feature_overrides);
     }
 
     #[test]

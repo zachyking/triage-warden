@@ -12,7 +12,7 @@ use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tower_sessions::{cookie::SameSite, Expiry, SessionManagerLayer};
-use tower_sessions_sqlx_store::SqliteStore;
+use tower_sessions_sqlx_store::{PostgresStore, SqliteStore};
 use tracing::{info, warn};
 use tw_core::is_production_environment;
 use utoipa::OpenApi;
@@ -155,8 +155,14 @@ pub struct ApiDoc;
 pub struct ApiServer {
     config: ApiServerConfig,
     state: AppState,
-    session_store: Option<SqliteStore>,
+    session_store: Option<SessionStoreBackend>,
     tenant_resolver: Option<TenantResolver>,
+}
+
+#[derive(Clone, Debug)]
+enum SessionStoreBackend {
+    Sqlite(SqliteStore),
+    Postgres(PostgresStore),
 }
 
 impl ApiServer {
@@ -202,21 +208,18 @@ impl ApiServer {
 
     /// Sets up the session store. Must be called before running the server.
     pub async fn with_session_store(mut self) -> Result<Self, Box<dyn std::error::Error>> {
-        // Get the SQLite pool from DbPool
-        let sqlite_pool = match &*self.state.db {
-            tw_core::db::DbPool::Sqlite(pool) => pool.clone(),
-            tw_core::db::DbPool::Postgres(_) => {
-                return Err("Session store only supports SQLite currently".into());
+        self.session_store = Some(match &*self.state.db {
+            tw_core::db::DbPool::Sqlite(pool) => {
+                let session_store = SqliteStore::new(pool.clone());
+                session_store.migrate().await?;
+                SessionStoreBackend::Sqlite(session_store)
             }
-        };
-
-        // Create the session store
-        let session_store = SqliteStore::new(sqlite_pool);
-
-        // Run migrations to create the sessions table
-        session_store.migrate().await?;
-
-        self.session_store = Some(session_store);
+            tw_core::db::DbPool::Postgres(pool) => {
+                let session_store = PostgresStore::new(pool.clone());
+                session_store.migrate().await?;
+                SessionStoreBackend::Postgres(session_store)
+            }
+        });
         Ok(self)
     }
 
@@ -311,16 +314,30 @@ impl ApiServer {
         // Add session layer if session store is configured
         if let Some(session_store) = &self.session_store {
             let cookie_name = self.config.session_cookie_name.clone();
-            let session_layer = SessionManagerLayer::new(session_store.clone())
-                .with_name(cookie_name)
-                .with_expiry(Expiry::OnInactivity(TimeDuration::seconds(
-                    self.config.session_expiry_seconds,
-                )))
-                .with_same_site(SameSite::Strict)
-                .with_secure(self.config.session_secure)
-                .with_http_only(true);
-
-            app = app.layer(session_layer);
+            match session_store {
+                SessionStoreBackend::Sqlite(store) => {
+                    let session_layer = SessionManagerLayer::new(store.clone())
+                        .with_name(cookie_name.clone())
+                        .with_expiry(Expiry::OnInactivity(TimeDuration::seconds(
+                            self.config.session_expiry_seconds,
+                        )))
+                        .with_same_site(SameSite::Strict)
+                        .with_secure(self.config.session_secure)
+                        .with_http_only(true);
+                    app = app.layer(session_layer);
+                }
+                SessionStoreBackend::Postgres(store) => {
+                    let session_layer = SessionManagerLayer::new(store.clone())
+                        .with_name(cookie_name)
+                        .with_expiry(Expiry::OnInactivity(TimeDuration::seconds(
+                            self.config.session_expiry_seconds,
+                        )))
+                        .with_same_site(SameSite::Strict)
+                        .with_secure(self.config.session_secure)
+                        .with_http_only(true);
+                    app = app.layer(session_layer);
+                }
+            }
         }
 
         app

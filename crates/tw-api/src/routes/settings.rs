@@ -292,7 +292,9 @@ mod tests {
     use std::sync::Arc;
     use tower::ServiceExt;
     use tw_core::db::DbPool;
-    use tw_core::{EventBus, FeatureFlagStore, FeatureFlags, InMemoryFeatureFlagStore};
+    use tw_core::{
+        EventBus, FeatureFlagStore, FeatureFlags, InMemoryFeatureFlagStore, PlaintextEncryptor,
+    };
 
     use crate::auth::test_helpers::TestUser;
 
@@ -442,15 +444,14 @@ mod tests {
 
     /// Creates an AppState with a test database.
     async fn create_test_state() -> AppState {
-        // Ensure we're not in "production" mode, which requires TW_ENCRYPTION_KEY.
-        // Another test module (state.rs) temporarily sets TW_ENV=production and this
-        // can race with us, causing a spurious "InvalidKey" panic.
-        std::env::set_var("TW_ENV", "test");
         let db = create_test_db().await;
         let event_bus = EventBus::new(100);
         let store: Arc<dyn FeatureFlagStore> = Arc::new(InMemoryFeatureFlagStore::new());
         let feature_flags = FeatureFlags::new(store);
-        AppState::new(db, event_bus, feature_flags).expect("Failed to initialize AppState")
+        AppState::builder(db, event_bus, feature_flags)
+            .with_encryptor(Arc::new(PlaintextEncryptor))
+            .build()
+            .expect("Failed to initialize AppState")
     }
 
     /// Creates a test router with the settings routes and admin authentication.

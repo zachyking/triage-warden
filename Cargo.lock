@@ -5036,6 +5036,7 @@ dependencies = [
  "hmac",
  "mockall",
  "regex",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",

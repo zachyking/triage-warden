@@ -77,7 +77,12 @@ enum Commands {
         host: String,
 
         /// Database URL (sqlite:// or postgres://)
-        #[arg(short, long, default_value = "sqlite://triage-warden.db?mode=rwc")]
+        #[arg(
+            short,
+            long,
+            env = "DATABASE_URL",
+            default_value = "sqlite://triage-warden.db?mode=rwc"
+        )]
         database: String,
 
         /// Disable Swagger UI
