@@ -15,9 +15,12 @@
 #
 # Environment variables:
 #   TW_E2E_API_URL         Default: http://localhost:8081
+#   TW_E2E_API_PORT        Default: 8081 (used for docker compose port mapping)
 #   TW_E2E_TRIAGE_URL      Default: http://localhost:8092
+#   TW_E2E_TRIAGE_PORT     Default: 8092 (used for docker compose port mapping)
 #   TW_E2E_ADMIN_USER      Default: admin
 #   TW_E2E_ADMIN_PASSWORD  Default: tw_e2e_admin_password
+#   TW_E2E_TENANT_ID       Default: 00000000-0000-0000-0000-000000000001
 
 set -euo pipefail
 
@@ -25,10 +28,35 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 COMPOSE_FILE="$PROJECT_ROOT/deploy/docker/docker-compose.test.yml"
 
-API_URL="${TW_E2E_API_URL:-http://localhost:8081}"
-TRIAGE_URL="${TW_E2E_TRIAGE_URL:-http://localhost:8092}"
+extract_url_port() {
+  local url="$1"
+  local fallback="$2"
+  local hostport="${url#*://}"
+  hostport="${hostport%%/*}"
+  if [[ "$hostport" == *:* ]]; then
+    echo "${hostport##*:}"
+  else
+    echo "$fallback"
+  fi
+}
+
+if [[ -n "${TW_E2E_API_URL:-}" ]]; then
+  API_URL="$TW_E2E_API_URL"
+else
+  API_URL="http://localhost:${TW_E2E_API_PORT:-8081}"
+fi
+
+if [[ -n "${TW_E2E_TRIAGE_URL:-}" ]]; then
+  TRIAGE_URL="$TW_E2E_TRIAGE_URL"
+else
+  TRIAGE_URL="http://localhost:${TW_E2E_TRIAGE_PORT:-8092}"
+fi
+
+export TW_E2E_API_PORT="${TW_E2E_API_PORT:-$(extract_url_port "$API_URL" "8081")}"
+export TW_E2E_TRIAGE_PORT="${TW_E2E_TRIAGE_PORT:-$(extract_url_port "$TRIAGE_URL" "8092")}"
 ADMIN_USER="${TW_E2E_ADMIN_USER:-admin}"
 ADMIN_PASSWORD="${TW_E2E_ADMIN_PASSWORD:-tw_e2e_admin_password}"
+TENANT_ID="${TW_E2E_TENANT_ID:-00000000-0000-0000-0000-000000000001}"
 
 RECREATE=false
 NO_BUILD=false
@@ -169,6 +197,7 @@ JSON
   local status
   status=$(curl -sS -o "$response_file" -w "%{http_code}" \
     -b "$cookie_jar" \
+    -H "X-Tenant-ID: $TENANT_ID" \
     -H "content-type: application/json" \
     -X POST "$API_URL/api/connectors" \
     -d "$payload")
@@ -184,6 +213,7 @@ JSON
       local test_status
       test_status=$(curl -sS -o "$test_file" -w "%{http_code}" \
         -b "$cookie_jar" \
+        -H "X-Tenant-ID: $TENANT_ID" \
         -X POST "$API_URL/api/connectors/$connector_id/test")
       if [[ "$test_status" == "200" ]]; then
         log_info "Tested connector: $name"
@@ -210,7 +240,7 @@ seed_connectors() {
   login_html="$(mktemp)"
   login_resp="$(mktemp)"
 
-  curl -fsS -c "$cookie_jar" "$API_URL/login" -o "$login_html"
+  curl -fsS -c "$cookie_jar" -H "X-Tenant-ID: $TENANT_ID" "$API_URL/login" -o "$login_html"
 
   local csrf_token
   csrf_token=$(grep -o 'name="csrf_token" value="[^"]*"' "$login_html" | head -n 1 | sed 's/.*value="//;s/"$//')
@@ -224,6 +254,7 @@ seed_connectors() {
   local login_status
   login_status=$(curl -sS -o "$login_resp" -w "%{http_code}" \
     -b "$cookie_jar" -c "$cookie_jar" \
+    -H "X-Tenant-ID: $TENANT_ID" \
     -H "content-type: application/x-www-form-urlencoded" \
     -X POST "$API_URL/login" \
     --data-urlencode "username=$ADMIN_USER" \
@@ -253,6 +284,8 @@ seed_connectors() {
 
 log_info "Bootstrapping E2E infrastructure"
 log_info "Compose file: $COMPOSE_FILE"
+log_info "API URL: $API_URL (host port ${TW_E2E_API_PORT})"
+log_info "Triage URL: $TRIAGE_URL (host port ${TW_E2E_TRIAGE_PORT})"
 
 if [[ "$RECREATE" == true ]]; then
   log_info "Recreating stack (--recreate)"

@@ -197,29 +197,29 @@ async fn run_postgres_migrations(pool: &PgPool) {
     run_migration_file(
         pool,
         include_str!(
-            "../../../tw-core/src/db/migrations/postgres/20240130_000001_create_playbooks.sql"
+            "../../../tw-core/src/db/migrations/postgres/20240102_000001_create_playbooks.sql"
         ),
     )
     .await;
     run_migration_file(
         pool,
         include_str!(
-            "../../../tw-core/src/db/migrations/postgres/20240130_000002_create_connectors.sql"
+            "../../../tw-core/src/db/migrations/postgres/20240103_000001_create_connectors.sql"
         ),
     )
     .await;
     run_migration_file(
         pool,
         include_str!(
-            "../../../tw-core/src/db/migrations/postgres/20240130_000003_create_policies.sql"
+            "../../../tw-core/src/db/migrations/postgres/20240104_000001_create_policies.sql"
         ),
     )
     .await;
-    run_migration_file(pool, include_str!("../../../tw-core/src/db/migrations/postgres/20240130_000004_create_notification_channels.sql")).await;
+    run_migration_file(pool, include_str!("../../../tw-core/src/db/migrations/postgres/20240105_000001_create_notification_channels.sql")).await;
     run_migration_file(
         pool,
         include_str!(
-            "../../../tw-core/src/db/migrations/postgres/20240130_000005_create_settings.sql"
+            "../../../tw-core/src/db/migrations/postgres/20240106_000001_create_settings.sql"
         ),
     )
     .await;
@@ -253,31 +253,16 @@ async fn run_postgres_migrations(pool: &PgPool) {
         ),
     )
     .await;
-    // 20240215_000002 uses DO $$ blocks with IF NOT EXISTS guards for idempotent tenant_id addition.
-    // It handles all tables except sessions.
-    run_migration_file(pool, include_str!("../../../tw-core/src/db/migrations/postgres/20240215_000002_add_tenant_id_to_tables.sql")).await;
-    // Add tenant_id to sessions (not covered by 20240215_000002)
     run_migration_file(
         pool,
-        r#"
-        ALTER TABLE sessions ADD COLUMN IF NOT EXISTS tenant_id UUID;
-        UPDATE sessions SET tenant_id = '00000000-0000-0000-0000-000000000001'::uuid WHERE tenant_id IS NULL;
-        ALTER TABLE sessions ALTER COLUMN tenant_id SET NOT NULL;
-        DO $$ BEGIN
-            ALTER TABLE sessions ADD CONSTRAINT fk_sessions_tenant
-                FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE;
-        EXCEPTION
-            WHEN duplicate_object THEN null;
-        END $$;
-        CREATE INDEX IF NOT EXISTS idx_sessions_tenant ON sessions(tenant_id);
-        "#,
+        include_str!(
+            "../../../tw-core/src/db/migrations/postgres/20240220_000001_add_tenant_id_to_tables.sql"
+        ),
     )
     .await;
-    // Skip 20240220_000001 — it duplicates 20240215_000002 without IF NOT EXISTS guards,
-    // causing constraint-already-exists errors when both run.
     run_migration_file(
         pool,
-        include_str!("../../../tw-core/src/db/migrations/postgres/20240220_000002_enable_rls.sql"),
+        include_str!("../../../tw-core/src/db/migrations/postgres/20240221_000001_enable_rls.sql"),
     )
     .await;
     run_migration_file(

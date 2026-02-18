@@ -72,9 +72,19 @@ ENV PATH="/app/venv/bin:$PATH"
 COPY python/ /tmp/python/
 RUN pip install --no-cache-dir /tmp/python/ && rm -rf /tmp/python/
 
-# Install tw_bridge wheel (pre-built by CI, placed in dist/)
+# Install tw_bridge wheel when a Linux-compatible wheel is available.
+# Local dev environments may only have macOS wheels in dist/, which are
+# not installable in this Linux container.
 COPY dist/tw_bridge-*.whl /tmp/
-RUN pip install --no-cache-dir /tmp/tw_bridge-*.whl && rm -f /tmp/tw_bridge-*.whl
+RUN set -e; \
+    TW_BRIDGE_WHEEL="$(find /tmp -maxdepth 1 -name 'tw_bridge-*.whl' | grep -E '(manylinux|musllinux|linux)' | head -n 1 || true)"; \
+    if [ -n "$TW_BRIDGE_WHEEL" ]; then \
+      pip install --no-cache-dir "$TW_BRIDGE_WHEEL"; \
+      echo "Installed tw_bridge wheel: $TW_BRIDGE_WHEEL"; \
+    else \
+      echo "No Linux-compatible tw_bridge wheel found; skipping tw_bridge wheel install."; \
+    fi; \
+    rm -f /tmp/tw_bridge-*.whl
 
 # Create non-root user
 RUN useradd -r -s /bin/false -U triage
