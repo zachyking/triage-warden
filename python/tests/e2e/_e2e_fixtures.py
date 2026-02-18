@@ -119,6 +119,11 @@ if "pytest" in sys.modules:
     _running_e2e = any("e2e" in str(arg) for arg in sys.argv[1:]) or \
                    os.environ.get("TW_RUN_E2E_TESTS") == "1"
 
+# This module is only imported by e2e tests. Ensure mocks are enabled even
+# when pytest is invoked as `pytest tests/` without "e2e" in argv.
+if "e2e" in Path(__file__).parts:
+    _running_e2e = True
+
 # Only install mocks when explicitly running e2e tests
 if _running_e2e:
     sys.modules["tw_ai.llm.base"] = _MockLLMBase

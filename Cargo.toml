@@ -10,6 +10,15 @@ members = [
     "crates/tw-cli",
     "tw-bridge",
 ]
+default-members = [
+    "crates/tw-core",
+    "crates/tw-policy",
+    "crates/tw-connectors",
+    "crates/tw-actions",
+    "crates/tw-observability",
+    "crates/tw-api",
+    "crates/tw-cli",
+]
 
 [workspace.package]
 version = "0.1.1"
@@ -102,6 +111,30 @@ tower-sessions-sqlx-store = { path = "vendor/tower-sessions-sqlx-store-patched" 
 sqlx-macros = { path = "vendor/sqlx-macros-patched" }
 rust-xmlsec = { path = "vendor/rust-xmlsec-patched" }
 xml_serde = { path = "vendor/xml_serde-patched" }
+
+[profile.dev]
+# Keep local crate debugging useful while reducing symbol size.
+debug = 1
+# Incremental caches are usually the largest source of target-dir growth.
+incremental = false
+
+[profile.dev.package."*"]
+# Dependencies keep no debuginfo in dev builds to cap target size.
+debug = 0
+
+[profile.dev.build-override]
+# Build scripts/proc-macros do not need debuginfo in normal workflows.
+debug = 0
+
+[profile.test]
+debug = 1
+incremental = false
+
+[profile.test.package."*"]
+debug = 0
+
+[profile.test.build-override]
+debug = 0
 
 [profile.release]
 lto = true

@@ -1,0 +1,38 @@
+# Triage Warden AI Triage Service Dockerfile
+# Runs the Python FastAPI triage service wrapping the ReAct agent.
+
+FROM python:3.12-slim-bookworm
+
+WORKDIR /app
+
+# Install uv for fast dependency management
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Copy project files
+COPY python/pyproject.toml python/README.md* ./
+
+# Install dependencies (cached layer)
+RUN uv pip install --system --no-cache .
+
+# Copy source code
+COPY python/tw_ai/ /app/tw_ai/
+
+# Re-install in case of editable deps
+RUN uv pip install --system --no-cache .
+
+# Create non-root user
+RUN useradd -r -s /bin/false -U triage
+USER triage
+
+# Environment defaults
+ENV TW_TRIAGE_HOST=0.0.0.0
+ENV TW_TRIAGE_PORT=8091
+ENV TW_LLM_PROVIDER=openai
+ENV TW_LLM_MODEL=gpt-4-turbo
+
+EXPOSE 8091
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8091/health')" || exit 1
+
+ENTRYPOINT ["python", "-m", "tw_ai.triage_service"]

@@ -43,7 +43,7 @@ class NLQueryApiResponse(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-@router.post("/query", response_model=NLQueryApiResponse)  # type: ignore[untyped-decorator]
+@router.post("/query", response_model=NLQueryApiResponse)
 async def translate_query(request: NLQueryRequest) -> NLQueryApiResponse:
     """Translate a natural language query to a backend-specific query."""
     # Validate backend

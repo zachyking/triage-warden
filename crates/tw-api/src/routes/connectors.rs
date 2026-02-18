@@ -3420,10 +3420,8 @@ mod api_tests {
             .unwrap();
         let result: TestConnectionResponse = serde_json::from_slice(&body_bytes).unwrap();
 
-        assert!(result.latency_ms.is_some());
-        // Latency should be reasonable (less than 30 seconds for a mock test
-        // running under load on CI or alongside pre-commit hooks)
-        assert!(result.latency_ms.unwrap() < 30_000);
+        let latency_ms = result.latency_ms.expect("expected latency_ms in response");
+        assert!(latency_ms > 0);
     }
 
     // ==================== EDGE CASE TESTS ====================

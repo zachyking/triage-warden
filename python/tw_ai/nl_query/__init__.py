@@ -19,6 +19,8 @@ Public API:
     - router: FastAPI router for NL query API (only when fastapi is installed)
 """
 
+from typing import Any
+
 from tw_ai.nl_query.audit import (
     QueryAuditEntry,
     QueryAuditLog,
@@ -47,9 +49,11 @@ from tw_ai.nl_query.translator import (
 )
 
 try:
-    from tw_ai.nl_query.api import router
+    from tw_ai.nl_query.api import router as _router
 except ImportError:
-    router = None
+    router: Any | None = None
+else:
+    router = _router
 
 __all__ = [
     # API (requires fastapi)
