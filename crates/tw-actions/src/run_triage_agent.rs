@@ -2,6 +2,11 @@
 //!
 //! This action triggers the triage workflow for an incident and returns
 //! a structured analysis derived from incident context.
+//!
+//! When a `triage_service_url` is configured (via `TW_TRIAGE_SERVICE_URL`),
+//! the action delegates to the Python AI triage service. If the service is
+//! unavailable or returns an error, the action falls back to the built-in
+//! heuristic pipeline and logs a warning.
 
 use crate::registry::{
     Action, ActionContext, ActionError, ActionResult, ParameterDef, ParameterType,
@@ -12,12 +17,13 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
-use tracing::{info, instrument};
+use std::time::Duration;
+use tracing::{info, instrument, warn};
 
 /// Result of triage analysis.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TriageResult {
-    /// The verdict from triage (e.g., "malicious", "benign", "suspicious").
+    /// The verdict from triage (true_positive, false_positive, suspicious, inconclusive).
     pub verdict: String,
     /// Confidence level (0.0 - 1.0).
     pub confidence: f64,
@@ -64,14 +70,251 @@ struct IncidentContextInput {
     tags: Vec<String>,
 }
 
+// ---------------------------------------------------------------------------
+// Python triage service request/response types
+// ---------------------------------------------------------------------------
+
+/// Request body sent to the Python triage service.
+#[derive(Debug, Serialize)]
+struct TriageServiceRequest {
+    alert_type: String,
+    alert_data: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    priority: Option<String>,
+}
+
+/// Indicator in the triage service response.
+#[derive(Debug, Deserialize)]
+struct ServiceIndicator {
+    #[serde(rename = "type")]
+    indicator_type: String,
+    value: String,
+}
+
+/// MITRE technique in the triage service response.
+#[derive(Debug, Deserialize)]
+struct ServiceMitreTechnique {
+    id: String,
+    name: String,
+}
+
+/// Recommended action in the triage service response.
+#[derive(Debug, Deserialize)]
+struct ServiceRecommendedAction {
+    action: String,
+}
+
+/// Response body from the Python triage service.
+#[derive(Debug, Deserialize)]
+struct TriageServiceResponse {
+    verdict: String,
+    confidence: f64,
+    severity: String,
+    summary: String,
+    #[serde(default)]
+    reasoning: String,
+    #[serde(default)]
+    indicators: Vec<ServiceIndicator>,
+    #[serde(default)]
+    mitre_techniques: Vec<ServiceMitreTechnique>,
+    #[serde(default)]
+    recommended_actions: Vec<ServiceRecommendedAction>,
+    #[serde(default)]
+    analyzed_by: String,
+    #[serde(default)]
+    tokens_used: u32,
+    #[serde(default)]
+    execution_time_seconds: f64,
+}
+
 /// Action to trigger triage for an incident.
-pub struct RunTriageAgentAction;
+pub struct RunTriageAgentAction {
+    /// Optional URL of the Python triage service.
+    triage_service_url: Option<String>,
+    /// HTTP client for calling the triage service (lazily shared).
+    http_client: reqwest::Client,
+}
 
 impl RunTriageAgentAction {
     /// Creates a new run triage agent action.
+    ///
+    /// If no URL is provided, only the heuristic pipeline is used.
     pub fn new() -> Self {
-        Self
+        Self {
+            triage_service_url: None,
+            http_client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .build()
+                .unwrap_or_default(),
+        }
     }
+
+    /// Creates a new action configured to call the Python triage service.
+    pub fn with_triage_service_url(mut self, url: String) -> Self {
+        self.triage_service_url = Some(url);
+        self
+    }
+
+    /// Resolve triage service URL using override precedence:
+    /// 1) action parameter `triage_service_url`
+    /// 2) metadata key `triage_service_url` (backward-compatible)
+    /// 3) action field configured via builder
+    /// 4) process env `TW_TRIAGE_SERVICE_URL`
+    fn resolve_service_url(&self, context: &ActionContext) -> Option<String> {
+        context
+            .get_string("triage_service_url")
+            .or_else(|| {
+                context
+                    .metadata
+                    .get("triage_service_url")
+                    .and_then(|v| v.as_str().map(String::from))
+            })
+            .or_else(|| self.triage_service_url.clone())
+            .or_else(|| std::env::var("TW_TRIAGE_SERVICE_URL").ok())
+            .map(|u| u.trim().to_string())
+            .filter(|u| !u.is_empty())
+    }
+
+    // ------------------------------------------------------------------
+    // Python AI triage service integration
+    // ------------------------------------------------------------------
+
+    /// Call the Python triage service with 1 retry on timeout/5xx.
+    async fn call_triage_service(
+        &self,
+        url: &str,
+        incident_context: &IncidentContextInput,
+    ) -> Result<TriageServiceResponse, String> {
+        let alert_type = self.infer_alert_type(incident_context);
+        let alert_data =
+            serde_json::to_value(incident_context).unwrap_or_else(|_| serde_json::json!({}));
+
+        let body = TriageServiceRequest {
+            alert_type,
+            alert_data,
+            context: None,
+            priority: incident_context.severity.clone(),
+        };
+
+        let endpoint = format!("{}/api/triage", url.trim_end_matches('/'));
+
+        // Attempt with 1 retry on retriable errors
+        for attempt in 0..2u8 {
+            match self.http_client.post(&endpoint).json(&body).send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if status.is_success() {
+                        return resp.json::<TriageServiceResponse>().await.map_err(|e| {
+                            format!("Failed to parse triage service response: {}", e)
+                        });
+                    }
+                    // Retry on 5xx, fail immediately on 4xx
+                    if status.is_server_error() && attempt == 0 {
+                        warn!(
+                            status = %status,
+                            attempt = attempt + 1,
+                            "Triage service returned server error, retrying"
+                        );
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        continue;
+                    }
+                    let detail = resp.text().await.unwrap_or_default();
+                    return Err(format!("Triage service returned {}: {}", status, detail));
+                }
+                Err(e) => {
+                    // Retry on timeout, fail on other transport errors
+                    if e.is_timeout() && attempt == 0 {
+                        warn!(
+                            attempt = attempt + 1,
+                            "Triage service request timed out, retrying"
+                        );
+                        continue;
+                    }
+                    return Err(format!("Triage service request failed: {}", e));
+                }
+            }
+        }
+        Err("Triage service exhausted all retries".to_string())
+    }
+
+    /// Convert service response to `TriageResult` and extracted metadata.
+    ///
+    /// Returns `(TriageResult, severity, tokens_used, execution_time_seconds)`.
+    fn service_response_to_result(resp: TriageServiceResponse) -> (TriageResult, String, u32, f64) {
+        let verdict = Self::normalize_verdict(&resp.verdict);
+        let risk_score = (resp.confidence * 100.0).round() as u32;
+
+        let result = TriageResult {
+            verdict,
+            confidence: resp.confidence,
+            analysis: if resp.reasoning.is_empty() {
+                resp.summary
+            } else {
+                format!("{}\n\n{}", resp.summary, resp.reasoning)
+            },
+            recommended_actions: resp
+                .recommended_actions
+                .into_iter()
+                .map(|a| a.action)
+                .collect(),
+            risk_score: risk_score.clamp(0, 100),
+            iocs: resp
+                .indicators
+                .into_iter()
+                .map(|i| format!("{}:{}", i.indicator_type, i.value))
+                .collect(),
+            mitre_techniques: resp
+                .mitre_techniques
+                .into_iter()
+                .map(|t| format!("{} - {}", t.id, t.name))
+                .collect(),
+        };
+
+        (
+            result,
+            resp.severity,
+            resp.tokens_used,
+            resp.execution_time_seconds,
+        )
+    }
+
+    /// Normalize verdicts from heterogeneous providers into one canonical taxonomy.
+    fn normalize_verdict(verdict: &str) -> String {
+        match verdict.trim().to_ascii_lowercase().as_str() {
+            "true_positive" | "malicious" => "true_positive".to_string(),
+            "false_positive" | "benign" | "clean" => "false_positive".to_string(),
+            "suspicious" => "suspicious".to_string(),
+            "inconclusive" => "inconclusive".to_string(),
+            _ => "inconclusive".to_string(),
+        }
+    }
+
+    /// Infer alert type from context fields.
+    fn infer_alert_type(&self, ctx: &IncidentContextInput) -> String {
+        let text = format!(
+            "{} {} {}",
+            ctx.title.as_deref().unwrap_or(""),
+            ctx.description.as_deref().unwrap_or(""),
+            ctx.tags.join(" ")
+        )
+        .to_ascii_lowercase();
+
+        if text.contains("phishing") || ctx.sender.is_some() {
+            "phishing".to_string()
+        } else if text.contains("malware") || Self::risky_attachment_count(&ctx.attachments) > 0 {
+            "malware".to_string()
+        } else if text.contains("brute") || ctx.authentication_failures {
+            "brute_force".to_string()
+        } else {
+            "generic".to_string()
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Heuristic pipeline (unchanged)
+    // ------------------------------------------------------------------
 
     fn validate_agent_config(agent_config: &AgentConfig) -> Result<(), ActionError> {
         if let Some(max_tokens) = agent_config.max_tokens {
@@ -272,11 +515,13 @@ impl RunTriageAgentAction {
 
     fn classify_verdict(score: u32) -> &'static str {
         if score >= 80 {
-            "malicious"
+            "true_positive"
         } else if score >= 45 {
             "suspicious"
+        } else if score >= 25 {
+            "inconclusive"
         } else {
-            "benign"
+            "false_positive"
         }
     }
 
@@ -424,7 +669,7 @@ impl RunTriageAgentAction {
         }
 
         match verdict {
-            "malicious" => {
+            "true_positive" => {
                 add_action("quarantine_email");
                 add_action("disable_user");
                 add_action("block_sender");
@@ -435,6 +680,10 @@ impl RunTriageAgentAction {
                 add_action("quarantine_email");
                 add_action("create_ticket");
                 add_action("notify_user");
+            }
+            "inconclusive" => {
+                add_action("create_ticket");
+                add_action("notify_reporter");
             }
             _ => {
                 add_action("notify_reporter");
@@ -508,7 +757,7 @@ impl Action for RunTriageAgentAction {
     }
 
     fn description(&self) -> &str {
-        "Runs deterministic triage analysis for an incident and suggests next actions"
+        "Runs triage analysis for an incident using AI service or heuristic fallback"
     }
 
     fn required_parameters(&self) -> Vec<ParameterDef> {
@@ -529,6 +778,12 @@ impl Action for RunTriageAgentAction {
                 "Optional context for scoring (title, description, severity, sender, URLs, attachments, indicators)",
                 ParameterType::Object,
                 serde_json::json!({}),
+            ),
+            ParameterDef::optional(
+                "triage_service_url",
+                "Optional override URL for the AI triage service (defaults to TW_TRIAGE_SERVICE_URL)",
+                ParameterType::String,
+                serde_json::Value::Null,
             ),
         ]
     }
@@ -553,13 +808,53 @@ impl Action for RunTriageAgentAction {
         Self::validate_agent_config(&agent_config)?;
 
         let incident_context = Self::parse_incident_context(&context)?;
-        let triage_result = Self::analyze_incident(&incident_id, &incident_context, &agent_config);
-        let triage_id = format!("triage-{}", uuid::Uuid::new_v4());
 
-        let model_used = agent_config
-            .model
-            .clone()
-            .unwrap_or_else(|| "heuristic-v1".to_string());
+        // Determine which triage path to use: AI service or heuristic.
+        let service_url = self.resolve_service_url(&context);
+
+        let (triage_result, model_used) = if let Some(url) = service_url {
+            // Try AI triage service
+            match self.call_triage_service(&url, &incident_context).await {
+                Ok(resp) => {
+                    let model = resp.analyzed_by.clone();
+                    let (result, _severity, _tokens, _exec_time) =
+                        Self::service_response_to_result(resp);
+                    info!(
+                        incident_id = %incident_id,
+                        "AI triage service returned verdict: {}",
+                        result.verdict
+                    );
+                    (
+                        result,
+                        if model.is_empty() {
+                            "react-agent".to_string()
+                        } else {
+                            model
+                        },
+                    )
+                }
+                Err(err) => {
+                    warn!(
+                        incident_id = %incident_id,
+                        error = %err,
+                        "AI triage service failed, falling back to heuristic"
+                    );
+                    let result =
+                        Self::analyze_incident(&incident_id, &incident_context, &agent_config);
+                    (result, "heuristic-v1 (fallback)".to_string())
+                }
+            }
+        } else {
+            // No service URL — use heuristic directly
+            let result = Self::analyze_incident(&incident_id, &incident_context, &agent_config);
+            let model = agent_config
+                .model
+                .clone()
+                .unwrap_or_else(|| "heuristic-v1".to_string());
+            (result, model)
+        };
+
+        let triage_id = format!("triage-{}", uuid::Uuid::new_v4());
 
         info!(
             "Triage {} completed for incident {} with verdict: {} (confidence: {:.2})",
@@ -613,7 +908,10 @@ impl Action for RunTriageAgentAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     use uuid::Uuid;
+
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     #[tokio::test]
     async fn test_run_triage_agent() {
@@ -663,7 +961,10 @@ mod tests {
         assert!(result.success);
 
         let verdict = result.output["verdict"].as_str().unwrap();
-        assert!(matches!(verdict, "malicious" | "suspicious" | "benign"));
+        assert!(matches!(
+            verdict,
+            "true_positive" | "suspicious" | "false_positive" | "inconclusive"
+        ));
 
         let confidence = result.output["confidence"].as_f64().unwrap();
         assert!((0.0..=1.0).contains(&confidence));
@@ -766,5 +1067,209 @@ mod tests {
         assert!(config.temperature.is_none());
         assert!(!config.extract_iocs);
         assert!(!config.map_mitre);
+    }
+
+    #[tokio::test]
+    async fn test_fallback_when_service_url_unreachable() {
+        let action =
+            RunTriageAgentAction::new().with_triage_service_url("http://127.0.0.1:1".to_string());
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("incident_id", serde_json::json!("INC-FALLBACK-001"))
+            .with_param(
+                "incident_context",
+                serde_json::json!({
+                    "severity": "high",
+                    "title": "Test fallback"
+                }),
+            );
+
+        let result = action.execute(context).await.unwrap();
+        assert!(result.success);
+        // Should have fallen back to heuristic
+        let model = result.output["model_used"].as_str().unwrap();
+        assert!(
+            model.contains("heuristic"),
+            "Expected heuristic fallback, got: {}",
+            model
+        );
+    }
+
+    #[tokio::test]
+    async fn test_service_url_from_metadata() {
+        // When triage_service_url is passed via metadata instead of struct field
+        let action = RunTriageAgentAction::new();
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("incident_id", serde_json::json!("INC-META-001"))
+            .with_metadata(
+                "triage_service_url",
+                serde_json::json!("http://127.0.0.1:1"),
+            )
+            .with_param("incident_context", serde_json::json!({"severity": "low"}));
+
+        // Should fall back to heuristic since URL is unreachable
+        let result = action.execute(context).await.unwrap();
+        assert!(result.success);
+        let model = result.output["model_used"].as_str().unwrap();
+        assert!(
+            model.contains("heuristic"),
+            "Expected heuristic fallback, got: {}",
+            model
+        );
+    }
+
+    #[test]
+    fn test_infer_alert_type() {
+        let action = RunTriageAgentAction::new();
+
+        let phishing = IncidentContextInput {
+            sender: Some("bad@evil.com".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(action.infer_alert_type(&phishing), "phishing");
+
+        let malware = IncidentContextInput {
+            attachments: vec!["payload.exe".to_string()],
+            ..Default::default()
+        };
+        assert_eq!(action.infer_alert_type(&malware), "malware");
+
+        let brute = IncidentContextInput {
+            authentication_failures: true,
+            ..Default::default()
+        };
+        assert_eq!(action.infer_alert_type(&brute), "brute_force");
+
+        let generic = IncidentContextInput::default();
+        assert_eq!(action.infer_alert_type(&generic), "generic");
+    }
+
+    #[test]
+    fn test_service_response_to_result() {
+        let resp = TriageServiceResponse {
+            verdict: "true_positive".to_string(),
+            confidence: 0.92,
+            severity: "high".to_string(),
+            summary: "Phishing detected".to_string(),
+            reasoning: "URL analysis confirmed typosquat".to_string(),
+            indicators: vec![ServiceIndicator {
+                indicator_type: "domain".to_string(),
+                value: "paypa1.com".to_string(),
+            }],
+            mitre_techniques: vec![ServiceMitreTechnique {
+                id: "T1566.002".to_string(),
+                name: "Spearphishing Link".to_string(),
+            }],
+            recommended_actions: vec![ServiceRecommendedAction {
+                action: "quarantine_email".to_string(),
+            }],
+            analyzed_by: "react-agent".to_string(),
+            tokens_used: 1500,
+            execution_time_seconds: 3.2,
+        };
+
+        let (result, severity, tokens_used, exec_time) =
+            RunTriageAgentAction::service_response_to_result(resp);
+        assert_eq!(result.verdict, "true_positive");
+        assert!((result.confidence - 0.92).abs() < f64::EPSILON);
+        assert_eq!(result.risk_score, 92);
+        assert_eq!(result.iocs, vec!["domain:paypa1.com"]);
+        assert_eq!(
+            result.mitre_techniques,
+            vec!["T1566.002 - Spearphishing Link"]
+        );
+        assert_eq!(result.recommended_actions, vec!["quarantine_email"]);
+        assert!(result.analysis.contains("Phishing detected"));
+        assert!(result.analysis.contains("URL analysis confirmed"));
+        assert_eq!(severity, "high");
+        assert_eq!(tokens_used, 1500);
+        assert!((exec_time - 3.2).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_service_response_normalizes_legacy_verdicts() {
+        let resp = TriageServiceResponse {
+            verdict: "malicious".to_string(),
+            confidence: 0.87,
+            severity: "high".to_string(),
+            summary: "Detected".to_string(),
+            reasoning: String::new(),
+            indicators: vec![],
+            mitre_techniques: vec![],
+            recommended_actions: vec![],
+            analyzed_by: "react-agent".to_string(),
+            tokens_used: 0,
+            execution_time_seconds: 0.1,
+        };
+
+        let (result, _, _, _) = RunTriageAgentAction::service_response_to_result(resp);
+        assert_eq!(result.verdict, "true_positive");
+    }
+
+    #[tokio::test]
+    async fn test_service_url_from_env_when_not_explicitly_overridden() {
+        let _env_lock = ENV_MUTEX.lock().expect("env mutex poisoned");
+        let previous = std::env::var("TW_TRIAGE_SERVICE_URL").ok();
+        std::env::set_var("TW_TRIAGE_SERVICE_URL", "http://127.0.0.1:1");
+
+        let action = RunTriageAgentAction::new();
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("incident_id", serde_json::json!("INC-ENV-001"))
+            .with_param("incident_context", serde_json::json!({"severity": "low"}));
+
+        let result = action.execute(context).await.unwrap();
+        assert!(result.success);
+        let model = result.output["model_used"].as_str().unwrap();
+        assert!(
+            model.contains("heuristic"),
+            "Expected heuristic fallback, got: {}",
+            model
+        );
+
+        if let Some(previous) = previous {
+            std::env::set_var("TW_TRIAGE_SERVICE_URL", previous);
+        } else {
+            std::env::remove_var("TW_TRIAGE_SERVICE_URL");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_action_param_service_url_override_precedence() {
+        let _env_lock = ENV_MUTEX.lock().expect("env mutex poisoned");
+        let previous = std::env::var("TW_TRIAGE_SERVICE_URL").ok();
+        // Context parameter should override env and metadata.
+        std::env::set_var("TW_TRIAGE_SERVICE_URL", "http://env-invalid:1");
+        let action = RunTriageAgentAction::new();
+
+        let context = ActionContext::new(Uuid::new_v4())
+            .with_param("incident_id", serde_json::json!("INC-OVERRIDE-001"))
+            .with_metadata(
+                "triage_service_url",
+                serde_json::json!("http://metadata-invalid:1"),
+            )
+            .with_param(
+                "triage_service_url",
+                serde_json::json!("http://127.0.0.1:1"),
+            )
+            .with_param(
+                "incident_context",
+                serde_json::json!({"severity": "medium"}),
+            );
+
+        let result = action.execute(context).await.unwrap();
+        assert!(result.success);
+        let model = result.output["model_used"].as_str().unwrap();
+        assert!(
+            model.contains("heuristic"),
+            "Expected heuristic fallback, got: {}",
+            model
+        );
+
+        if let Some(previous) = previous {
+            std::env::set_var("TW_TRIAGE_SERVICE_URL", previous);
+        } else {
+            std::env::remove_var("TW_TRIAGE_SERVICE_URL");
+        }
     }
 }

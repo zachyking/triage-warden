@@ -38,11 +38,31 @@ except ImportError:
     PostgresContainer = Any  # type: ignore
     DockerContainer = Any  # type: ignore
 
+_DOCKER_AVAILABLE: bool | None = None
+_DOCKER_UNAVAILABLE_REASON: str | None = None
+
 
 def _skip_if_no_docker() -> None:
     """Skip test if Docker is not available."""
+    global _DOCKER_AVAILABLE, _DOCKER_UNAVAILABLE_REASON
+
     if not TESTCONTAINERS_AVAILABLE:
         pytest.skip("testcontainers not installed - run: pip install testcontainers[postgres]")
+
+    if _DOCKER_AVAILABLE is None:
+        try:
+            import docker
+
+            client = docker.from_env()
+            client.ping()
+            _DOCKER_AVAILABLE = True
+        except Exception as exc:
+            _DOCKER_AVAILABLE = False
+            _DOCKER_UNAVAILABLE_REASON = str(exc)
+
+    if not _DOCKER_AVAILABLE:
+        reason = _DOCKER_UNAVAILABLE_REASON or "unknown error"
+        pytest.skip(f"Docker daemon unavailable: {reason}")
 
 
 @dataclass

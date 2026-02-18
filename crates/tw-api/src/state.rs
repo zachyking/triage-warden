@@ -47,6 +47,8 @@ pub struct AppState {
     pub feature_flags: Arc<FeatureFlags>,
     /// URL of the Python NL query service (optional).
     pub nl_query_url: Option<String>,
+    /// URL of the Python AI triage service (optional).
+    pub triage_service_url: Option<String>,
     /// Asset store for asset management APIs.
     pub asset_store: Arc<dyn AssetStore>,
     /// Identity store for identity management APIs.
@@ -98,6 +100,7 @@ impl AppState {
             leader_elector: None,
             feature_flags: Arc::new(feature_flags),
             nl_query_url: std::env::var("NL_QUERY_URL").ok(),
+            triage_service_url: std::env::var("TW_TRIAGE_SERVICE_URL").ok(),
             asset_store: Arc::new(InMemoryAssetStore::new()),
             identity_store: Arc::new(InMemoryIdentityStore::new()),
             relationship_store: Arc::new(InMemoryRelationshipStore::new()),
@@ -200,6 +203,7 @@ pub struct AppStateBuilder {
     cache: Option<Arc<dyn DynCache>>,
     leader_elector: Option<Arc<dyn LeaderElector>>,
     nl_query_url: Option<String>,
+    triage_service_url: Option<String>,
     asset_store: Option<Arc<dyn AssetStore>>,
     identity_store: Option<Arc<dyn IdentityStore>>,
     relationship_store: Option<Arc<dyn RelationshipStore>>,
@@ -224,6 +228,7 @@ impl AppStateBuilder {
             cache: None,
             leader_elector: None,
             nl_query_url: std::env::var("NL_QUERY_URL").ok(),
+            triage_service_url: std::env::var("TW_TRIAGE_SERVICE_URL").ok(),
             asset_store: None,
             identity_store: None,
             relationship_store: None,
@@ -320,6 +325,12 @@ impl AppStateBuilder {
         self
     }
 
+    /// Sets the triage service URL.
+    pub fn with_triage_service_url(mut self, url: String) -> Self {
+        self.triage_service_url = Some(url);
+        self
+    }
+
     /// Builds the AppState with all configured components.
     ///
     /// Returns an error when encryption initialization fails.
@@ -381,6 +392,7 @@ impl AppStateBuilder {
             leader_elector: self.leader_elector,
             feature_flags: Arc::new(self.feature_flags),
             nl_query_url: self.nl_query_url,
+            triage_service_url: self.triage_service_url,
             asset_store: self
                 .asset_store
                 .unwrap_or_else(|| Arc::new(InMemoryAssetStore::new())),

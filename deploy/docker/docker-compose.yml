@@ -34,10 +34,13 @@ services:
       - TW_LOG_FORMAT=json
       - QDRANT_URL=http://qdrant:6334
       - QDRANT_API_KEY=${QDRANT_API_KEY:-}
+      - TW_TRIAGE_SERVICE_URL=${TW_TRIAGE_SERVICE_URL:-http://triage-service:8091}
     depends_on:
       postgres:
         condition: service_healthy
       qdrant:
+        condition: service_healthy
+      triage-service:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
@@ -72,6 +75,33 @@ services:
           memory: 512M
         reservations:
           memory: 128M
+
+  triage-service:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.triage-service
+    ports:
+      - "8091:8091"
+    environment:
+      - TW_LLM_PROVIDER=${TW_LLM_PROVIDER:-openai}
+      - TW_LLM_MODEL=${TW_LLM_MODEL:-gpt-4-turbo}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - TW_LLM_BASE_URL=${TW_LLM_BASE_URL:-}
+      - TW_LLM_API_KEY=${TW_LLM_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8091/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
 
   qdrant:
     image: qdrant/qdrant:v1.15.1

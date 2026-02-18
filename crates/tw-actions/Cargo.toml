@@ -17,6 +17,7 @@ async-trait.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 regex = "1"
+reqwest.workspace = true
 
 tw-connectors = { path = "../tw-connectors" }
 tw-core = { path = "../tw-core" }

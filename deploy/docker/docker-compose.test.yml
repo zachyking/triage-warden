@@ -59,6 +59,26 @@ services:
     tmpfs:
       - /data
 
+  # Python AI triage service in test mode
+  tw-triage-test:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.triage-service
+    ports:
+      - "8092:8091"
+    environment:
+      TW_LLM_PROVIDER: openai
+      TW_LLM_MODEL: gpt-4-turbo
+      # LLM keys can be set externally for integration tests
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8091/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   # Triage Warden API in test mode
   tw-api-test:
     build:
@@ -77,6 +97,7 @@ services:
       TW_BASE_URL: http://localhost:8081
       QDRANT_URL: http://qdrant-test:6334
       REDIS_URL: redis://redis-test:6379
+      TW_TRIAGE_SERVICE_URL: http://tw-triage-test:8091
       RUST_LOG: debug,tw_api=debug,tw_core=debug
       # Disable rate limiting for tests
       TW_RATE_LIMIT_DISABLED: "true"
@@ -89,6 +110,8 @@ services:
       qdrant-test:
         condition: service_healthy
       redis-test:
+        condition: service_healthy
+      tw-triage-test:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
