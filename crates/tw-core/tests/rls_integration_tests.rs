@@ -42,18 +42,18 @@ async fn run_test_migrations(pool: &PgPool) {
     // Run migrations in order
     let migrations = [
         include_str!("../src/db/migrations/postgres/20240101_000001_initial_schema.sql"),
-        include_str!("../src/db/migrations/postgres/20240130_000001_create_playbooks.sql"),
-        include_str!("../src/db/migrations/postgres/20240130_000002_create_connectors.sql"),
-        include_str!("../src/db/migrations/postgres/20240130_000003_create_policies.sql"),
+        include_str!("../src/db/migrations/postgres/20240102_000001_create_playbooks.sql"),
+        include_str!("../src/db/migrations/postgres/20240103_000001_create_connectors.sql"),
+        include_str!("../src/db/migrations/postgres/20240104_000001_create_policies.sql"),
         include_str!(
-            "../src/db/migrations/postgres/20240130_000004_create_notification_channels.sql"
+            "../src/db/migrations/postgres/20240105_000001_create_notification_channels.sql"
         ),
-        include_str!("../src/db/migrations/postgres/20240130_000005_create_settings.sql"),
+        include_str!("../src/db/migrations/postgres/20240106_000001_create_settings.sql"),
         include_str!("../src/db/migrations/postgres/20240201_000001_create_auth_tables.sql"),
         include_str!("../src/db/migrations/postgres/20240210_000001_create_feature_flags.sql"),
         include_str!("../src/db/migrations/postgres/20240215_000001_create_tenants.sql"),
         include_str!("../src/db/migrations/postgres/20240220_000001_add_tenant_id_to_tables.sql"),
-        include_str!("../src/db/migrations/postgres/20240220_000002_enable_rls.sql"),
+        include_str!("../src/db/migrations/postgres/20240221_000001_enable_rls.sql"),
     ];
 
     for migration in migrations {

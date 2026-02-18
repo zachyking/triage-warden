@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS tenants (
     name TEXT NOT NULL,
     slug TEXT NOT NULL UNIQUE,
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended', 'pending_deletion')),
-    settings TEXT NOT NULL DEFAULT '{}',
+    settings TEXT NOT NULL DEFAULT '{"llm_provider":null,"llm_api_key_ref":null,"default_operation_mode":"assisted","concurrency_limit":10,"feature_overrides":{}}',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -26,7 +26,7 @@ VALUES (
     'Default Organization',
     'default',
     'active',
-    '{}',
+    '{"llm_provider":null,"llm_api_key_ref":null,"default_operation_mode":"assisted","concurrency_limit":10,"feature_overrides":{}}',
     datetime('now'),
     datetime('now')
 );
