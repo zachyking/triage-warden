@@ -103,6 +103,11 @@ if ! command -v curl >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! docker info >/dev/null 2>&1; then
+  log_error "Docker daemon is not running. Start Docker Desktop (or docker service) and retry."
+  exit 1
+fi
+
 compose() {
   # shellcheck disable=SC2086
   $COMPOSE_CMD -f "$COMPOSE_FILE" "$@"
