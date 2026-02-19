@@ -93,6 +93,11 @@ cd ../tw-bridge
 ./scripts/run-integration-tests.sh --keep-containers
 ```
 
+Planning and runbook docs:
+
+- Execution plan: `e2e-plan.md`
+- mdBook runbook: `docs-site/src/deployment/e2e-real-org.md`
+
 ## Documentation
 
 - Docs source: `docs-site/src/`

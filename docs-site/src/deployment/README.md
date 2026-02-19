@@ -10,6 +10,7 @@ Triage Warden can be deployed in several ways:
 - **[Kubernetes](./kubernetes.md)** - For orchestrated, scalable deployments using raw manifests.
 - **[Helm Chart](./helm.md)** - Recommended for Kubernetes. Templated deployment with environment-specific values.
 - **[Binary](./binary.md)** - Direct binary installation on Linux servers.
+- **[E2E Fake Organization](./e2e-real-org.md)** - High-fidelity end-to-end environment with real connectors and AI triage.
 
 ## Before You Deploy
 

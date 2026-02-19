@@ -1,0 +1,152 @@
+# E2E Fake Organization (Real Integrations)
+
+This runbook defines how to stand up a high-fidelity E2E environment that uses:
+
+- Real connector credentials
+- Real external sandbox tenants
+- Real AI triage service with live LLM keys
+
+Use this for pre-release validation and demo-grade testing. For fast local checks,
+use the standard integration bootstrap and test scripts.
+
+## Goals
+
+1. Validate end-to-end incident handling against real systems.
+2. Ensure AI triage executes through the Python triage service.
+3. Catch regressions in connector wiring, authentication, and action execution.
+
+## Prerequisites
+
+### Local Platform
+
+- Docker Desktop / Docker Engine
+- Rust toolchain + Python/uv (for local test runners)
+- Triage Warden repository checked out
+
+### External Sandbox Tenants
+
+- Identity/email sandbox:
+  - Google Workspace trial/dev OR Microsoft 365 dev tenant
+- Jira cloud project
+- VirusTotal API key
+- Splunk sandbox endpoint/token
+- CrowdStrike sandbox client credentials
+
+## Required Environment Variables
+
+At minimum:
+
+- `TW_TRIAGE_SERVICE_URL`
+- `TW_LLM_PROVIDER`
+- `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` (or `TW_LLM_API_KEY`)
+- `TW_E2E_ADMIN_PASSWORD`
+
+Common local overrides:
+
+- `TW_E2E_API_PORT`
+- `TW_E2E_TRIAGE_PORT`
+- `TW_E2E_POSTGRES_PORT`
+- `TW_E2E_REDIS_PORT`
+- `TW_E2E_QDRANT_HTTP_PORT`
+
+## Bring Up The Core Stack
+
+```bash
+./scripts/bootstrap-e2e-infra.sh --recreate --no-seed
+```
+
+Use `--no-seed` for real mode so dummy connector values are not inserted.
+
+Verify health:
+
+```bash
+curl -fsS http://localhost:8081/health
+curl -fsS http://localhost:8092/health
+curl -fsS http://localhost:8092/api/triage/status
+```
+
+`/api/triage/status` must report `ready=true` before running real triage scenarios.
+
+## Configure Real Connectors
+
+Create connectors through the UI or API with real sandbox credentials:
+
+- `virustotal`
+- `jira`
+- `splunk`
+- `crowdstrike`
+- `m365`
+- `googleworkspace`
+
+After creation, run each connector test endpoint:
+
+`POST /api/connectors/{id}/test`
+
+Do not use placeholder hostnames like `*.example.local` or dummy tokens in this mode.
+
+## Fake Company Data Model
+
+Create a repeatable fake org profile:
+
+- Users:
+  - `admin`, `analyst_level1`, `analyst_level2`, `incident_manager`, `approver_security`
+- Mailboxes:
+  - `soc@`, `it-admin@`, `finance@`, `hr@`, `ceo@`, `employee-*`
+- Seed content:
+  - Benign and phishing email sets
+  - Malware IOC alerts
+  - Historical incidents for retrieval/correlation tests
+
+Keep user/persona IDs stable across runs so scenario assertions remain deterministic.
+
+## Real AI Triage Verification
+
+When `TW_TRIAGE_SERVICE_URL` is set, the action path delegates to the Python service.
+The action also supports action-level override via `triage_service_url` for targeted tests.
+
+Checklist:
+
+1. Triage service status is ready.
+2. Representative alerts return only accepted verdicts:
+   - `true_positive`
+   - `false_positive`
+   - `suspicious`
+   - `inconclusive`
+3. Scenario logs confirm triage service usage and no fallback-only execution.
+
+## Scenario Execution
+
+Run baseline integration suites first:
+
+```bash
+./scripts/run-integration-tests.sh --keep-containers
+```
+
+Then run fake-org scenarios (recommended structure):
+
+- `tests/e2e/scenarios/phishing-obvious.yaml`
+- `tests/e2e/scenarios/phishing-bec.yaml`
+- `tests/e2e/scenarios/malware-hash.yaml`
+- `tests/e2e/scenarios/benign-false-positive.yaml`
+
+Each scenario should assert:
+
+- Incident creation
+- Triage verdict envelope
+- Connector side effects (ticket creation, intel lookups, etc.)
+- Approval/action transitions where applicable
+
+## Operational Guardrails
+
+- Use dedicated sandbox tenants only.
+- Rotate all sandbox API credentials on a schedule.
+- Fail fast when required env vars are missing.
+- Archive scenario artifacts for failed runs (API logs, triage logs, connector responses).
+
+## Recommended Promotion Path
+
+1. PR checks: fast local integration tests.
+2. Merge gate: real-infra smoke scenarios.
+3. Nightly: extended real-infra scenario set.
+
+This gives quick feedback on normal development while still validating real-world integrations.

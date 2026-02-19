@@ -112,6 +112,7 @@
   - [Kubernetes Deployment](./deployment/kubernetes.md)
   - [Helm Chart](./deployment/helm.md)
   - [Configuration Reference](./deployment/configuration.md)
+  - [E2E Fake Organization](./deployment/e2e-real-org.md)
 
 # Operations
 
