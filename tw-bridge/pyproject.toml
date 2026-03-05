@@ -30,7 +30,6 @@ dev = [
 [tool.maturin]
 # Build both cdylib (for Python import) and rlib (for Rust tests)
 features = ["pyo3/extension-module"]
-python-source = "python"
 module-name = "tw_bridge"
 
 [tool.pytest.ini_options]
