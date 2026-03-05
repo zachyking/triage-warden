@@ -16,25 +16,22 @@
             <option value="">Select a connector type...</option>
             <optgroup label="SIEM">
               <option value="splunk">Splunk</option>
-              <option value="elastic">Elastic SIEM</option>
-              <option value="sentinel">Microsoft Sentinel</option>
             </optgroup>
             <optgroup label="EDR">
               <option value="crowdstrike">CrowdStrike Falcon</option>
               <option value="defender">Microsoft Defender</option>
-              <option value="sentinelone">SentinelOne</option>
             </optgroup>
             <optgroup label="Ticketing">
               <option value="jira">Jira</option>
-              <option value="servicenow">ServiceNow</option>
             </optgroup>
             <optgroup label="Threat Intelligence">
               <option value="virustotal">VirusTotal</option>
-              <option value="alienvault">AlienVault OTX</option>
             </optgroup>
             <optgroup label="Email">
               <option value="m365">Microsoft 365</option>
-              <option value="google">Google Workspace</option>
+            </optgroup>
+            <optgroup label="Other">
+              <option value="generic">Generic</option>
             </optgroup>
           </select>
         </div>
@@ -48,7 +45,7 @@
           <!-- Dynamic fields populated by JavaScript -->
           <div class="form-group">
             <label class="form-label">API URL / Host</label>
-            <input type="url" name="api_url" class="form-input" placeholder="https://api.example.com">
+            <input type="url" name="base_url" class="form-input" placeholder="https://api.example.com">
           </div>
 
           <div class="form-group">
@@ -86,7 +83,7 @@ function updateConnectorFields(type) {
       fields = `
         <div class="form-group">
           <label class="form-label">Splunk Host</label>
-          <input type="url" name="api_url" class="form-input" placeholder="https://splunk.company.com:8089" required>
+          <input type="url" name="base_url" class="form-input" placeholder="https://splunk.company.com:8089" required>
         </div>
         <div class="grid grid-2 gap-4">
           <div class="form-group">
@@ -133,7 +130,7 @@ function updateConnectorFields(type) {
       fields = `
         <div class="form-group">
           <label class="form-label">Jira URL</label>
-          <input type="url" name="api_url" class="form-input" placeholder="https://yourcompany.atlassian.net" required>
+          <input type="url" name="base_url" class="form-input" placeholder="https://yourcompany.atlassian.net" required>
         </div>
         <div class="grid grid-2 gap-4">
           <div class="form-group">
@@ -142,12 +139,12 @@ function updateConnectorFields(type) {
           </div>
           <div class="form-group">
             <label class="form-label">API Token</label>
-            <input type="password" name="api_key" class="form-input" placeholder="Atlassian API Token" required>
+            <input type="password" name="api_token" class="form-input" placeholder="Atlassian API Token" required>
           </div>
         </div>
         <div class="form-group">
           <label class="form-label">Default Project Key</label>
-          <input type="text" name="project" class="form-input" placeholder="SEC">
+          <input type="text" name="project_key" class="form-input" placeholder="SEC">
         </div>
       `;
       break;
@@ -160,7 +157,7 @@ function updateConnectorFields(type) {
         </div>
         <div class="form-group">
           <label class="form-label">Rate Limit (requests/min)</label>
-          <input type="number" name="rate_limit" class="form-input" value="4" min="1" max="500">
+          <input type="number" name="requests_per_minute" class="form-input" value="4" min="1" max="500">
           <p class="text-xs text-muted mt-1">Free tier: 4/min, Premium: 500/min</p>
         </div>
       `;
@@ -185,15 +182,20 @@ function updateConnectorFields(type) {
       `;
       break;
 
+    case 'generic':
+      fields = `
+        <div class="form-group">
+          <label class="form-label">API URL / Host</label>
+          <input type="url" name="base_url" class="form-input" placeholder="https://api.example.com" required>
+        </div>
+      `;
+      break;
+
     default:
       fields = `
         <div class="form-group">
           <label class="form-label">API URL / Host</label>
-          <input type="url" name="api_url" class="form-input" placeholder="https://api.example.com">
-        </div>
-        <div class="form-group">
-          <label class="form-label">API Key / Token</label>
-          <input type="password" name="api_key" class="form-input" placeholder="Enter API key">
+          <input type="url" name="base_url" class="form-input" placeholder="https://api.example.com">
         </div>
       `;
   }

@@ -184,6 +184,7 @@ create_connector() {
   local name="$2"
   local connector_type="$3"
   local config_json="$4"
+  local verify_connector="${5:-false}"
   local response_file
   response_file="$(mktemp)"
 
@@ -207,7 +208,7 @@ JSON
     connector_id=$(sed -n 's/.*"id":"\([^"]*\)".*/\1/p' "$response_file" | head -n 1)
     log_info "Created connector: $name ($connector_type)"
 
-    if [[ -n "$connector_id" ]]; then
+    if [[ "$verify_connector" == "true" && -n "$connector_id" ]]; then
       local test_file
       test_file="$(mktemp)"
       local test_status
@@ -216,11 +217,23 @@ JSON
         -H "X-Tenant-ID: $TENANT_ID" \
         -X POST "$API_URL/api/connectors/$connector_id/test")
       if [[ "$test_status" == "200" ]]; then
-        log_info "Tested connector: $name"
+        if grep -Eq '"success"[[:space:]]*:[[:space:]]*true' "$test_file"; then
+          log_info "Connector test passed: $name"
+        else
+          local test_message
+          test_message=$(sed -n 's/.*"message":"\([^"]*\)".*/\1/p' "$test_file" | head -n 1)
+          if [[ -n "$test_message" ]]; then
+            log_warn "Connector test failed for $name: $test_message"
+          else
+            log_warn "Connector test failed for $name"
+          fi
+        fi
       else
         log_warn "Connector test returned HTTP $test_status for: $name"
       fi
       rm -f "$test_file"
+    elif [[ "$verify_connector" != "true" ]]; then
+      log_info "Seeded placeholder connector without live verification: $name"
     fi
   elif [[ "$status" == "409" ]]; then
     log_warn "Connector already exists: $name"
@@ -271,12 +284,11 @@ seed_connectors() {
 
   log_info "Authenticated as '$ADMIN_USER', seeding connectors"
 
-  create_connector "$cookie_jar" "E2E VirusTotal" "virustotal" '{"api_key":"vt_e2e_dummy_key"}'
-  create_connector "$cookie_jar" "E2E Jira" "jira" '{"url":"https://jira.example.local","project_key":"SEC","api_token":"jira_e2e_dummy_token","email":"soc@example.local"}'
-  create_connector "$cookie_jar" "E2E Splunk" "splunk" '{"url":"https://splunk.example.local:8089","token":"splunk_e2e_dummy_token","index":"security"}'
+  create_connector "$cookie_jar" "E2E VirusTotal" "virustotal" '{"api_key":"vt_e2e_dummy_key","requests_per_minute":4}'
+  create_connector "$cookie_jar" "E2E Jira" "jira" '{"base_url":"https://jira.example.local","project_key":"SEC","api_token":"jira_e2e_dummy_token","username":"soc@example.local"}'
+  create_connector "$cookie_jar" "E2E Splunk" "splunk" '{"base_url":"https://splunk.example.local:8089","username":"soc_service","password":"splunk_e2e_dummy_password","app":"search"}'
   create_connector "$cookie_jar" "E2E CrowdStrike" "crowdstrike" '{"client_id":"cs_e2e_client","client_secret":"cs_e2e_secret"}'
   create_connector "$cookie_jar" "E2E M365" "m365" '{"tenant_id":"11111111-1111-1111-1111-111111111111","client_id":"22222222-2222-2222-2222-222222222222","client_secret":"m365_e2e_secret"}'
-  create_connector "$cookie_jar" "E2E Google Workspace" "googleworkspace" '{"service_account_json":"{}","admin_email":"admin@example.local"}'
 
   log_info "Connector seeding complete"
   rm -f "$cookie_jar" "$login_html" "$login_resp"
@@ -321,5 +333,5 @@ echo "Admin user:          $ADMIN_USER"
 echo "Admin password:      [from TW_E2E_ADMIN_PASSWORD or default]"
 echo ""
 echo "Next:"
-echo "  1) Run tests:   ./scripts/run-integration-tests.sh --keep-containers"
+echo "  1) Run tests:   ./scripts/run-integration-tests.sh --preserve-state"
 echo "  2) Tear down:   $COMPOSE_CMD -f \"$COMPOSE_FILE\" down -v --remove-orphans"

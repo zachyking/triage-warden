@@ -192,14 +192,16 @@ async fn create_connector(
             "connector_type",
             "invalid_type",
             &format!(
-                "Unknown connector type: '{}'. Valid types are: splunk, crowdstrike, jira, virustotal, m365, defender, elastic, sentinel, sentinelone, servicenow, alienvault, google",
+                "Unknown connector type: '{}'. Valid types are: virustotal, jira, splunk, crowdstrike, defender, m365, googleworkspace, generic",
                 request.connector_type
             ),
         )
     })?;
 
+    let normalized_config = normalize_connector_config(&connector_type, &request.config);
+
     // Encrypt sensitive fields in the config before storage
-    let encrypted_config = encrypt_sensitive_config(&request.config, &state.encryptor);
+    let encrypted_config = encrypt_sensitive_config(&normalized_config, &state.encryptor);
 
     let connector = ConnectorConfig::new(request.name, connector_type, encrypted_config);
     let mut connector = connector;
@@ -260,15 +262,17 @@ async fn update_connector(
     let repo: Box<dyn ConnectorRepository> = create_connector_repository(&state.db);
 
     // Verify connector exists
-    let _ = repo
+    let existing = repo
         .get_for_tenant(id, tenant_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("Connector {} not found", id)))?;
 
     // Encrypt sensitive fields in the config before storage
-    let encrypted_config = request
-        .config
-        .map(|c| encrypt_sensitive_config(&c, &state.encryptor));
+    let encrypted_config = request.config.map(|c| {
+        let normalized = normalize_connector_config(&existing.connector_type, &c);
+        let merged = merge_connector_config(&existing.config, &normalized);
+        encrypt_sensitive_config(&merged, &state.encryptor)
+    });
 
     let update = ConnectorUpdate {
         name: request.name,
@@ -379,10 +383,12 @@ async fn test_connector(
 
     // Decrypt the config before testing - credentials need to be in plaintext for API calls
     let decrypted_config = decrypt_sensitive_config(&connector.config, &state.encryptor);
+    let normalized_config =
+        normalize_connector_config(&connector.connector_type, &decrypted_config);
 
     // Test connection based on connector type
     let start = std::time::Instant::now();
-    let test_result = test_connection_for_type(&connector.connector_type, &decrypted_config).await;
+    let test_result = test_connection_for_type(&connector.connector_type, &normalized_config).await;
     let latency_ms = start.elapsed().as_millis() as u64;
 
     // Update connector status based on test result
@@ -445,6 +451,83 @@ struct InternalTestResult {
 
 fn tenant_id_or_default(tenant: Option<tw_core::tenant::TenantContext>) -> Uuid {
     tenant.map(|ctx| ctx.tenant_id).unwrap_or(DEFAULT_TENANT_ID)
+}
+
+fn normalize_connector_config(
+    connector_type: &ConnectorType,
+    config: &serde_json::Value,
+) -> serde_json::Value {
+    let mut normalized = config.clone();
+    let Some(map) = normalized.as_object_mut() else {
+        return normalized;
+    };
+
+    match connector_type {
+        ConnectorType::VirusTotal => {
+            normalize_aliases(map, "base_url", &["api_url", "url"]);
+            normalize_aliases(map, "requests_per_minute", &["rate_limit"]);
+        }
+        ConnectorType::Jira => {
+            normalize_aliases(map, "base_url", &["api_url", "url"]);
+            normalize_aliases(map, "api_token", &["api_key"]);
+            normalize_aliases(map, "project_key", &["project"]);
+            normalize_aliases(map, "username", &["email"]);
+            normalize_aliases(map, "default_issue_type", &["issue_type"]);
+        }
+        ConnectorType::Splunk => {
+            normalize_aliases(map, "base_url", &["api_url", "url"]);
+            normalize_aliases(map, "token", &["api_token", "api_key"]);
+        }
+        ConnectorType::CrowdStrike
+        | ConnectorType::Defender
+        | ConnectorType::M365
+        | ConnectorType::Generic => {
+            normalize_aliases(map, "base_url", &["api_url", "url"]);
+        }
+        ConnectorType::GoogleWorkspace => {
+            normalize_aliases(map, "admin_email", &["email"]);
+        }
+    }
+
+    normalized
+}
+
+fn normalize_aliases(
+    map: &mut serde_json::Map<String, serde_json::Value>,
+    canonical: &str,
+    aliases: &[&str],
+) {
+    if !map.contains_key(canonical) {
+        if let Some(value) = aliases.iter().find_map(|alias| map.get(*alias).cloned()) {
+            map.insert(canonical.to_string(), value);
+        }
+    }
+
+    for alias in aliases {
+        map.remove(*alias);
+    }
+}
+
+fn merge_connector_config(
+    existing: &serde_json::Value,
+    updates: &serde_json::Value,
+) -> serde_json::Value {
+    match (existing, updates) {
+        (serde_json::Value::Object(existing_map), serde_json::Value::Object(update_map)) => {
+            let mut merged = existing_map.clone();
+
+            for (key, update_value) in update_map {
+                let value = match merged.get(key) {
+                    Some(existing_value) => merge_connector_config(existing_value, update_value),
+                    None => update_value.clone(),
+                };
+                merged.insert(key.clone(), value);
+            }
+
+            serde_json::Value::Object(merged)
+        }
+        (_, update_value) => update_value.clone(),
+    }
 }
 
 /// Tests connection for a given connector type with decrypted configuration.
@@ -675,12 +758,23 @@ async fn test_splunk_connection(config: &serde_json::Value) -> InternalTestResul
         }
     };
 
-    let token = match get_non_empty_str(config, "token") {
-        Some(token) => token,
-        None => {
+    let token = get_non_empty_str(config, "token");
+    let username = get_non_empty_str(config, "username");
+    let password = get_non_empty_str(config, "password");
+
+    let auth = match (token, username, password) {
+        (Some(token), _, _) => AuthConfig::BearerToken {
+            token: token.to_string().into(),
+        },
+        (None, Some(user), Some(pass)) => AuthConfig::Basic {
+            username: user.to_string(),
+            password: pass.to_string().into(),
+        },
+        _ => {
             return InternalTestResult {
                 success: false,
-                message: "Splunk requires a non-empty 'token'.".to_string(),
+                message: "Splunk requires a non-empty 'token' or ('username' + 'password')."
+                    .to_string(),
             };
         }
     };
@@ -689,9 +783,7 @@ async fn test_splunk_connection(config: &serde_json::Value) -> InternalTestResul
         connector: ConnectorTraitConfig {
             name: "splunk".to_string(),
             base_url: base_url.to_string(),
-            auth: AuthConfig::BearerToken {
-                token: token.to_string().into(),
-            },
+            auth,
             timeout_secs: 30,
             max_retries: 3,
             verify_tls: true,
@@ -1010,16 +1102,14 @@ async fn test_microsoft_connection(
     }
 }
 
-/// Tests Google Workspace connection - validates config for now.
+/// Tests Google Workspace connection.
 async fn test_google_workspace_connection(config: &serde_json::Value) -> InternalTestResult {
     if let Some(raw_service_account_json) = get_non_empty_str(config, "service_account_json") {
         return match serde_json::from_str::<serde_json::Value>(raw_service_account_json) {
             Ok(service_account) => match validate_google_service_account_json(&service_account) {
-                Ok(()) => InternalTestResult {
-                    success: true,
-                    message: "Google Workspace service account configuration validated."
-                        .to_string(),
-                },
+                Ok(()) => unsupported_google_workspace_result(
+                    "Google Workspace service account configuration is structurally valid, but live API testing is not implemented yet.",
+                ),
                 Err(msg) => InternalTestResult {
                     success: false,
                     message: format!("Google Workspace service account JSON is invalid: {}", msg),
@@ -1069,10 +1159,9 @@ async fn test_google_workspace_connection(config: &serde_json::Value) -> Interna
 
         return match serde_json::from_str::<serde_json::Value>(&file_content) {
             Ok(service_account) => match validate_google_service_account_json(&service_account) {
-                Ok(()) => InternalTestResult {
-                    success: true,
-                    message: "Google Workspace credentials file validated.".to_string(),
-                },
+                Ok(()) => unsupported_google_workspace_result(
+                    "Google Workspace credentials file is structurally valid, but live API testing is not implemented yet.",
+                ),
                 Err(msg) => InternalTestResult {
                     success: false,
                     message: format!("Google Workspace credentials_file JSON is invalid: {}", msg),
@@ -1092,6 +1181,13 @@ async fn test_google_workspace_connection(config: &serde_json::Value) -> Interna
         success: false,
         message: "Google Workspace requires 'service_account_json' or 'credentials_file'."
             .to_string(),
+    }
+}
+
+fn unsupported_google_workspace_result(message: &str) -> InternalTestResult {
+    InternalTestResult {
+        success: false,
+        message: message.to_string(),
     }
 }
 
@@ -1393,7 +1489,7 @@ fn parse_connector_type(s: &str) -> Option<ConnectorType> {
         "crowdstrike" | "crowd_strike" => Some(ConnectorType::CrowdStrike),
         "defender" => Some(ConnectorType::Defender),
         "m365" | "microsoft365" => Some(ConnectorType::M365),
-        "googleworkspace" | "google_workspace" => Some(ConnectorType::GoogleWorkspace),
+        "googleworkspace" | "google_workspace" | "google" => Some(ConnectorType::GoogleWorkspace),
         "generic" => Some(ConnectorType::Generic),
         _ => None,
     }
@@ -1468,7 +1564,32 @@ mod tests {
             parse_connector_type("CrowdStrike"),
             Some(ConnectorType::CrowdStrike)
         );
+        assert_eq!(
+            parse_connector_type("google"),
+            Some(ConnectorType::GoogleWorkspace)
+        );
         assert_eq!(parse_connector_type("unknown"), None);
+    }
+
+    #[test]
+    fn test_normalize_connector_config_jira_aliases() {
+        let config = serde_json::json!({
+            "api_url": "https://jira.example.com",
+            "api_key": "jira-token",
+            "project": "SEC",
+            "email": "soc@example.com"
+        });
+
+        let normalized = normalize_connector_config(&ConnectorType::Jira, &config);
+
+        assert_eq!(normalized["base_url"], "https://jira.example.com");
+        assert_eq!(normalized["api_token"], "jira-token");
+        assert_eq!(normalized["project_key"], "SEC");
+        assert_eq!(normalized["username"], "soc@example.com");
+        assert!(normalized.get("api_url").is_none());
+        assert!(normalized.get("api_key").is_none());
+        assert!(normalized.get("project").is_none());
+        assert!(normalized.get("email").is_none());
     }
 
     #[test]
@@ -2093,6 +2214,7 @@ mod api_tests {
             ("virus_total", "VirusTotal"),
             ("crowd_strike", "CrowdStrike"),
             ("microsoft365", "M365"),
+            ("google", "Google Workspace"),
             ("google_workspace", "Google Workspace"),
         ];
 
@@ -2173,6 +2295,45 @@ mod api_tests {
             "customfield_10001"
         );
         assert_eq!(connector.config["rate_limit"], 100);
+    }
+
+    #[tokio::test]
+    async fn test_create_connector_normalizes_legacy_ui_aliases() {
+        let app = setup_test_app().await;
+
+        let body = serde_json::json!({
+            "name": "Legacy Jira",
+            "connector_type": "jira",
+            "config": {
+                "api_url": "https://jira.example.com",
+                "api_key": "jira-token",
+                "project": "SEC",
+                "email": "soc@example.com"
+            },
+            "enabled": true
+        });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/connectors")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let connector: ConnectorResponse = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(connector.config["base_url"], "https://jira.example.com");
+        assert_eq!(connector.config["project_key"], "SEC");
+        assert_eq!(connector.config["username"], "soc@example.com");
+        assert!(connector.config.get("api_url").is_none());
+        assert!(connector.config.get("project").is_none());
+        assert!(connector.config.get("email").is_none());
     }
 
     #[tokio::test]
@@ -2358,6 +2519,63 @@ mod api_tests {
             "https://new-splunk.example.com"
         );
         assert!(!connector.enabled);
+    }
+
+    #[tokio::test]
+    async fn test_update_connector_merges_partial_config() {
+        let app = setup_test_app().await;
+
+        let body = serde_json::json!({
+            "name": "Merge Config",
+            "connector_type": "jira",
+            "config": {
+                "base_url": "https://jira.example.com",
+                "api_token": "original-token",
+                "project_key": "SOC",
+                "username": "soc@example.com"
+            },
+            "enabled": true
+        });
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/connectors")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&body).unwrap()))
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: ConnectorResponse = serde_json::from_slice(&body_bytes).unwrap();
+
+        let update_body = serde_json::json!({
+            "config": {
+                "project_key": "IR"
+            }
+        });
+
+        let request = Request::builder()
+            .method("PUT")
+            .uri(format!("/api/connectors/{}", created.id))
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&update_body).unwrap()))
+            .unwrap();
+
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let connector: ConnectorResponse = serde_json::from_slice(&body_bytes).unwrap();
+
+        assert_eq!(connector.config["base_url"], "https://jira.example.com");
+        assert_eq!(connector.config["project_key"], "IR");
+        assert_eq!(connector.config["username"], "soc@example.com");
     }
 
     #[tokio::test]
@@ -3078,7 +3296,7 @@ mod api_tests {
     }
 
     #[tokio::test]
-    async fn test_test_connector_google_workspace_success() {
+    async fn test_test_connector_google_workspace_reports_not_implemented() {
         let app = setup_test_app().await;
 
         let body = serde_json::json!({
@@ -3119,8 +3337,8 @@ mod api_tests {
             .unwrap();
         let result: TestConnectionResponse = serde_json::from_slice(&body_bytes).unwrap();
 
-        assert!(result.success);
-        assert!(result.message.contains("Google Workspace"));
+        assert!(!result.success);
+        assert!(result.message.contains("not implemented"));
     }
 
     #[tokio::test]

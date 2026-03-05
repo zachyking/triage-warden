@@ -1237,7 +1237,7 @@ async fn modal_edit_connector(
                 connector: EditConnectorData::from_connector(
                     connector.id,
                     connector.name,
-                    connector.connector_type.to_string(),
+                    connector.connector_type,
                     connector.config,
                     connector.enabled,
                 ),

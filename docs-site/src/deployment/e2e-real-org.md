@@ -26,7 +26,7 @@ use the standard integration bootstrap and test scripts.
 ### External Sandbox Tenants
 
 - Identity/email sandbox:
-  - Google Workspace trial/dev OR Microsoft 365 dev tenant
+  - Microsoft 365 dev tenant
 - Jira cloud project
 - VirusTotal API key
 - Splunk sandbox endpoint/token
@@ -76,13 +76,14 @@ Create connectors through the UI or API with real sandbox credentials:
 - `splunk`
 - `crowdstrike`
 - `m365`
-- `googleworkspace`
 
 After creation, run each connector test endpoint:
 
 `POST /api/connectors/{id}/test`
 
 Do not use placeholder hostnames like `*.example.local` or dummy tokens in this mode.
+
+`googleworkspace` is not part of the real E2E connector set yet. The backend only validates credential file structure today and does not perform a live Google API check.
 
 ## Fake Company Data Model
 
@@ -119,7 +120,7 @@ Checklist:
 Run baseline integration suites first:
 
 ```bash
-./scripts/run-integration-tests.sh --keep-containers
+./scripts/run-integration-tests.sh --preserve-state
 ```
 
 Then run fake-org scenarios (recommended structure):

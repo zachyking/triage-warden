@@ -83,9 +83,9 @@ Ingest alerts from Splunk and run queries.
 |-------|-------|
 | Name | `Splunk Production` |
 | Type | `splunk` |
-| Host | `https://splunk.company.com:8089` |
-| Username | Service account username |
-| Password | Service account password |
+| Base URL | `https://splunk.company.com:8089` |
+| Token | Splunk bearer token |
+| Username / Password | Optional alternative to token |
 | App | `search` (or your app context) |
 
 **Setting Up Webhooks:**
@@ -229,10 +229,10 @@ Create and manage security tickets.
 |-------|-------|
 | Name | `Jira Security` |
 | Type | `jira` |
-| URL | `https://yourcompany.atlassian.net` |
-| Email | Your Jira email |
+| Base URL | `https://yourcompany.atlassian.net` |
+| Username | Your Jira email |
 | API Token | API token from Atlassian account |
-| Default Project | `SEC` (your security project key) |
+| Project Key | `SEC` (your security project key) |
 
 **Jira Cloud Setup:**
 1. Go to [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens)
@@ -301,9 +301,13 @@ Google Workspace user management.
 | Field | Value |
 |-------|-------|
 | Name | `Google Workspace` |
-| Type | `google` |
+| Type | `googleworkspace` |
 | Service Account JSON | Paste JSON key file contents |
-| Domain | `company.com` |
+| Admin Email | `admin@company.com` |
+
+**Status:**
+- Live Google Workspace connector testing is not implemented yet.
+- Do not rely on this connector for the real fake-org E2E environment yet.
 
 **Google Setup:**
 1. Create service account in Google Cloud Console

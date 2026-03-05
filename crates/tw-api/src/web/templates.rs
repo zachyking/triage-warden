@@ -1,6 +1,7 @@
 //! Askama template definitions for the web dashboard.
 
 use askama::Template;
+use tw_core::connector::ConnectorType;
 use uuid::Uuid;
 
 // ============================================
@@ -531,7 +532,8 @@ pub struct EditConnectorModalTemplate {
 pub struct EditConnectorData {
     pub id: Uuid,
     pub name: String,
-    pub connector_type: String,
+    pub connector_type_key: String,
+    pub connector_type_label: String,
     pub enabled: bool,
     // Pre-computed config fields for template use
     pub api_url: String,
@@ -552,7 +554,7 @@ impl EditConnectorData {
     pub fn from_connector(
         id: Uuid,
         name: String,
-        connector_type: String,
+        connector_type: ConnectorType,
         config: serde_json::Value,
         enabled: bool,
     ) -> Self {
@@ -564,17 +566,37 @@ impl EditConnectorData {
                 .to_string()
         };
 
+        let get_str_any = |keys: &[&str]| -> String {
+            keys.iter()
+                .find_map(|key| config.get(*key).and_then(|v| v.as_str()))
+                .unwrap_or("")
+                .to_string()
+        };
+
         let get_i64 = |key: &str, default: i64| -> i64 {
             config.get(key).and_then(|v| v.as_i64()).unwrap_or(default)
         };
 
+        let connector_type_key = match connector_type {
+            ConnectorType::VirusTotal => "virustotal",
+            ConnectorType::Jira => "jira",
+            ConnectorType::Splunk => "splunk",
+            ConnectorType::CrowdStrike => "crowdstrike",
+            ConnectorType::Defender => "defender",
+            ConnectorType::M365 => "m365",
+            ConnectorType::GoogleWorkspace => "googleworkspace",
+            ConnectorType::Generic => "generic",
+        }
+        .to_string();
+
         Self {
             id,
             name,
-            connector_type,
+            connector_type_key,
+            connector_type_label: connector_type.to_string(),
             enabled,
-            api_url: get_str("api_url"),
-            username: get_str("username"),
+            api_url: get_str_any(&["base_url", "api_url", "url"]),
+            username: get_str_any(&["username", "email"]),
             app: config
                 .get("app")
                 .and_then(|v| v.as_str())
@@ -586,8 +608,11 @@ impl EditConnectorData {
                 .unwrap_or("us-1")
                 .to_string(),
             client_id: get_str("client_id"),
-            project: get_str("project"),
-            rate_limit: get_i64("rate_limit", 4),
+            project: get_str_any(&["project_key", "project"]),
+            rate_limit: config
+                .get("requests_per_minute")
+                .and_then(|v| v.as_i64())
+                .unwrap_or_else(|| get_i64("rate_limit", 4)),
             tenant_id: get_str("tenant_id"),
             workspace_id: get_str("workspace_id"),
             index_pattern: config
@@ -595,7 +620,7 @@ impl EditConnectorData {
                 .and_then(|v| v.as_str())
                 .unwrap_or("*")
                 .to_string(),
-            domain: get_str("domain"),
+            domain: get_str_any(&["admin_email", "domain"]),
         }
     }
 }

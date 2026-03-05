@@ -89,8 +89,8 @@ cd ../tw-bridge
 # Start test stack and seed baseline connectors for fake-org style E2E runs
 ./scripts/bootstrap-e2e-infra.sh --recreate
 
-# Then run integration suites against the bootstrapped stack
-./scripts/run-integration-tests.sh --keep-containers
+# Then run integration suites against the same stack without resetting it
+./scripts/run-integration-tests.sh --preserve-state
 ```
 
 Planning and runbook docs:

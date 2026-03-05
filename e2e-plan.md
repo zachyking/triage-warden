@@ -52,7 +52,7 @@ Environment is complete only when all conditions are true:
 ### Fake Company Control Plane (External/Sandbox)
 
 - Email and identity tenant:
-  - Google Workspace trial/dev OR Microsoft 365 dev tenant
+  - Microsoft 365 dev tenant
 - Ticketing:
   - Jira cloud sandbox project
 - Threat intel:
@@ -100,7 +100,6 @@ Environment is complete only when all conditions are true:
 | `splunk` | Splunk endpoint | URL, token, index | Query + alert retrieval |
 | `crowdstrike` | CrowdStrike tenant | client ID/secret | Host/detection lookup |
 | `m365` | M365 tenant | tenant ID, client ID/secret | User/email operation |
-| `googleworkspace` | Workspace tenant | service account JSON, admin email | Directory/mail action |
 
 ## Real AI Triage Requirements
 
@@ -213,3 +212,4 @@ Exit criteria:
 - Use dedicated non-production tenants only.
 - Keep baseline mock-like integration tests for fast PR checks.
 - Treat real-infra E2E as gated smoke + nightly regression layer.
+- Defer Google Workspace live E2E coverage until a real connector implementation exists.

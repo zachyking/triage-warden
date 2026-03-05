@@ -15,6 +15,7 @@
 # Options:
 #   --skip-rust       Skip Rust integration tests
 #   --skip-python     Skip Python integration tests
+#   --preserve-state  Reuse the existing compose stack without tearing it down
 #   --keep-containers Keep containers running after tests
 #   --verbose         Enable verbose output
 #   --help            Show this help message
@@ -28,6 +29,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 # Default options
 SKIP_RUST=false
 SKIP_PYTHON=false
+PRESERVE_STATE=false
 KEEP_CONTAINERS=false
 VERBOSE=false
 
@@ -50,6 +52,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-python)
             SKIP_PYTHON=true
+            shift
+            ;;
+        --preserve-state)
+            PRESERVE_STATE=true
             shift
             ;;
         --keep-containers)
@@ -91,12 +97,16 @@ log_error() {
 
 # Cleanup function
 cleanup() {
-    if [ "$KEEP_CONTAINERS" = false ]; then
+    if [ "$PRESERVE_STATE" = true ] || [ "$KEEP_CONTAINERS" = true ]; then
+        if [ "$PRESERVE_STATE" = true ]; then
+            log_info "Preserving test containers (--preserve-state specified)"
+        else
+            log_info "Keeping containers running (--keep-containers specified)"
+        fi
+    else
         log_info "Cleaning up test containers..."
         cd "$PROJECT_ROOT/deploy/docker"
-        docker-compose -f docker-compose.test.yml down -v --remove-orphans 2>/dev/null || true
-    else
-        log_info "Keeping containers running (--keep-containers specified)"
+        $COMPOSE_CMD -f docker-compose.test.yml down -v --remove-orphans 2>/dev/null || true
     fi
 }
 
@@ -130,8 +140,13 @@ fi
 log_info "Starting test containers..."
 cd "$PROJECT_ROOT/deploy/docker"
 
-$COMPOSE_CMD -f docker-compose.test.yml down -v --remove-orphans 2>/dev/null || true
-$COMPOSE_CMD -f docker-compose.test.yml up -d
+if [ "$PRESERVE_STATE" = true ]; then
+    log_info "Reusing existing compose stack without resetting volumes"
+    $COMPOSE_CMD -f docker-compose.test.yml up -d
+else
+    $COMPOSE_CMD -f docker-compose.test.yml down -v --remove-orphans 2>/dev/null || true
+    $COMPOSE_CMD -f docker-compose.test.yml up -d
+fi
 
 # Wait for services to be healthy
 log_info "Waiting for services to be healthy..."
@@ -161,6 +176,8 @@ wait_for_healthy() {
 wait_for_healthy postgres-test
 wait_for_healthy qdrant-test
 wait_for_healthy redis-test
+wait_for_healthy tw-triage-test
+wait_for_healthy tw-api-test
 
 log_info "All services are healthy"
 

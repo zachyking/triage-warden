@@ -5,8 +5,8 @@
 //!
 //! When a `triage_service_url` is configured (via `TW_TRIAGE_SERVICE_URL`),
 //! the action delegates to the Python AI triage service. If the service is
-//! unavailable or returns an error, the action falls back to the built-in
-//! heuristic pipeline and logs a warning.
+//! unavailable or returns an error, the action fails closed so broken AI
+//! triage wiring is surfaced immediately.
 
 use crate::registry::{
     Action, ActionContext, ActionError, ActionResult, ParameterDef, ParameterType,
@@ -837,11 +837,12 @@ impl Action for RunTriageAgentAction {
                     warn!(
                         incident_id = %incident_id,
                         error = %err,
-                        "AI triage service failed, falling back to heuristic"
+                        "AI triage service failed"
                     );
-                    let result =
-                        Self::analyze_incident(&incident_id, &incident_context, &agent_config);
-                    (result, "heuristic-v1 (fallback)".to_string())
+                    return Err(ActionError::ExecutionFailed(format!(
+                        "AI triage service failed: {}",
+                        err
+                    )));
                 }
             }
         } else {
@@ -913,8 +914,24 @@ mod tests {
 
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
+    fn clear_triage_service_env() -> Option<String> {
+        let previous = std::env::var("TW_TRIAGE_SERVICE_URL").ok();
+        std::env::remove_var("TW_TRIAGE_SERVICE_URL");
+        previous
+    }
+
+    fn restore_triage_service_env(previous: Option<String>) {
+        if let Some(previous) = previous {
+            std::env::set_var("TW_TRIAGE_SERVICE_URL", previous);
+        } else {
+            std::env::remove_var("TW_TRIAGE_SERVICE_URL");
+        }
+    }
+
     #[tokio::test]
     async fn test_run_triage_agent() {
+        let _env_lock = ENV_MUTEX.lock().expect("env mutex poisoned");
+        let previous = clear_triage_service_env();
         let action = RunTriageAgentAction::new();
 
         let context = ActionContext::new(Uuid::new_v4())
@@ -929,10 +946,14 @@ mod tests {
         assert!(result.output.contains_key("analysis"));
         assert!(result.output.contains_key("recommended_actions"));
         assert!(result.output.contains_key("risk_score"));
+
+        restore_triage_service_env(previous);
     }
 
     #[tokio::test]
     async fn test_run_triage_agent_with_config() {
+        let _env_lock = ENV_MUTEX.lock().expect("env mutex poisoned");
+        let previous = clear_triage_service_env();
         let action = RunTriageAgentAction::new();
 
         let config = serde_json::json!({
@@ -977,6 +998,8 @@ mod tests {
 
         let techniques = result.output["mitre_techniques"].as_array().unwrap();
         assert!(!techniques.is_empty());
+
+        restore_triage_service_env(previous);
     }
 
     #[tokio::test]
@@ -997,6 +1020,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_triage_result_contains_iocs_when_enabled() {
+        let _env_lock = ENV_MUTEX.lock().expect("env mutex poisoned");
+        let previous = clear_triage_service_env();
         let action = RunTriageAgentAction::new();
 
         let context = ActionContext::new(Uuid::new_v4())
@@ -1017,10 +1042,14 @@ mod tests {
 
         let iocs = result.output["iocs"].as_array().unwrap();
         assert!(!iocs.is_empty());
+
+        restore_triage_service_env(previous);
     }
 
     #[tokio::test]
     async fn test_triage_result_contains_mitre_techniques_when_enabled() {
+        let _env_lock = ENV_MUTEX.lock().expect("env mutex poisoned");
+        let previous = clear_triage_service_env();
         let action = RunTriageAgentAction::new();
 
         let context = ActionContext::new(Uuid::new_v4())
@@ -1042,6 +1071,8 @@ mod tests {
 
         let techniques = result.output["mitre_techniques"].as_array().unwrap();
         assert!(!techniques.is_empty());
+
+        restore_triage_service_env(previous);
     }
 
     #[tokio::test]
@@ -1070,7 +1101,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_fallback_when_service_url_unreachable() {
+    async fn test_service_url_failure_is_reported() {
         let action =
             RunTriageAgentAction::new().with_triage_service_url("http://127.0.0.1:1".to_string());
 
@@ -1084,15 +1115,8 @@ mod tests {
                 }),
             );
 
-        let result = action.execute(context).await.unwrap();
-        assert!(result.success);
-        // Should have fallen back to heuristic
-        let model = result.output["model_used"].as_str().unwrap();
-        assert!(
-            model.contains("heuristic"),
-            "Expected heuristic fallback, got: {}",
-            model
-        );
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::ExecutionFailed(_))));
     }
 
     #[tokio::test]
@@ -1108,15 +1132,8 @@ mod tests {
             )
             .with_param("incident_context", serde_json::json!({"severity": "low"}));
 
-        // Should fall back to heuristic since URL is unreachable
-        let result = action.execute(context).await.unwrap();
-        assert!(result.success);
-        let model = result.output["model_used"].as_str().unwrap();
-        assert!(
-            model.contains("heuristic"),
-            "Expected heuristic fallback, got: {}",
-            model
-        );
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::ExecutionFailed(_))));
     }
 
     #[test]
@@ -1218,14 +1235,8 @@ mod tests {
             .with_param("incident_id", serde_json::json!("INC-ENV-001"))
             .with_param("incident_context", serde_json::json!({"severity": "low"}));
 
-        let result = action.execute(context).await.unwrap();
-        assert!(result.success);
-        let model = result.output["model_used"].as_str().unwrap();
-        assert!(
-            model.contains("heuristic"),
-            "Expected heuristic fallback, got: {}",
-            model
-        );
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::ExecutionFailed(_))));
 
         if let Some(previous) = previous {
             std::env::set_var("TW_TRIAGE_SERVICE_URL", previous);
@@ -1257,14 +1268,8 @@ mod tests {
                 serde_json::json!({"severity": "medium"}),
             );
 
-        let result = action.execute(context).await.unwrap();
-        assert!(result.success);
-        let model = result.output["model_used"].as_str().unwrap();
-        assert!(
-            model.contains("heuristic"),
-            "Expected heuristic fallback, got: {}",
-            model
-        );
+        let result = action.execute(context).await;
+        assert!(matches!(result, Err(ActionError::ExecutionFailed(_))));
 
         if let Some(previous) = previous {
             std::env::set_var("TW_TRIAGE_SERVICE_URL", previous);
