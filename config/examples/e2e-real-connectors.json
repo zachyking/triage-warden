@@ -1,0 +1,56 @@
+{
+  "connectors": [
+    {
+      "name": "E2E VirusTotal",
+      "connector_type": "virustotal",
+      "verify": true,
+      "config": {
+        "api_key": "${TW_E2E_VT_API_KEY}",
+        "requests_per_minute": "${TW_E2E_VT_REQUESTS_PER_MINUTE}"
+      }
+    },
+    {
+      "name": "E2E Jira",
+      "connector_type": "jira",
+      "verify": true,
+      "config": {
+        "base_url": "${TW_E2E_JIRA_BASE_URL}",
+        "project_key": "${TW_E2E_JIRA_PROJECT_KEY}",
+        "username": "${TW_E2E_JIRA_USERNAME}",
+        "api_token": "${TW_E2E_JIRA_API_TOKEN}"
+      }
+    },
+    {
+      "name": "E2E Splunk",
+      "connector_type": "splunk",
+      "verify": true,
+      "config": {
+        "base_url": "${TW_E2E_SPLUNK_BASE_URL}",
+        "token": "${TW_E2E_SPLUNK_TOKEN}",
+        "app": "${TW_E2E_SPLUNK_APP}",
+        "owner": "${TW_E2E_SPLUNK_OWNER}",
+        "output_mode": "${TW_E2E_SPLUNK_OUTPUT_MODE}"
+      }
+    },
+    {
+      "name": "E2E CrowdStrike",
+      "connector_type": "crowdstrike",
+      "verify": true,
+      "config": {
+        "client_id": "${TW_E2E_CROWDSTRIKE_CLIENT_ID}",
+        "client_secret": "${TW_E2E_CROWDSTRIKE_CLIENT_SECRET}",
+        "region": "${TW_E2E_CROWDSTRIKE_REGION}"
+      }
+    },
+    {
+      "name": "E2E M365",
+      "connector_type": "m365",
+      "verify": true,
+      "config": {
+        "tenant_id": "${TW_E2E_M365_TENANT_ID}",
+        "client_id": "${TW_E2E_M365_CLIENT_ID}",
+        "client_secret": "${TW_E2E_M365_CLIENT_SECRET}"
+      }
+    }
+  ]
+}

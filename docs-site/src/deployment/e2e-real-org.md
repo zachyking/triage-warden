@@ -34,10 +34,11 @@ use the standard integration bootstrap and test scripts.
 
 ## Required Environment Variables
 
-At minimum:
+At minimum, provide these through a local env file and point bootstrap at it with
+`--env-file`:
 
-- `TW_TRIAGE_SERVICE_URL`
 - `TW_LLM_PROVIDER`
+- `TW_LLM_MODEL`
 - `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` (or `TW_LLM_API_KEY`)
 - `TW_E2E_ADMIN_PASSWORD`
 
@@ -49,13 +50,21 @@ Common local overrides:
 - `TW_E2E_REDIS_PORT`
 - `TW_E2E_QDRANT_HTTP_PORT`
 
+Reference templates:
+
+- `config/examples/e2e-real.env.example`
+- `config/examples/e2e-real-connectors.json`
+- `manual-e2e-infrastructure-plan.md`
+
 ## Bring Up The Core Stack
 
 ```bash
-./scripts/bootstrap-e2e-infra.sh --recreate --no-seed
+./scripts/bootstrap-e2e-infra.sh \
+  --mode real \
+  --recreate \
+  --env-file config/local/e2e-real.env \
+  --connector-config config/examples/e2e-real-connectors.json
 ```
-
-Use `--no-seed` for real mode so dummy connector values are not inserted.
 
 Verify health:
 
@@ -65,11 +74,34 @@ curl -fsS http://localhost:8092/health
 curl -fsS http://localhost:8092/api/triage/status
 ```
 
-`/api/triage/status` must report `ready=true` before running real triage scenarios.
+The real-mode bootstrap now blocks until `/api/triage/status` reports `ready=true`.
+
+After bootstrap, run the readiness smoke check:
+
+```bash
+./scripts/check-e2e-real-readiness.sh --env-file config/local/e2e-real.env
+```
+
+Then seed the local fake-organization personas:
+
+```bash
+./scripts/seed-e2e-personas.sh --env-file config/local/e2e-real.env
+```
+
+For a full reset and reseed of the persistent manual stack:
+
+```bash
+./scripts/reset-e2e-real.sh \
+  --env-file config/local/e2e-real.env \
+  --connector-config config/examples/e2e-real-connectors.json
+```
 
 ## Configure Real Connectors
 
-Create connectors through the UI or API with real sandbox credentials:
+The recommended flow is to seed connectors from the env-backed JSON config passed to
+`--connector-config`. You can still create connectors through the UI or API if needed.
+
+Supported real connector set:
 
 - `virustotal`
 - `jira`
@@ -81,7 +113,8 @@ After creation, run each connector test endpoint:
 
 `POST /api/connectors/{id}/test`
 
-Do not use placeholder hostnames like `*.example.local` or dummy tokens in this mode.
+Real-mode bootstrap rejects missing values and placeholder-like connector inputs such as
+`*.example.local`, `dummy`, and `localhost`.
 
 `googleworkspace` is not part of the real E2E connector set yet. The backend only validates credential file structure today and does not perform a live Google API check.
 

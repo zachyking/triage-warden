@@ -89,6 +89,23 @@ cd ../tw-bridge
 # Start test stack and seed baseline connectors for fake-org style E2E runs
 ./scripts/bootstrap-e2e-infra.sh --recreate
 
+# Start the persistent manual-E2E stack with env-backed real connector config
+./scripts/bootstrap-e2e-infra.sh \
+  --mode real \
+  --env-file config/local/e2e-real.env \
+  --connector-config config/examples/e2e-real-connectors.json
+
+# After provisioning, run the manual-E2E readiness smoke check
+./scripts/check-e2e-real-readiness.sh --env-file config/local/e2e-real.env
+
+# Seed the fake-organization personas in the app
+./scripts/seed-e2e-personas.sh --env-file config/local/e2e-real.env
+
+# Recreate and reseed the persistent manual-E2E stack in one command
+./scripts/reset-e2e-real.sh \
+  --env-file config/local/e2e-real.env \
+  --connector-config config/examples/e2e-real-connectors.json
+
 # Then run integration suites against the same stack without resetting it
 ./scripts/run-integration-tests.sh --preserve-state
 ```
@@ -96,6 +113,7 @@ cd ../tw-bridge
 Planning and runbook docs:
 
 - Execution plan: `e2e-plan.md`
+- Manual infra plan: `manual-e2e-infrastructure-plan.md`
 - mdBook runbook: `docs-site/src/deployment/e2e-real-org.md`
 
 ## Documentation

@@ -1,15 +1,11 @@
-# Triage Warden - Integration Test Docker Compose
+# Triage Warden - Manual E2E Docker Compose
 #
-# This configuration is used for full-stack integration testing.
-# It spins up all required services with test-friendly configuration.
-#
-# Usage:
-#   docker-compose -f docker-compose.test.yml up -d
-#   cargo test --test integration_tests -- --ignored
-#   docker-compose -f docker-compose.test.yml down -v
+# This configuration is for a persistent fake-organization environment used
+# during manual validation with real connector credentials and a live triage
+# provider. Unlike docker-compose.test.yml, it uses named volumes instead of
+# tmpfs so the bootstrapped org survives container restarts.
 
 services:
-  # Test PostgreSQL database
   postgres-test:
     image: postgres:16-alpine
     environment:
@@ -23,30 +19,26 @@ services:
       interval: 2s
       timeout: 5s
       retries: 10
-    tmpfs:
-      - /var/lib/postgresql/data  # Use tmpfs for faster tests
+    volumes:
+      - postgres-manual-e2e:/var/lib/postgresql/data
 
-  # Test Qdrant vector database
   qdrant-test:
     image: qdrant/qdrant:v1.15.1
     environment:
       QDRANT__SERVICE__GRPC_PORT: 6334
       QDRANT__SERVICE__HTTP_PORT: 6333
-      QDRANT__STORAGE__ON_DISK_PAYLOAD: "false"  # In-memory for speed
+      QDRANT__STORAGE__ON_DISK_PAYLOAD: "true"
     ports:
-      - "${TW_E2E_QDRANT_HTTP_PORT:-6335}:6333"  # HTTP
-      - "${TW_E2E_QDRANT_GRPC_PORT:-6336}:6334"  # gRPC
+      - "${TW_E2E_QDRANT_HTTP_PORT:-6335}:6333"
+      - "${TW_E2E_QDRANT_GRPC_PORT:-6336}:6334"
     healthcheck:
-      # qdrant image does not include curl/wget; verify HTTP port 6333 is listening
-      # by checking kernel TCP tables (6333 = 0x18BD).
       test: ["CMD-SHELL", "grep -q ':18BD ' /proc/net/tcp /proc/net/tcp6"]
       interval: 2s
       timeout: 5s
       retries: 10
-    tmpfs:
-      - /qdrant/storage  # Use tmpfs for faster tests
+    volumes:
+      - qdrant-manual-e2e:/qdrant/storage
 
-  # Test Redis (for session/cache tests)
   redis-test:
     image: redis:7-alpine
     ports:
@@ -56,10 +48,9 @@ services:
       interval: 2s
       timeout: 5s
       retries: 10
-    tmpfs:
-      - /data
+    volumes:
+      - redis-manual-e2e:/data
 
-  # Python AI triage service in test mode
   tw-triage-test:
     build:
       context: ../..
@@ -79,7 +70,6 @@ services:
       retries: 10
       start_period: 10s
 
-  # Triage Warden API in test mode
   tw-api-test:
     build:
       context: ../..
@@ -90,7 +80,6 @@ services:
       DATABASE_URL: postgres://test:test@postgres-test:5432/triage_warden_test
       TW_ENV: test
       TW_LOG_LEVEL: debug
-      # Base64-encoded 32-byte test key (deterministic for local integration tests)
       TW_ENCRYPTION_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
       TW_JWT_SECRET: test_jwt_secret_for_integration_testing
       TW_SESSION_SECRET: test_session_secret_for_integration
@@ -101,9 +90,7 @@ services:
       REDIS_URL: redis://redis-test:6379
       TW_TRIAGE_SERVICE_URL: http://tw-triage-test:8091
       RUST_LOG: debug,tw_api=debug,tw_core=debug
-      # Disable rate limiting for tests
       TW_RATE_LIMIT_DISABLED: "true"
-      # Enable all features for testing
       TW_FEATURE_MULTI_TENANCY: "true"
       TW_FEATURE_WEBHOOKS: "true"
     depends_on:
@@ -121,10 +108,12 @@ services:
       timeout: 5s
       retries: 10
 
-# Network for inter-service communication
 networks:
   default:
-    name: triage-warden-test
+    name: triage-warden-manual-e2e
     driver: bridge
 
-# No persistent volumes - use tmpfs for speed and isolation
+volumes:
+  postgres-manual-e2e:
+  qdrant-manual-e2e:
+  redis-manual-e2e:
